@@ -50,6 +50,10 @@ public sealed class SqlDialectAttribute : Attribute
     /// <summary>A limit alone; {0} is the limit.</summary>
     public string Limit { get; init; } = "LIMIT {0}";
 
+    /// <summary>An offset alone; {0} is the offset: <c>OFFSET {0}</c>, or <c>LIMIT -1 OFFSET {0}</c> for SQLite, whose OFFSET
+    /// needs a LIMIT.</summary>
+    public string Offset { get; init; } = "OFFSET {0}";
+
     /// <summary>How changed rows come back.</summary>
     public SqlReturning Returning { get; init; } = SqlReturning.Returning;
 
@@ -57,7 +61,8 @@ public sealed class SqlDialectAttribute : Attribute
     public SqlInsertOrIgnore InsertOrIgnore { get; init; } = SqlInsertOrIgnore.OnConflictDoNothing;
 
     /// <summary>A list of a correlated subquery's single column as one JSON array (never NULL); {0} is the subquery:
-    /// <c>array_to_json(ARRAY({0}))</c>; SQLite <c>(SELECT json_group_array(v) FROM ({0}))</c>.</summary>
+    /// <c>array_to_json(ARRAY({0}))</c>. A template that names {1} gets the subquery's column aliased so, for an
+    /// aggregate around it: SQLite <c>(SELECT json_group_array({1}) FROM ({0}))</c>.</summary>
     public string JsonArray { get; init; } = "array_to_json(ARRAY({0}))";
 
     /// <summary>An aggregate of a whole query's single column as one JSON array (NULL without rows); {0} is the
@@ -93,6 +98,30 @@ public sealed class SqlDialectAttribute : Attribute
 
     /// <summary>A bigint literal for a count's cap; {0} is the number: <c>{0}::bigint</c>.</summary>
     public string BigIntLiteral { get; init; } = "{0}::bigint";
+
+    /// <summary>A floating-point value as an integer, cut toward zero as C# casts it; {0} is the value, {1} the SQL integer
+    /// type: <c>CAST(trunc({0}) AS {1})</c>; SQLite <c>CAST({0} AS {1})</c>, whose cast already cuts toward zero.</summary>
+    public string ToInteger { get; init; } = "CAST(trunc({0}) AS {1})";
+
+    /// <summary>The smaller of two counts (never NULL): <c>LEAST({0}, {1})</c>; SQLite <c>min({0}, {1})</c>.</summary>
+    public string Least { get; init; } = "LEAST({0}, {1})";
+
+    /// <summary>The larger of two counts (never NULL): <c>GREATEST({0}, {1})</c>; SQLite <c>max({0}, {1})</c>.</summary>
+    public string Greatest { get; init; } = "GREATEST({0}, {1})";
+
+    /// <summary>Whether a subquery in FROM may refer to the rows before it (<c>LEFT JOIN LATERAL</c>). False (SQLite): a
+    /// page's rows join without it, and a row's children are joined by their keys being in the correlated top n.</summary>
+    public bool Lateral { get; init; } = true;
+
+    /// <summary>Whether a CTE may write (<c>WITH d AS (DELETE ... RETURNING ...)</c>). False (SQLite): a conditional write
+    /// is two statements of one unit, the write with RETURNING and the refused rows after it, and the rows a write
+    /// returns read their navigations through scalar subqueries. The provider hands the reader every row of every
+    /// statement of the unit, in order.</summary>
+    public bool WritableCtes { get; init; } = true;
+
+    /// <summary>Whether <c>INSERT ... SELECT ... ON CONFLICT</c> needs a WHERE in its SELECT to parse (SQLite reads the ON
+    /// as a join's otherwise): the generator adds <c>WHERE true</c> where there is none.</summary>
+    public bool InsertSelectNeedsWhere { get; init; }
 
     /// <summary>The lock a conditional write (<c>UpdateIf</c>, <c>DeleteIf</c>) takes on the rows it finds, so their
     /// condition is checked as a concurrent write left them; {0} is the table's alias: <c>FOR UPDATE OF {0}</c>.

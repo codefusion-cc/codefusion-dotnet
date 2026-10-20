@@ -152,8 +152,10 @@ public interface IDataProvider<TSelf, TStatement, TCommand> : IDataProvider
     static abstract TCommand Write(DataContext context, TStatement statement);
 
     /// <summary>
-    /// Runs a held command, handing each row of its last statement to <typeparamref name="TReader"/> with
-    /// <paramref name="state"/>. Completes once the rows have been read (a write: once it committed), on whatever
+    /// Runs a held command, handing each row its statements return, in order, to <typeparamref name="TReader"/> with
+    /// <paramref name="state"/>. (The generator's units return rows from their last statement only, except on a
+    /// dialect without writable CTEs, whose conditional writes return rows from two; see
+    /// <see cref="SqlDialectAttribute.WritableCtes"/>.) Completes once the rows have been read (a write: once it committed), on whatever
     /// thread the provider completes on. If <paramref name="aborted"/> fires before the command is sent, it ends
     /// <see cref="DataStatus.Canceled"/> without running. Await the task exactly once.
     /// </summary>

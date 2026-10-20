@@ -524,7 +524,7 @@ sealed partial class Translator
         fill.Columns.Add((shownKey, "k"));
         fill.OrderBy.Add((shownKey, desc));
 
-        Add($"WITH {cte} AS ({count}) SELECT {lateral}.*, {cte}.n FROM {cte} LEFT JOIN LATERAL ({fill.Render(D)}) {lateral} ON true ORDER BY {lateral}.k{dir}", null);
+        Add($"WITH {cte} AS ({count}) SELECT {lateral}.*, {cte}.n FROM {cte} {(D.Lateral ? "LEFT JOIN LATERAL" : "LEFT JOIN")} ({fill.Render(D)}) {lateral} ON true ORDER BY {lateral}.k{dir}", null);
         _q.Marker = Marker.PageKey;
         _q.MarkerColumn = cols.Count;
         _q.CountColumn = cols.Count + 1;
@@ -549,6 +549,11 @@ sealed partial class Translator
             ?? throw new Refused(step.Arg(0).Syntax.GetLocation(), "SelectMany of something other than a navigation (a => a.Comments...)");
         Expect(children.Steps.All(s => s.Name is "Where" or "OrderBy" or "OrderByDescending" or "ThenBy" or "ThenByDescending" or "Take"), at,
             "a Select inside SelectMany's children: project them in its second lambda");
+        if (!D.Lateral)
+        {
+            ChildrenByKey(step, row, outer, children, at);
+            return;
+        }
         var sub = Subquery(children, at, out var child, out _);
         var value = Apply(step.Lambda(1), step.Env, new RowValue(row), child);
         var cols = new List<string>();
@@ -582,6 +587,41 @@ sealed partial class Translator
         _q.HasSource = true;
     }
 
+    /// <summary>
+    /// A row's children where a subquery in FROM can't refer to the row before it (SQLite has no LATERAL): the
+    /// children are joined by their keys being in the row's top n, a correlated subquery an ON may hold, which an index
+    /// on the foreign key serves per row. The inner joins of the children's Where filter inside it; their navigations
+    /// in the projection join outside, LEFT, so a row without children is still one row of NULLs.
+    /// </summary>
+    void ChildrenByKey(Step step, Row row, Select outer, ManyValue children, Location at)
+    {
+        var keys = Subquery(children, at, out var inner, out _);
+        var innerRow = (inner as RowValue)?.Row ?? throw new Refused(at, "SelectMany of something other than a navigation's rows");
+        var e = innerRow.Entity;
+        var key = KeyOf(e, at);
+        keys.Columns.Clear();
+        keys.Columns.Add((Column(innerRow, key, at), null));
+        string alias = Aliases.Take(step.Lambda(1).Symbol.Parameters[1].Name);
+        outer.Joins.Add($"LEFT JOIN {TableSql(e)} {alias} ON {alias}.{D.Quote(key.Name)} IN ({keys.Render(D)})");
+        var child = new Row(e, alias, outer) { Optional = true };
+        var value = Apply(step.Lambda(1), step.Env, new RowValue(row), new RowValue(child));
+        var cols = new List<string>();
+        Leaves(value, _q.Row!, at, cols);
+        foreach (var c in cols) outer.Columns.Add((c, null));
+        outer.Columns.Add((Column(child, key, at), null));
+        // the children's order again outside, on the joined rows
+        foreach (var s in children.Steps)
+        {
+            if (s.Name is not ("OrderBy" or "OrderByDescending" or "ThenBy" or "ThenByDescending")) continue;
+            var by = Apply(s.Lambda(0), s.Env, new RowValue(child));
+            outer.OrderBy.Add((Operand(by, s.Call.Syntax.GetLocation()), s.Name.EndsWith("Descending", StringComparison.Ordinal)));
+        }
+        Add(outer.Render(D), null);
+        _q.Marker = Marker.ChildKey;
+        _q.MarkerColumn = cols.Count;
+        _q.HasSource = true;
+    }
+
     // ---------- deletes and updates ----------
 
     void Delete(TableSource t, List<Step> steps, int write, Guard? condition, bool root)
@@ -604,6 +644,11 @@ sealed partial class Translator
             var conds = wheres.Select(s => Condition(Apply(s.Lambda(0), s.Env, new RowValue(target)), s.Call.Syntax.GetLocation())).ToList();
             if (conds.Count > 0) b.Append(" WHERE ").Append(string.Join(" AND ", conds.Select(c => Sql.Wrap(c, " OR "))));
             Add(select ? ReturningOrCte(b.ToString(), rest[0], e, root) : b.ToString(), condition);
+            return;
+        }
+        if (!D.WritableCtes)
+        {
+            ConditionalApart(e, wheres, w, select ? rest[0] : null, null, condition, root, at);
             return;
         }
         // DeleteIf: find the rows, locked, delete each whose condition holds, and give back the rows as found, each
@@ -684,6 +729,11 @@ sealed partial class Translator
             Add(ReturningOrCte(b.ToString(), rest[0], e, root), condition);
             return;
         }
+        if (!D.WritableCtes)
+        {
+            ConditionalApart(e, wheres, w, select ? rest[0] : null, set, condition, root, at);
+            return;
+        }
         // UpdateIf: find the rows, locked, update each whose condition holds; each row comes back as updated, or
         // with NULL columns when it was found but refused. The rows updated come first, by key: the reply
         // (Write<T>) is the first updated, and Refused only when every row found was
@@ -718,6 +768,57 @@ sealed partial class Translator
         {
             _q.Marker = Marker.Written;
             _q.MarkerColumn = cols.Count;
+        }
+    }
+
+    /// <summary>
+    /// UpdateIf and DeleteIf where a CTE can't write (SQLite): the write of the rows found whose condition holds,
+    /// returning them (navigations as lookups by the written row's foreign keys) with their key; then, when the method
+    /// reads rows, the rows found and refused with a NULL key, as Postgres's one statement gives them back, written rows
+    /// first. An update's refused rows are NULL throughout; a delete's are the rows as found. The provider hands the
+    /// reader every row of both statements, in order. No row lock: the writer's transaction is the only one, so the
+    /// condition sees the rows as the write does.
+    /// </summary>
+    void ConditionalApart(EntityInfo e, List<Step> wheres, Step w, Step? select, string? set, Guard? condition, bool root, Location at)
+    {
+        var key = KeyOf(e, at);
+        string k = D.Quote(key.Name);
+        var find = Find(e, wheres, w, out var findRow);
+        find.Where.Add(Condition(Apply(w.Lambda(0), w.Env, new RowValue(findRow)), at));
+        find.Columns.Add((Column(findRow, key, at), null));
+        string write = (set is null ? $"DELETE FROM {TableSql(e)}" : $"UPDATE {TableSql(e)} SET {set}") + $" WHERE {k} IN ({find.Render(D)})";
+        if (select is null)
+        {
+            Add(write, condition);
+            return;
+        }
+        var type = root ? _q.Row! : select.Lambda(0).Symbol.ReturnType;
+        var target = Target(e);
+        var cols = new List<string>();
+        Leaves(Apply(select.Lambda(0), select.Env, new RowValue(target)), type, at, cols);
+        int shown = cols.Count;
+        cols.Add(Column(target, key, at));
+        Add(write + Returning(cols), condition);
+
+        StartStatement();
+        var refused = Find(e, wheres, w, out var refusedRow);
+        string cond = Condition(Apply(w.Lambda(0), w.Env, new RowValue(refusedRow)), at);
+        refused.Where.Add($"NOT COALESCE({Sql.Group(cond)}, {D.False})");
+        if (set is null)
+        {
+            var asFound = new List<string>();
+            Leaves(Apply(select.Lambda(0), select.Env, new RowValue(refusedRow)), type, at, asFound);
+            foreach (var c in asFound) refused.Columns.Add((c, null));
+        }
+        else
+            for (int i = 0; i < shown; i++) refused.Columns.Add(("NULL", null));
+        refused.Columns.Add(("NULL", null));
+        refused.OrderBy.Add((Column(refusedRow, key, at), false));
+        Add(refused.Render(D), condition);
+        if (root)
+        {
+            _q.Marker = Marker.Written;
+            _q.MarkerColumn = shown;
         }
     }
 
@@ -921,6 +1022,8 @@ sealed partial class Translator
             ?? throw new Refused(last.Call.Syntax.GetLocation(), $"an insert's Select that doesn't make a {e.Type.Name}");
         var (columns, values) = Values(made, e, at);
         foreach (var v in values) sel.Columns.Add((v, null));
+        // SQLite reads the ON of ON CONFLICT as a join's after a FROM without WHERE
+        if (ignore && D.InsertOrIgnore == 0 && D.InsertSelectNeedsWhere && sel.Where.Count == 0) sel.Where.Add(D.True);
         return $"{head} ({string.Join(", ", columns)}) {sel.Render(D)}{tail}";
     }
 

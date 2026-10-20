@@ -673,6 +673,14 @@ sealed partial class Translator
         if (row.Mode is RowMode.Inserted or RowMode.NewKey or RowMode.Through)
             throw new Refused(at, $"the navigation '{nav.Property.Name}' from this row");
         var target = Entity(nav.Target, at);
+        if (row.Owner is null && !D.WritableCtes && row.Mode == RowMode.Table && row.Name is { } name)
+        {
+            // the row an UPDATE, DELETE or INSERT writes, in its RETURNING (no join there, and no writable CTE to select
+            // from): the navigation's key is the written row's foreign key, its other columns are lookups by it
+            var lookup = new Row(target, null, null, RowMode.Through) { JoinAlias = name, JoinColumn = nav.ForeignKey.Name, Optional = nav.ForeignKey.Kind.Nullable };
+            row.Joins[nav.Property.Name] = lookup;
+            return lookup;
+        }
         var owner = row.Owner ?? throw new Refused(at, $"the navigation '{nav.Property.Name}' here (it would need a join)");
         string fk = Column(row, nav.ForeignKey, at);
         string alias = Aliases.ForTable(target.Table);
