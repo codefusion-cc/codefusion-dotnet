@@ -13,7 +13,7 @@ namespace CodeFusion.Data.Sqlite;
 /// its statements returned, kept until its group commits. Pooled with its buffers: a read goes back as soon as it ran
 /// (to its thread's one-job cache, no lock), a write when its task is read.
 /// </summary>
-internal sealed class SqliteJob : IValueTaskSource<DataResult>
+internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkItem
 {
     const int MaxPooled = 4096;
     /// <summary>Buffers past this size go with a returned job instead of being pooled.</summary>
@@ -48,6 +48,8 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>
     internal unsafe delegate*<in SavedRow, object?, long> Reader;
     internal object? State;
     internal CancellationToken Aborted;
+    /// <summary>The writer it was queued on, which counts what its completion's continuation throws.</summary>
+    internal SqliteWriter? Writer;
     internal byte[] Saved = new byte[256];
     internal int SavedLen, SavedRows;
     internal DataResult Failure;
@@ -85,6 +87,8 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>
         State = null;
         Aborted = default;
         Failure = default;
+        Writer = null;
+        _pending = default;
         Failed = false;
         if (Buf.Length > MaxPooledBytes) Buf = new byte[256];
         if (Saved.Length > MaxPooledBytes) Saved = new byte[256];
@@ -308,10 +312,28 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>
     /// <summary>Queued for the writer: no more building, no second run.</summary>
     internal void Queued() => To(Life.Queued);
 
-    /// <summary>Completes the write; its caller continues here, on the writer's thread. After this the job isn't ours.</summary>
-    internal void Complete(in DataResult result)
+    /// <summary>
+    /// Completes the write. <paramref name="inline"/>: its caller continues here, on the writer's thread; else on the
+    /// thread pool (the job is the work item: nothing allocated). After this the job isn't ours.
+    /// </summary>
+    internal void Complete(in DataResult result, bool inline)
     {
         To(Life.Completed);
+        if (!inline)
+        {
+            _pending = result;
+            ThreadPool.UnsafeQueueUserWorkItem(this, preferLocal: false);
+            return;
+        }
+        SetResult(result);
+    }
+
+    DataResult _pending;
+
+    void IThreadPoolWorkItem.Execute() => SetResult(_pending);
+
+    void SetResult(in DataResult result)
+    {
         try
         {
             _core.SetResult(result);
@@ -319,7 +341,7 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>
         catch (Exception e)
         {
             // a continuation that throws (not an async method's, whose exceptions go to its task) must not end the writer
-            SqliteWriter.Unexpected(e);
+            Writer?.Unexpected(e);
         }
     }
 

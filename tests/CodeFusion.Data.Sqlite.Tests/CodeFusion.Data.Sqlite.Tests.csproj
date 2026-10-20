@@ -19,6 +19,8 @@
     <PackageReference Include="xunit.v3" />
     <Compile Include="../Shared/RunGuard.cs" Link="Shared/RunGuard.cs" />
     <ProjectReference Include="../../src/CodeFusion.Data.Sqlite/CodeFusion.Data.Sqlite.csproj" />
+    <!-- The crash tests start and kill it; built next to the tests. -->
+    <ProjectReference Include="../CodeFusion.Data.Sqlite.CrashChild/CodeFusion.Data.Sqlite.CrashChild.csproj" />
     <ProjectReference Include="../../src/CodeFusion.Data.Generator/CodeFusion.Data.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <!-- Conduit's entities, views and LINQ queries, shared with the Postgres tests; this project adds SQLite's part. -->
     <Compile Include="../Shared/Conduit/Entities.cs" Link="Conduit/Entities.cs" />
@@ -29,6 +31,7 @@
     <Compile Include="../CodeFusion.Data.Tests/SeedModel.cs" Link="Shared/SeedModel.cs" />
     <Compile Include="../CodeFusion.Data.Tests/FakeResponse.cs" Link="Shared/FakeResponse.cs" />
     <Compile Include="../CodeFusion.Data.Tests/Texts.cs" Link="Shared/Texts.cs" />
+    <Compile Include="../CodeFusion.Data.Tests/AllocationTests.cs" Link="Shared/AllocationTests.cs" />
   </ItemGroup>
 
 </Project>

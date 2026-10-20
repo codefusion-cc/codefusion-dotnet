@@ -37,11 +37,12 @@ public sealed unsafe class SqliteWriter
 
     [ThreadStatic] static SqliteWriter? t_writer;
 
-    /// <summary>A completion's continuation threw on a writer's thread: counted against that writer.</summary>
-    internal static void Unexpected(Exception e)
-    {
-        if (t_writer is { } w) w.Record(e);
-    }
+    /// <summary>A completion's continuation threw: counted against this writer.</summary>
+    internal void Unexpected(Exception e) => Record(e);
+
+    /// <summary>Whether a completion runs its continuation here: on a leader's thread always (it is the caller's own), on
+    /// the writer's only when <see cref="SqliteDatabase.CompleteOnWriterThread"/> says so.</summary>
+    bool Inline => _options.CompleteOnWriterThread || Thread.CurrentThread != _thread;
 
     void Record(Exception e)
     {
@@ -69,6 +70,7 @@ public sealed unsafe class SqliteWriter
     internal ValueTask<DataResult> Submit<TReader>(SqliteJob job, object? state, CancellationToken aborted) where TReader : IRowReader
     {
         job.Reader = &Rows<TReader>.Read;
+        job.Writer = this;
         job.State = state;
         job.Aborted = aborted;
         var task = job.Task;
@@ -214,7 +216,7 @@ public sealed unsafe class SqliteWriter
                 if (job.Aborted.IsCancellationRequested)
                 {
                     _group[i] = null;
-                    job.Complete(DataResult.Of(DataStatus.Canceled));
+                    job.Complete(DataResult.Of(DataStatus.Canceled), Inline);
                     continue;
                 }
                 bool unit = job.Count > 1;
@@ -272,11 +274,11 @@ public sealed unsafe class SqliteWriter
             {
                 if (_group[i] is not { } job) continue;
                 _group[i] = null;
-                if (job.Failed) job.Complete(job.Failure);
+                if (job.Failed) job.Complete(job.Failure, Inline);
                 else
                 {
                     Interlocked.Increment(ref Counters.Writes);
-                    job.Complete(job.HandRows());
+                    job.Complete(job.HandRows(), Inline);
                 }
             }
             AfterGroup();
@@ -302,7 +304,7 @@ public sealed unsafe class SqliteWriter
         {
             if (_group[i] is not { } job) continue;
             _group[i] = null;
-            job.Complete(job.Failed ? job.Failure : result);
+            job.Complete(job.Failed ? job.Failure : result, Inline);
         }
     }
 
@@ -315,6 +317,13 @@ public sealed unsafe class SqliteWriter
     /// <summary>Runs SQL on the writer's connection between groups (migrations; cold).</summary>
     internal void Execute(string sql)
     {
+        if (t_writer == this)
+        {
+            // on the writer's own thread, in a completion: after the group's COMMIT, between transactions
+            _conn.Exec(sql);
+            Volatile.Write(ref Clock.Seq, Clock.Seq + 1);
+            return;
+        }
         while (true)
         {
             lock (_lock)

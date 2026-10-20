@@ -71,6 +71,13 @@ public sealed class SqliteDatabase
     public bool ForeignKeys { get; init; } = true;
 
     /// <summary>
+    /// A write's caller continues on the writer's thread, right after the commit, instead of on the thread pool. Saves a
+    /// hop per write on a box with few cores; but the continuation must never block on another write (that write needs
+    /// the same thread: a deadlock), and the next group waits for it. Off by default.
+    /// </summary>
+    public bool CompleteOnWriterThread { get; init; }
+
+    /// <summary>
     /// A write that finds the writer idle and nothing queued commits on its caller's thread instead of handing over to
     /// the writer's. Off by default: it saves a lone write two thread switches, but a thread that submits writes one
     /// after another (an event loop on one core) then commits each alone, where the writer's thread would take them as

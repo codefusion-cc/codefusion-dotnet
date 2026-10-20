@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The process CodeFusion.Data.Sqlite.Tests' crash tests start and kill: it commits writes, then starts a long group or
+       commits one more write, says READY, and waits to be killed. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- the long write is never awaited on purpose: the kill ends it -->
+    <NoWarn>$(NoWarn);CA1515;CA1303;CA2012</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/CodeFusion.Data.Sqlite/CodeFusion.Data.Sqlite.csproj" />
+  </ItemGroup>
+
+</Project>

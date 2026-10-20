@@ -134,14 +134,22 @@ public static class SqliteChecks
 {
     public static void Stop(params SqliteDataSource[] sources)
     {
-        foreach (var s in sources)
-        {
-            s.Stop();
-            var c = s.Writer.Counters;
-            Assert.True(c.Unexpected == 0, $"the writer caught {c.Unexpected} unexpected exceptions; the first: {c.FirstUnexpected}");
-        }
+        foreach (var s in sources) StopOne(s);
+    }
+
+    public static void StopOne(SqliteDataSource s)
+    {
+        s.Stop();
+        var c = s.Writer.Counters;
+        Assert.True(c.Unexpected == 0, $"the writer caught {c.Unexpected} unexpected exceptions; the first: {c.FirstUnexpected}");
 #if DEBUG
-        foreach (var s in sources) Assert.Equal(0, System.Threading.Interlocked.Read(ref s.JobsOut));
+        Assert.Equal(0, System.Threading.Interlocked.Read(ref s.JobsOut));
 #endif
     }
+}
+
+/// <summary>The Postgres tests skip without a server; SQLite needs none, so the linked tests always run.</summary>
+static class TestDb
+{
+    public static void Require() { }
 }

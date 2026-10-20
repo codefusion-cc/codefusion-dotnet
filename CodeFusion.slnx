@@ -20,6 +20,7 @@
     <Project Path="tests/CodeFusion.Data.Tests/CodeFusion.Data.Tests.csproj" />
     <Project Path="tests/CodeFusion.Data.Postgres.Tests/CodeFusion.Data.Postgres.Tests.csproj" />
     <Project Path="tests/CodeFusion.Data.Sqlite.Tests/CodeFusion.Data.Sqlite.Tests.csproj" />
+    <Project Path="tests/CodeFusion.Data.Sqlite.CrashChild/CodeFusion.Data.Sqlite.CrashChild.csproj" />
     <Project Path="tests/CodeFusion.Fuzz/CodeFusion.Fuzz.csproj" />
     <Project Path="tests/CodeFusion.Http.Generators.Tests/CodeFusion.Http.Generators.Tests.csproj" />
     <Project Path="tests/CodeFusion.Http.SampleApp/CodeFusion.Http.SampleApp.csproj" />

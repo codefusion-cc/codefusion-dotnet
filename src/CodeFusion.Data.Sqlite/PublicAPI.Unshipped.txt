@@ -30,6 +30,8 @@ CodeFusion.Data.Sqlite.SqliteDatabase.CacheKiB.get -> int
 CodeFusion.Data.Sqlite.SqliteDatabase.CacheKiB.init -> void
 CodeFusion.Data.Sqlite.SqliteDatabase.CheckpointFrames.get -> int
 CodeFusion.Data.Sqlite.SqliteDatabase.CheckpointFrames.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.CompleteOnWriterThread.get -> bool
+CodeFusion.Data.Sqlite.SqliteDatabase.CompleteOnWriterThread.init -> void
 CodeFusion.Data.Sqlite.SqliteDatabase.Errors.get -> CodeFusion.Data.DataErrors!
 CodeFusion.Data.Sqlite.SqliteDatabase.Errors.init -> void
 CodeFusion.Data.Sqlite.SqliteDatabase.ForeignKeys.get -> bool
