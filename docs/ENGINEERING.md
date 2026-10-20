@@ -924,6 +924,27 @@ connection. `struct epoll_event` is 12 bytes on x86 and x86-64 (packed) and 16 e
 
 A handler that blocks its thread holds up every connection on its loop: Sockets stays the default.
 
+### Direct calls, batches and listeners (later on the same branch)
+
+- **Direct calls:** a loop's connections call `recv` and `send` themselves (`DirectSocket`: LibraryImport with
+  SuppressGCTransition, since neither can block on a non-blocking socket). The handle is held for each call, as Socket
+  holds it, so a socket the heartbeat closed is an ObjectDisposedException, never a call on a reused descriptor number.
+  EAGAIN maps to WouldBlock and EINTR is retried. Peeks and the full-buffer `SendAsync` stay on Socket.
+- **Batches:** a loop handles every connection one wake-up found ready, calls `HttpServerOptions.OnEventLoopBatch` with
+  its index, then lets each answer finished in the batch send, in order.
+  - The hold is awaited in `RunAsync`, whose box lives as long as the connection. Held inside `FlushAsync`, it
+    allocated 17 to 20 B/request with 8 connections: the runtime's pooled boxes run out when several are held at once.
+  - A handler the hook completes (a commit) runs its rest inside the hook, and its answer joins the batch.
+  - The stop's wake ends the loop only after its batch is sent.
+  - `HttpServer.CurrentEventLoop` is the loop's index on its thread and -1 elsewhere.
+- **Listeners:** on Linux each loop has its own listening socket (SO_REUSEPORT), level-triggered in its epoll set.
+  - It accepts up to 64 connections per wake-up with `accept4` and starts each on its own thread.
+  - Out of descriptors or memory, it stops watching the listener (one report per run of failures), and the heartbeat
+    watches it again.
+  - Only sockets of the same user can join a port's group. A second server started on the same port by mistake would
+    share its connections instead of failing to bind.
+  - macOS keeps one listener and the runtime's accepts.
+
 ### Tests
 
 `EventLoopTests` (17), on kqueue here and epoll in CI. `AllocationTests` and `AppAllocationTests` have EventLoop rows

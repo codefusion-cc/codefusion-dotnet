@@ -271,6 +271,9 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         Volatile.Write(ref _socket, socket);
     }
 
+    /// <summary>Runs the connection on this thread until its first wait: a loop that accepted it.</summary>
+    internal void StartRun() => ((IThreadPoolWorkItem)this).Execute();
+
     void IThreadPoolWorkItem.Execute()
     {
         RunStarted();

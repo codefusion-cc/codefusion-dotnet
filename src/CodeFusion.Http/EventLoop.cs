@@ -28,6 +28,10 @@ internal abstract unsafe class EventLoop
     const int MaxEvents = 512;
     /// <summary>The event that only wakes the thread, to see the stop.</summary>
     protected const ulong WakeToken = ulong.MaxValue;
+    /// <summary>The event of the loop's own listening socket.</summary>
+    protected const ulong ListenToken = ulong.MaxValue - 1;
+    /// <summary>Connections taken from the listener in one wake-up, so a flood of them can't starve the others.</summary>
+    const int AcceptsPerWakeUp = 64;
     const int Interrupted = 4; // EINTR
 
     readonly HttpServer _server;
@@ -39,6 +43,11 @@ internal abstract unsafe class EventLoop
     [ThreadStatic] static EventLoop? t_batching;
     HttpExchange?[] _sends = new HttpExchange?[64];
     int _sendCount;
+    // Linux: the loop's own listening socket (SO_REUSEPORT), whose connections it accepts on its thread; null when the
+    // server's one listener serves every loop. Accepting pauses when the process is out of descriptors (the listener
+    // is level-triggered, so it would wake the loop for nothing until one closes); the heartbeat resumes it.
+    Socket? _listener;
+    volatile bool _acceptPaused;
     /// <summary>The epoll or kqueue descriptor; closed by the thread as it ends, once no Add holds it.</summary>
     protected readonly SafeFileHandle Queue;
     volatile bool _stopping;
@@ -149,6 +158,11 @@ internal abstract unsafe class EventLoop
                         stop = _stopping;
                         continue;
                     }
+                    if (token == ListenToken)
+                    {
+                        AcceptAll();
+                        continue;
+                    }
                     try
                     {
                         _server.Readable((int)(uint)token, (uint)(token >> 32), closed);
@@ -182,6 +196,105 @@ internal abstract unsafe class EventLoop
             if (held) Queue.DangerousRelease();
             Closed();
             Queue.Dispose();
+        }
+    }
+
+    /// <summary>Linux: makes <paramref name="listener"/> this loop's own, its connections accepted on this loop's
+    /// thread. Level-triggered, so connections left after one wake-up's share wake it again.</summary>
+    public void Listen(Socket listener)
+    {
+        _listener = listener;
+        if (Watch(listener, add: true, on: true) < 0) throw Errno("epoll_ctl");
+    }
+
+    /// <summary>Heartbeat: accepting again after the process ran out of descriptors.</summary>
+    public void ResumeAccept()
+    {
+        if (!_acceptPaused || _listener is not { } l) return;
+        _acceptPaused = false;
+        try
+        {
+            if (Watch(l, add: false, on: true) < 0) _acceptPaused = true;
+        }
+        catch (ObjectDisposedException)
+        {
+            // the server stopped
+        }
+    }
+
+    int Watch(Socket listener, bool add, bool on)
+    {
+        SafeSocketHandle s = listener.SafeHandle;
+        bool socketHeld = false, queueHeld = false;
+        try
+        {
+            s.DangerousAddRef(ref socketHeld);
+            Queue.DangerousAddRef(ref queueHeld);
+            return Watch((int)Queue.DangerousGetHandle(), (int)s.DangerousGetHandle(), ListenToken, add, on);
+        }
+        finally
+        {
+            if (queueHeld) Queue.DangerousRelease();
+            if (socketHeld) s.DangerousRelease();
+        }
+    }
+
+    /// <summary>Takes what the listener holds, up to <see cref="AcceptsPerWakeUp"/>, and starts each connection here.</summary>
+    void AcceptAll()
+    {
+        if (_listener is not { } l) return;
+        SafeSocketHandle h = l.SafeHandle;
+        for (int i = 0; i < AcceptsPerWakeUp; i++)
+        {
+            int fd, errno;
+            bool held = false;
+            try
+            {
+                h.DangerousAddRef(ref held);
+                fd = Accept((int)h.DangerousGetHandle());
+                errno = fd < 0 ? Marshal.GetLastPInvokeError() : 0;
+            }
+            catch (ObjectDisposedException)
+            {
+                return; // the server stopped
+            }
+            finally
+            {
+                if (held) h.DangerousRelease();
+            }
+            if (fd < 0)
+            {
+                if (errno == Again) return;
+                if (!OutOfResources(errno)) continue; // that connection failed before it was taken; the next may not
+                _server.AcceptFailed(new SocketException(errno));
+                _acceptPaused = true;
+                _ = Watch(l, add: false, on: false);
+                return;
+            }
+            _server.AcceptWorks();
+            // Admit owns the socket: it closes it, or its connection does
+#pragma warning disable CA2000
+            if (Wrap(fd) is { } s) _server.Admit(s, this)?.StartRun();
+#pragma warning restore CA2000
+        }
+    }
+
+    /// <summary>A Socket over an accepted descriptor, which it owns from now on; null (and the descriptor closed) when
+    /// the connection was reset before the runtime could look at it.</summary>
+    static Socket? Wrap(int fd)
+    {
+        // the Socket owns the handle once made; until then the catch closes it
+#pragma warning disable CA2000
+        var handle = new SafeSocketHandle(fd, ownsHandle: true);
+#pragma warning restore CA2000
+        try
+        {
+            return new Socket(handle);
+        }
+        catch (SocketException)
+        {
+            handle.Dispose();
+            return null;
         }
     }
 
@@ -226,6 +339,19 @@ internal abstract unsafe class EventLoop
     /// brought bytes is all the kernel says of that, so the connection must not take a short read for the end of it.</summary>
     protected abstract ulong TokenAt(byte* events, int i, out bool closed);
 
+    /// <summary>Adds the listener (<paramref name="add"/>) or changes its events: readable, level-triggered
+    /// (<paramref name="on"/>), or none. -1 and errno on failure.</summary>
+    protected virtual int Watch(int queue, int fd, ulong token, bool add, bool on) => throw new PlatformNotSupportedException();
+
+    /// <summary>accept4, non-blocking and close-on-exec; -1 and errno on failure.</summary>
+    protected virtual int Accept(int listener) => throw new PlatformNotSupportedException();
+
+    /// <summary>EAGAIN.</summary>
+    protected virtual int Again => 35;
+
+    /// <summary>An accept error that the next accept would meet too: out of descriptors or memory.</summary>
+    protected virtual bool OutOfResources(int errno) => false;
+
     /// <summary>Makes the thread's wait return a <see cref="WakeToken"/> event.</summary>
     protected abstract void Wake();
 
@@ -237,7 +363,9 @@ internal abstract unsafe class EventLoop
     sealed class Epoll : EventLoop
 #pragma warning restore CA1001
     {
-        const int EpollCtlAdd = 1, CloExec = 0x80000; // EPOLL_CLOEXEC and EFD_CLOEXEC are O_CLOEXEC
+        const int EpollCtlAdd = 1, EpollCtlMod = 3, CloExec = 0x80000; // EPOLL_CLOEXEC and EFD_CLOEXEC are O_CLOEXEC
+        const int SockNonBlock = 0x800, SockCloExec = 0x80000;
+        const int EAgain = 11, ENFile = 23, EMFile = 24, ENoMem = 12, ENoBufs = 105;
         const uint EpollIn = 0x001, EpollErr = 0x008, EpollHup = 0x010, EpollRdHup = 0x2000, EpollEt = 1u << 31;
         // struct epoll_event is packed on x86 and x86-64: 12 bytes with the data at 4. Elsewhere it is aligned: 16, at 8.
         static readonly bool Packed = RuntimeInformation.ProcessArchitecture is Architecture.X64 or Architecture.X86;
@@ -288,6 +416,19 @@ internal abstract unsafe class EventLoop
 
         protected override int Wait(int queue, byte* events, int max) => epoll_wait(queue, events, max, -1);
 
+        protected override int Watch(int queue, int fd, ulong token, bool add, bool on)
+        {
+            byte* ev = stackalloc byte[16];
+            Event(ev, on ? EpollIn : 0, token);
+            return epoll_ctl(queue, add ? EpollCtlAdd : EpollCtlMod, fd, ev);
+        }
+
+        protected override int Accept(int listener) => accept4(listener, null, null, SockNonBlock | SockCloExec);
+
+        protected override int Again => EAgain;
+
+        protected override bool OutOfResources(int errno) => errno is EMFile or ENFile or ENoMem or ENoBufs;
+
         protected override ulong TokenAt(byte* events, int i, out bool closed)
         {
             byte* ev = events + i * EventSize;
@@ -324,6 +465,9 @@ internal abstract unsafe class EventLoop
 
         [DllImport("libc", SetLastError = true), DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
         static extern int eventfd(uint initval, int flags);
+
+        [DllImport("libc", SetLastError = true), DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+        static extern int accept4(int fd, void* address, void* addressLength, int flags);
 
         [DllImport("libc", SetLastError = true), DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
         static extern nint write(int fd, void* buffer, nint count);

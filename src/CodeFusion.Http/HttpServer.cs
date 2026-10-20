@@ -102,7 +102,8 @@ public sealed class HttpServer : IAsyncDisposable
     readonly ManualResetEventSlim _wake = new();
     volatile bool _stopping, _stopped;
     Task? _stop;
-    bool _acceptFailing;
+    int _acceptFailing;
+    Socket[]? _loopListeners;
 
     /// <summary>A server that answers every request with <paramref name="handler"/>; <see cref="Start"/> starts listening.</summary>
     public HttpServer(HttpServerOptions options, HttpHandler handler)
@@ -158,6 +159,39 @@ public sealed class HttpServer : IAsyncDisposable
     {
         if (_listener is not null) throw new InvalidOperationException("already started");
         IPEndPoint ep = Options.EndPoint;
+        // Linux event loops each listen on the port themselves (SO_REUSEPORT): the kernel spreads new connections
+        // over them, and each loop accepts its own on its thread. Otherwise one listener and the runtime's accepts.
+        bool own = Options.Transport == HttpTransport.EventLoop && OperatingSystem.IsLinux();
+        var listeners = new Socket[own ? Options.EventLoops : 1];
+        try
+        {
+            if (Options.Transport == HttpTransport.EventLoop) _loops = StartLoops(Options.EventLoops);
+            for (int i = 0; i < listeners.Length; i++)
+            {
+                // the first binds what was asked; the others its port, the one port 0 picked
+                listeners[i] = Listener(i == 0 ? ep : (IPEndPoint)listeners[0].LocalEndPoint!, own);
+                if (own) _loops![i].Listen(listeners[i]);
+            }
+        }
+        catch
+        {
+            foreach (Socket? l in listeners) l?.Dispose();
+            foreach (EventLoop l in _loops ?? []) l.Stop();
+            _loops = null;
+            throw;
+        }
+        _listener = listeners[0];
+        if (own) _loopListeners = listeners;
+        _heartbeat = new Thread(Heartbeat) { IsBackground = true, Name = "http heartbeat" };
+        _heartbeat.Start();
+        // Disposing the listener is what ends the accept loop; the stop awaits the loop right after.
+#pragma warning disable CA2025
+        if (!own) _accepting = AcceptAsync(_listener);
+#pragma warning restore CA2025
+    }
+
+    Socket Listener(IPEndPoint ep, bool shared)
+    {
         var listener = new Socket(ep.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
         try
         {
@@ -165,23 +199,24 @@ public sealed class HttpServer : IAsyncDisposable
             // A restart can bind while the last run's connections sit in TIME_WAIT. (On Windows this option
             // would let another process take the port, so it's left off there.)
             if (!OperatingSystem.IsWindows()) listener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            // Linux's SO_REUSEPORT: only sockets of the same user can join the port's group
+            if (shared) listener.SetRawSocketOption(SolSocket, SoReusePort, [1, 0, 0, 0]);
             listener.Bind(ep);
             listener.Listen(Options.Backlog);
-            if (Options.Transport == HttpTransport.EventLoop) _loops = StartLoops(Options.EventLoops);
+            if (shared) listener.Blocking = false;
+            return listener;
         }
         catch
         {
             listener.Dispose();
             throw;
         }
-        _listener = listener;
-        _heartbeat = new Thread(Heartbeat) { IsBackground = true, Name = "http heartbeat" };
-        _heartbeat.Start();
-        // Disposing the listener is what ends the accept loop; the stop awaits the loop right after.
-#pragma warning disable CA2025
-        _accepting = AcceptAsync(listener);
-#pragma warning restore CA2025
     }
+
+    const int SolSocket = 1, SoReusePort = 15; // Linux
+
+    /// <summary>The event loops' own listeners (Linux). For tests.</summary>
+    internal int LoopListeners => _loopListeners?.Length ?? 0;
 
     EventLoop[] StartLoops(int count)
     {
@@ -226,48 +261,55 @@ public sealed class HttpServer : IAsyncDisposable
             }
             catch (SocketException e)
             {
-                // Out of file descriptors, or a connection reset before it was accepted: wait and go on. One line
-                // per run of failures, not one per retry.
+                // Out of file descriptors, or a connection reset before it was accepted: wait and go on.
                 if (e.SocketErrorCode is not (SocketError.ConnectionReset or SocketError.ConnectionAborted))
                 {
-                    if (!_acceptFailing) Report("http accept failing", e);
-                    _acceptFailing = true;
+                    AcceptFailed(e);
                     await Task.Delay(10).ConfigureAwait(false);
                 }
                 continue;
             }
-            if (_acceptFailing)
-            {
-                Report("http accept works again", null);
-                _acceptFailing = false;
-            }
-            if (_stopping)
-            {
-                s.Dispose();
-                return;
-            }
-            if (Connections >= _maxConnections)
-            {
-                s.Dispose(); // past the limit: closed at once, before it costs a connection object
-                continue;
-            }
-            try
-            {
-                s.NoDelay = true;
-                s.Blocking = false; // receives and sends are tried directly first; the watch receive says when to retry
-            }
-            catch (SocketException)
-            {
-                s.Dispose();
-                continue;
-            }
-            HttpExchange c = Rent();
-            c.Attach(s);
-            ThreadPool.UnsafeQueueUserWorkItem(c, preferLocal: false);
+            AcceptWorks();
+            if (Admit(s, null) is { } c) ThreadPool.UnsafeQueueUserWorkItem(c, preferLocal: false);
         }
     }
 
-    HttpExchange Rent()
+    /// <summary>One line per run of accept failures, not one per retry, from whichever thread accepts.</summary>
+    internal void AcceptFailed(Exception e)
+    {
+        if (Interlocked.Exchange(ref _acceptFailing, 1) == 0) Report("http accept failing", e);
+    }
+
+    internal void AcceptWorks()
+    {
+        if (Volatile.Read(ref _acceptFailing) == 1 && Interlocked.Exchange(ref _acceptFailing, 0) == 1) Report("http accept works again", null);
+    }
+
+    /// <summary>A connection accepted: its connection object, attached, or null when it was closed at once (the
+    /// server stops, or is at its limit). <paramref name="loop"/>: the event loop that accepted it.</summary>
+    internal HttpExchange? Admit(Socket s, EventLoop? loop)
+    {
+        if (_stopping || Connections >= _maxConnections)
+        {
+            s.Dispose(); // past the limit: closed at once, before it costs a connection object
+            return null;
+        }
+        try
+        {
+            s.NoDelay = true;
+            s.Blocking = false; // receives and sends are tried directly first; the watch receive says when to retry
+        }
+        catch (SocketException)
+        {
+            s.Dispose();
+            return null;
+        }
+        HttpExchange c = Rent(loop);
+        c.Attach(s);
+        return c;
+    }
+
+    HttpExchange Rent(EventLoop? loop)
     {
         lock (_lock)
         {
@@ -287,7 +329,7 @@ public sealed class HttpServer : IAsyncDisposable
             }
             c.Slot = slot;
             c.ConnectionId = unchecked(++_connectionIds);
-            c.Loop = _loops?[(int)(c.ConnectionId % (uint)_loops.Length)];
+            c.Loop = loop ?? _loops?[(int)(c.ConnectionId % (uint)_loops.Length)];
             Volatile.Write(ref _slots[slot], c);
             _active++;
             return c;
@@ -325,6 +367,7 @@ public sealed class HttpServer : IAsyncDisposable
             _wake.Wait(ms);
             _wake.Reset();
             HttpDate.Update(DateTime.UtcNow);
+            foreach (EventLoop l in _loops ?? []) l.ResumeAccept();
             Sweep(heartbeat: true);
         }
     }
@@ -361,6 +404,7 @@ public sealed class HttpServer : IAsyncDisposable
     {
         _stopping = true;
         _listener!.Dispose();
+        foreach (Socket l in _loopListeners ?? []) l.Dispose();
         if (_accepting is not null) await _accepting.ConfigureAwait(false);
         long until = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
         while (Connections > 0 && Environment.TickCount64 < until)

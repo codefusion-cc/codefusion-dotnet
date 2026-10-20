@@ -163,7 +163,8 @@ public sealed class EventLoopBatchTests
             o.OnEventLoopBatch = loop => loops[loop] = HttpServer.CurrentEventLoop == loop;
         });
         Assert.Equal(-1, HttpServer.CurrentEventLoop);
-        var clients = new Client[9];
+        // on Linux the kernel spreads connections over the loops' listeners by hash: 30 miss a loop once in 60,000 runs
+        var clients = new Client[30];
         for (int i = 0; i < clients.Length; i++)
         {
             clients[i] = await t.ConnectAsync();

@@ -335,6 +335,45 @@ public sealed class EventLoopTests
         await t.ConnectionsReach(0);
     }
 
+    // Linux: a listening socket per loop (SO_REUSEPORT), so the kernel spreads connections over the loops and each
+    // loop accepts its own on its thread: even a connection's first request is answered there. macOS: one listener.
+    [Fact(Timeout = 20_000)]
+    public async Task OnLinuxEachLoopListensAndAcceptsForItself()
+    {
+        await using var t = Start(static x =>
+        {
+            TestServer.Write(x, HttpServer.CurrentEventLoop.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            return default;
+        }, o => o.EventLoops = 3);
+        Assert.Equal(OperatingSystem.IsLinux() ? 3 : 0, t.Server.LoopListeners);
+        var answers = new List<string>();
+        for (int i = 0; i < 30; i++)
+        {
+            using Client c = await t.ConnectAsync();
+            await c.SendAsync(Get("/first"));
+            answers.Add((await c.ReadAsync()).Text);
+        }
+        if (OperatingSystem.IsLinux()) Assert.Equal(["0", "1", "2"], answers.Distinct().Order().ToArray());
+    }
+
+    [Theory(Timeout = 20_000)]
+    [InlineData(1)]
+    [InlineData(3)]
+    public async Task AStoppedServerTakesNoMoreConnections(int loops)
+    {
+        var t = Start(Path, o => o.EventLoops = loops);
+        using (Client c = await t.ConnectAsync())
+        {
+            await c.SendAsync(Get("/a"));
+            Assert.Equal("/a", (await c.ReadAsync()).Text);
+        }
+        await t.DisposeAsync();
+        await Assert.ThrowsAsync<SocketException>(async () =>
+        {
+            for (int i = 0; i < 10; i++) (await t.ConnectAsync()).Dispose();
+        });
+    }
+
     [Fact]
     public void TheLoopCountIsChecked()
     {
