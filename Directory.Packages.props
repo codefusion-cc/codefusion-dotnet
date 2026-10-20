@@ -18,6 +18,9 @@
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.0.0" />
     <!-- Test setup and the frozen 21abce6 code the benchmarks compare with; no package depends on it. -->
     <PackageVersion Include="Npgsql" Version="10.0.3" />
+    <!-- CodeFusion.Data.Sqlite's native library: e_sqlite3 per RID (SQLite 3.50.4), nothing managed. The same build
+         SQLitePCLRaw 3 loads, so an app with Microsoft.Data.Sqlite too has one SQLite. -->
+    <PackageVersion Include="SourceGear.sqlite3" Version="3.50.4.5" />
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
   </ItemGroup>
 

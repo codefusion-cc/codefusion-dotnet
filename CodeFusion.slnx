@@ -8,6 +8,7 @@
     <Project Path="src/CodeFusion.Data/CodeFusion.Data.csproj" />
     <Project Path="src/CodeFusion.Data.Generator/CodeFusion.Data.Generator.csproj" />
     <Project Path="src/CodeFusion.Data.Postgres/CodeFusion.Data.Postgres.csproj" />
+    <Project Path="src/CodeFusion.Data.Sqlite/CodeFusion.Data.Sqlite.csproj" />
     <Project Path="src/CodeFusion.Http/CodeFusion.Http.csproj" />
     <Project Path="src/CodeFusion.Http.CodeFixes/CodeFusion.Http.CodeFixes.csproj" />
     <Project Path="src/CodeFusion.Http.Generators/CodeFusion.Http.Generators.csproj" />
@@ -18,6 +19,7 @@
     <Project Path="tests/CodeFusion.Core.Tests/CodeFusion.Core.Tests.csproj" />
     <Project Path="tests/CodeFusion.Data.Tests/CodeFusion.Data.Tests.csproj" />
     <Project Path="tests/CodeFusion.Data.Postgres.Tests/CodeFusion.Data.Postgres.Tests.csproj" />
+    <Project Path="tests/CodeFusion.Data.Sqlite.Tests/CodeFusion.Data.Sqlite.Tests.csproj" />
     <Project Path="tests/CodeFusion.Fuzz/CodeFusion.Fuzz.csproj" />
     <Project Path="tests/CodeFusion.Http.Generators.Tests/CodeFusion.Http.Generators.Tests.csproj" />
     <Project Path="tests/CodeFusion.Http.SampleApp/CodeFusion.Http.SampleApp.csproj" />

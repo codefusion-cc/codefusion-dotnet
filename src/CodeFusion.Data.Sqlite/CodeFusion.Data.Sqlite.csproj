@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>CodeFusion.Data.Sqlite</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsAotCompatible>true</IsAotCompatible>
+    <!-- Public fields on counters are the API (read without copies); Int64, Int32 and Double are IDataCommand's names. -->
+    <NoWarn>$(NoWarn);CA1051;CA1720</NoWarn>
+
+    <PackageId>CodeFusion.Data.Sqlite</PackageId>
+    <Description>A SQLite provider for CodeFusion.Data that allocates nothing per query: direct calls into SQLite, reads on the caller's thread on reader connections that keep their WAL snapshot until a write commits, and group commit on one writer thread.</Description>
+    <PackageTags>sqlite;database;zero-allocation;performance</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeFusion.Data.Sqlite.Tests" />
+    <InternalsVisibleTo Include="CodeFusion.Fuzz" />
+    <ProjectReference Include="../CodeFusion.Data/CodeFusion.Data.csproj" />
+    <!-- The native library only: e_sqlite3 for each RID. -->
+    <PackageReference Include="SourceGear.sqlite3" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+</Project>

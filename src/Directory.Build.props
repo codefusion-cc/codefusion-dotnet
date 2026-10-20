@@ -21,7 +21,7 @@
     <!-- In CI, the paths in what ships (PDBs, CallerFilePath) become /_/, so a package is the same from any checkout. Only
          here: tests and scripts find their own files through CallerFilePath. -->
     <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
-    <CodeFusionHotPath Condition="'$(MSBuildProjectName)' == 'CodeFusion.Http' or '$(MSBuildProjectName)' == 'CodeFusion.Data.Postgres'">true</CodeFusionHotPath>
+    <CodeFusionHotPath Condition="'$(MSBuildProjectName)' == 'CodeFusion.Http' or '$(MSBuildProjectName)' == 'CodeFusion.Data.Postgres' or '$(MSBuildProjectName)' == 'CodeFusion.Data.Sqlite'">true</CodeFusionHotPath>
   </PropertyGroup>
 
   <ItemGroup>

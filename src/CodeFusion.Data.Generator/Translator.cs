@@ -222,6 +222,9 @@ sealed class Row(EntityInfo entity, string? alias, Select? owner, RowMode mode =
     public string? KeyViaForeignKey;
     /// <summary>Reached through a left join (here or before): every column may be NULL.</summary>
     public bool Optional;
+    /// <summary>Its navigations join LEFT though its columns aren't NULL where they are read: a row's children joined by
+    /// their keys (SQLite), where a row without children is one row whose key marks it, not one of NULL values.</summary>
+    public bool JoinsLeft;
     /// <summary>Through: the scalar subquery written for each column, so a column used twice is the same SQL.</summary>
     public readonly Dictionary<string, string> ColumnSql = new();
     /// <summary>PageSource: the key column, the row it identifies, and the navigation to it (null when the key is the row's own).</summary>
@@ -686,9 +689,9 @@ sealed partial class Translator
         string alias = Aliases.ForTable(target.Table);
         // a nullable key, or a row a left join reached, may have no target: the join keeps the row either way
         bool optional = nav.ForeignKey.Kind.Nullable || row.Optional;
-        owner.Joins.Add($"{(optional ? "LEFT JOIN" : "JOIN")} {TableSql(target)} {alias} ON {alias}.{D.Quote(KeyOf(target, at).Name)} = {fk}");
+        owner.Joins.Add($"{(optional || row.JoinsLeft ? "LEFT JOIN" : "JOIN")} {TableSql(target)} {alias} ON {alias}.{D.Quote(KeyOf(target, at).Name)} = {fk}");
         // equal under an inner join; a left join's NULL row would have a NULL key where the foreign key isn't
-        var r = new Row(target, alias, owner) { KeyViaForeignKey = optional ? null : fk, Optional = optional };
+        var r = new Row(target, alias, owner) { KeyViaForeignKey = optional ? null : fk, Optional = optional, JoinsLeft = row.JoinsLeft };
         row.Joins[nav.Property.Name] = r;
         return r;
     }

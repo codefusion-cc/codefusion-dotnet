@@ -603,7 +603,7 @@ sealed partial class Translator
         keys.Columns.Add((Column(innerRow, key, at), null));
         string alias = Aliases.Take(step.Lambda(1).Symbol.Parameters[1].Name);
         outer.Joins.Add($"LEFT JOIN {TableSql(e)} {alias} ON {alias}.{D.Quote(key.Name)} IN ({keys.Render(D)})");
-        var child = new Row(e, alias, outer) { Optional = true };
+        var child = new Row(e, alias, outer) { JoinsLeft = true };
         var value = Apply(step.Lambda(1), step.Env, new RowValue(row), new RowValue(child));
         var cols = new List<string>();
         Leaves(value, _q.Row!, at, cols);
