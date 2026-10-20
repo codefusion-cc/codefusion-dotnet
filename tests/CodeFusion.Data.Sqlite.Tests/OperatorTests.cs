@@ -624,6 +624,39 @@ public sealed class OperatorTests(OpsFixture fixture)
     }
 
     [Fact]
+    public async Task AKeyPast2To53ComparedAsADoubleIsWrittenWithEveryDigit()
+    {
+        var db = Db(write: true);
+        long key = (1L << 53) + 2 * (Keys.HugeCalls + 1) - 1;
+        Assert.NotEqual(key, (long)(double)key);
+        await Json(db.AddHugeOf(U("huge")));
+        Assert.Equal(204, _response.Status);
+        Assert.Equal($"{key}", Scalar("SELECT p.id FROM pets p JOIN people o ON o.id = p.owner_id WHERE o.name = 'huge' AND o.active"));
+    }
+
+    [Fact]
+    public async Task AnInlinedMethodsArgumentRunsOnceWhetherItsBodyUsesItOrNot()
+    {
+        var db = Db(write: true);
+        long before = Keys.Calls;
+        await Json(db.AuditedOf(U("audited")));
+        Assert.Equal(204, _response.Status);
+        Assert.Equal(1, Keys.Calls - before);
+        // used only under a ThenIf that doesn't hold: made at the call all the same
+        before = Keys.Calls;
+        await Json(db.MaybePetOf(false, U("petless")));
+        Assert.Equal(204, _response.Status);
+        Assert.Equal(1, Keys.Calls - before);
+        Assert.Equal("0", Scalar("SELECT count(*) FROM pets p JOIN people o ON o.id = p.owner_id WHERE o.name = 'petless'"));
+        // and when it holds, the pet's key is that call's
+        before = Keys.Calls;
+        await Json(db.MaybePetOf(true, U("petted")));
+        Assert.Equal(204, _response.Status);
+        Assert.Equal(1, Keys.Calls - before);
+        Assert.Equal($"{7000 + before + 1}", Scalar("SELECT p.id FROM pets p JOIN people o ON o.id = p.owner_id WHERE o.name = 'petted'"));
+    }
+
+    [Fact]
     public async Task AnIgnoredInsertsRowIsTheOneItsKeyHolds()
     {
         var db = Db(write: true);
@@ -772,7 +805,17 @@ public sealed class OperatorTests(OpsFixture fixture)
         {
             var db = source.CreateContext<OpsDb>();
             db.Bind(_response);
+            // the job given back here is the one the query rents next (this thread's cached one), and the one after it, if
+            // the query gave it back
+            var probe = source.Read(Probe).Hold();
+            var job = (SqliteJob)probe.Job!;
+            int generation = job.Generation;
+            Sqlite.Discard(probe);
             Assert.Throws<FormatException>(() => db.InNamesOf(Parsed("ann", "")));
+            var next = source.Read(Probe).Hold();
+            Assert.Same(job, next.Job);
+            Assert.Equal(generation + 2, job.Generation);
+            Sqlite.Discard(next);
             Assert.Equal("1,3", await Ids(db.InNamesOf(Parsed("ann", "cid"))));
         }
         finally
@@ -780,6 +823,8 @@ public sealed class OperatorTests(OpsFixture fixture)
             SqliteChecks.StopOne(source);
         }
     }
+
+    static readonly SqliteStatement Probe = new("SELECT 1");
 
     static IEnumerable<Utf8> Parsed(params string[] names)
     {
