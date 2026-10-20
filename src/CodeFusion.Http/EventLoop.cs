@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Win32.SafeHandles;
 
 namespace CodeFusion.Http;
@@ -31,6 +32,13 @@ internal abstract unsafe class EventLoop
 
     readonly HttpServer _server;
     readonly Thread _thread;
+    readonly int _index;
+    // This thread's loop index + 1 (0 on other threads), and the loop whose wake-up it is handling, if any: answers
+    // finished then wait in _sends until the batch hook has run.
+    [ThreadStatic] static int t_index;
+    [ThreadStatic] static EventLoop? t_batching;
+    HttpExchange?[] _sends = new HttpExchange?[64];
+    int _sendCount;
     /// <summary>The epoll or kqueue descriptor; closed by the thread as it ends, once no Add holds it.</summary>
     protected readonly SafeFileHandle Queue;
     volatile bool _stopping;
@@ -38,6 +46,7 @@ internal abstract unsafe class EventLoop
     protected EventLoop(HttpServer server, int index, int queue)
     {
         _server = server;
+        _index = index;
         Queue = new SafeFileHandle(queue, ownsHandle: true);
         _thread = new Thread(Run) { IsBackground = true, Name = $"http event loop {index}" };
     }
@@ -46,6 +55,21 @@ internal abstract unsafe class EventLoop
         OperatingSystem.IsLinux() ? new Epoll(server, index) : new Kqueue(server, index);
 
     public void Start() => _thread.Start();
+
+    /// <summary>The index of the loop whose thread this is, or -1.</summary>
+    public static int CurrentIndex => t_index - 1;
+
+    /// <summary>The loop whose wake-up this thread is handling now, if any.</summary>
+    public static EventLoop? Batching => t_batching;
+
+    /// <summary>Holds <paramref name="x"/>'s send until the batch's hook has run; the returned wait completes, on
+    /// this thread, when its turn comes.</summary>
+    public ValueTask WaitToSend(HttpExchange x)
+    {
+        if (_sendCount == _sends.Length) Array.Resize(ref _sends, _sends.Length * 2);
+        _sends[_sendCount++] = x;
+        return x.WaitForSendTurn();
+    }
 
     /// <summary>Started and not yet ended.</summary>
     public bool Running => _thread.IsAlive;
@@ -98,11 +122,13 @@ internal abstract unsafe class EventLoop
     {
         byte* events = (byte*)NativeMemory.Alloc(MaxEvents, (nuint)EventSize);
         bool held = false;
+        t_index = _index + 1;
         try
         {
             Queue.DangerousAddRef(ref held);
             int queue = (int)Queue.DangerousGetHandle();
-            while (true)
+            bool stop = false;
+            while (!stop)
             {
                 int n = Wait(queue, events, MaxEvents);
                 if (n < 0)
@@ -112,12 +138,15 @@ internal abstract unsafe class EventLoop
                     _server.Report("http event loop failed", Errno(OperatingSystem.IsLinux() ? "epoll_wait" : "kevent"));
                     return;
                 }
+                // Every ready connection first, then the hook, then the answers: the batch ends whole even when the
+                // stop's wake comes with it, so no connection is left waiting for its turn to send.
+                t_batching = this;
                 for (int i = 0; i < n; i++)
                 {
                     ulong token = TokenAt(events, i, out bool closed);
                     if (token == WakeToken)
                     {
-                        if (_stopping) return;
+                        stop = _stopping;
                         continue;
                     }
                     try
@@ -131,6 +160,20 @@ internal abstract unsafe class EventLoop
                         _server.Report("http event loop failed", e);
                     }
                 }
+                if (_server.Options.OnEventLoopBatch is { } hook)
+                {
+                    try
+                    {
+                        hook(_index);
+                    }
+                    catch (Exception e)
+                    {
+                        Interlocked.Increment(ref _server.CallbackFailures);
+                        _server.Report("http event loop hook failed", e);
+                    }
+                }
+                t_batching = null;
+                SendAll();
             }
         }
         finally
@@ -140,6 +183,27 @@ internal abstract unsafe class EventLoop
             Closed();
             Queue.Dispose();
         }
+    }
+
+    /// <summary>Gives each held answer its turn, in the order they were finished. Each connection sends and goes on to
+    /// its next wait here, with the batch over, so nothing it does now is held.</summary>
+    void SendAll()
+    {
+        for (int i = 0; i < _sendCount; i++)
+        {
+            HttpExchange x = _sends[i]!;
+            _sends[i] = null;
+            try
+            {
+                x.TakeSendTurn();
+            }
+            catch (Exception e)
+            {
+                Interlocked.Increment(ref _server.FailedConnections);
+                _server.Report("http event loop failed", e);
+            }
+        }
+        _sendCount = 0;
     }
 
     static IOException Errno(string call)

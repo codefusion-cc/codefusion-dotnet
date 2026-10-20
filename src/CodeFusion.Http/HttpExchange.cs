@@ -66,6 +66,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     const int NoEdge = 0, Edge = 1, Hangup = 2;
     int _armed, _edge;
     readonly Kicker _kicker;
+    readonly SendTurn _sendTurn = new();
 
     // The handler, in the low two bits: none, Running, Abandoned (running, and the client reset or the connection
     // failed: the response is dropped) or HalfClosed (running, and the client sent its FIN: Aborted is canceled, the
@@ -328,7 +329,11 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
                         AppendContinue();
                         continueSent = true;
                     }
-                    if (_sendEnd > _sendStart && !await FlushAsync().ConfigureAwait(false)) return;
+                    if (_sendEnd > _sendStart)
+                    {
+                        await TurnToSend().ConfigureAwait(false);
+                        if (!await FlushAsync().ConfigureAwait(false)) return;
+                    }
                     _sendTaken = 0; // the client's turn: the next response starts a new run
                     _sendFill = -1;
                     bool idle = _start == _end, body = _req.HeadEnd > 0;
@@ -346,8 +351,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
                     if (!ClearDeadline()) return;
                     PrepareReceive();
                     CheckInvariants();
-                    Count(ref _server.SocketReceives);
-                    int n = _socket!.Receive(_in.AsSpan(_end), SocketFlags.None, out SocketError err);
+                    int n = Receive(_in.AsSpan(_end), out SocketError err);
                     if (err == SocketError.WouldBlock) continue;
                     if (err != SocketError.Success || n == 0) return;
                     if (n == _in!.Length - _end) MoreMayWait();
@@ -367,6 +371,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
                         Advance(b.Length);
                     }
                     FinishResponse(close: true);
+                    await TurnToSend().ConfigureAwait(false);
                     graceful = await FlushAsync().ConfigureAwait(false);
                     if (!graceful) return;
                     break; // to the linger: the rest of the refused request is likely still coming
@@ -423,6 +428,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
                 CheckInvariants();
                 if (close)
                 {
+                    await TurnToSend().ConfigureAwait(false);
                     graceful = await FlushAsync().ConfigureAwait(false);
                     // With nothing more from the client, the FIN and close can go now. With pipelined bytes, more
                     // likely follow: to the linger, so they don't make the close a reset.
@@ -431,9 +437,11 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
                 }
                 // Responses to pipelined requests whose handlers finished at once go out together; after a handler
                 // that waited, the next one likely waits too, so its response shouldn't wait behind it.
-                if ((wentAsync || _start == _end || _sendEnd - _sendStart >= _server.Options.ResponseBufferSize)
-                    && !await FlushAsync().ConfigureAwait(false))
-                    return;
+                if (wentAsync || _start == _end || _sendEnd - _sendStart >= _server.Options.ResponseBufferSize)
+                {
+                    await TurnToSend().ConfigureAwait(false);
+                    if (!await FlushAsync().ConfigureAwait(false)) return;
+                }
             }
 
             // The last response is sent and the connection closes while the client may still be sending. Closing
@@ -456,8 +464,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
                 if (!ClearDeadline()) return;
                 PrepareReceive();
                 CheckInvariants();
-                Count(ref _server.SocketReceives);
-                int n = _socket.Receive(_in, SocketFlags.None, out SocketError err);
+                int n = Receive(_in, out SocketError err);
                 if (err == SocketError.WouldBlock) continue;
                 if (err != SocketError.Success || n == 0) return;
                 if (n == _in!.Length) MoreMayWait();
@@ -650,7 +657,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         Socket s = _socket!;
         while (_sendStart < _sendEnd)
         {
-            int n = s.Send(_out.AsSpan(_sendStart, _sendEnd - _sendStart), SocketFlags.None, out SocketError err);
+            int n = Send(s, _out.AsSpan(_sendStart, _sendEnd - _sendStart), out SocketError err);
             if (err == SocketError.WouldBlock)
             {
                 // The socket is full: wait for it to take a slice, while the heartbeat watches what the client
@@ -691,6 +698,22 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         _sendStart = _sendEnd = 0;
         CheckInvariants();
         return true;
+    }
+
+    /// <summary>A receive on the connection's socket: recv itself on an event loop, Socket's elsewhere.</summary>
+    int Receive(Span<byte> buffer, out SocketError error)
+    {
+        Count(ref _server.SocketReceives);
+        if (Loop is null) return _socket!.Receive(buffer, SocketFlags.None, out error);
+        Count(ref _server.DirectCalls);
+        return DirectSocket.Receive(_socket!.SafeHandle, buffer, out error);
+    }
+
+    int Send(Socket s, ReadOnlySpan<byte> buffer, out SocketError error)
+    {
+        if (Loop is null) return s.Send(buffer, SocketFlags.None, out error);
+        Count(ref _server.DirectCalls);
+        return DirectSocket.Send(s.SafeHandle, buffer, out error);
     }
 
     void ReleaseBuffers()
@@ -836,6 +859,35 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     sealed class Kicker(HttpExchange owner) : IThreadPoolWorkItem
     {
         public void Execute() => owner.Readable(closed: true);
+    }
+
+    /// <summary>Before a send: on its loop's thread in a wake-up, the answers wait until the batch's hook has run, then
+    /// go out together. Awaited in RunAsync, whose box lives as long as the connection, so a held send allocates
+    /// nothing (a FlushAsync suspended per answer took a new box whenever several were held at once).</summary>
+    ValueTask TurnToSend() => Loop is { } loop && EventLoop.Batching == loop ? loop.WaitToSend(this) : default;
+
+    internal ValueTask WaitForSendTurn() => _sendTurn.Wait();
+
+    /// <summary>The loop's batch is over: the held send goes on, on the loop's thread.</summary>
+    internal void TakeSendTurn() => _sendTurn.Complete();
+
+    /// <summary>The wait of an answer held for its batch's end.</summary>
+    sealed class SendTurn : IValueTaskSource
+    {
+        InlineValueTaskSourceCore<bool> _core;
+
+        public ValueTask Wait()
+        {
+            _core.Reset();
+            return new ValueTask(this, _core.Version);
+        }
+
+        public void Complete() => _core.SetResult(true);
+
+        void IValueTaskSource.GetResult(short token) => _core.GetResult(token);
+        ValueTaskSourceStatus IValueTaskSource.GetStatus(short token) => _core.GetStatus(token);
+        void IValueTaskSource.OnCompleted(Action<object?> continuation, object? state, short token, ValueTaskSourceOnCompletedFlags flags)
+            => _core.OnCompleted(continuation, state, token, flags);
     }
 
     void WatchCompleted()

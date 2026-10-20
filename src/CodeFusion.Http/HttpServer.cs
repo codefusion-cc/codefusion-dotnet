@@ -62,6 +62,10 @@ public sealed class HttpServer : IAsyncDisposable
     /// receive that waits for a request. For tests.</summary>
     internal int SocketReceives;
 
+    /// <summary>Debug builds count here every recv and send an event loop's connection made itself, past Socket.
+    /// For tests.</summary>
+    internal int DirectCalls;
+
     /// <summary>Debug builds call it on a connection's own thread as it reaches each <see cref="ExchangePhase"/>,
     /// so a test can close, reset or stop exactly there. Release builds make no such calls.</summary>
     internal Action<HttpExchange, ExchangePhase>? PhaseHook;
@@ -138,6 +142,10 @@ public sealed class HttpServer : IAsyncDisposable
             return n;
         }
     }
+
+    /// <summary>The index of the event loop whose thread this is (<see cref="HttpServerOptions.OnEventLoopBatch"/>'s
+    /// argument), or -1 on any other thread.</summary>
+    public static int CurrentEventLoop => EventLoop.CurrentIndex;
 
     /// <summary>Open connections.</summary>
     public int Connections => Volatile.Read(ref _active);

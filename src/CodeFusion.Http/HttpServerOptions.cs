@@ -84,6 +84,13 @@ public sealed class HttpServerOptions
     /// and their handlers until they wait: one per core by default.</summary>
     public int EventLoops { get; set; } = Environment.ProcessorCount;
 
+    /// <summary>Called on an event loop's thread with its index (0 to <see cref="EventLoops"/> - 1) once the loop has
+    /// handled every connection that one wake-up found ready, before it sends their answers: a database provider
+    /// commits the batch's writes here, and a handler waiting for that commit, completed here, answers in the same
+    /// batch. What it throws is counted and reported, and the answers go out anyway. Only
+    /// <see cref="HttpTransport.EventLoop"/> calls it; an answer finished on another thread is sent at once.</summary>
+    public Action<int>? OnEventLoopBatch { get; set; }
+
     /// <summary>How often the Date header is refreshed, timeouts are checked, and a reset is looked for that only the
     /// socket's error shows (<see cref="HttpExchange.Aborted"/>).</summary>
     public TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(1);

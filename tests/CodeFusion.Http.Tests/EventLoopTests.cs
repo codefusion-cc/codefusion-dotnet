@@ -29,6 +29,13 @@ public sealed class EventLoopTests
         o.Transport = transport;
     }
 
+    /// <summary>As <see cref="Use"/>, with an empty batch hook on the event loop, so its calls are measured too.</summary>
+    internal static void UseWithHook(HttpServerOptions o, HttpTransport transport)
+    {
+        Use(o, transport);
+        if (transport == HttpTransport.EventLoop) o.OnEventLoopBatch = static _ => { };
+    }
+
     static TestServer Start(HttpHandler handler, Action<HttpServerOptions>? configure = null) => TestServer.Start(handler, o =>
     {
         Use(o, HttpTransport.EventLoop);
@@ -77,6 +84,27 @@ public sealed class EventLoopTests
         int receives = Volatile.Read(ref t.Server.SocketReceives) - before;
         // the last request's wait for the next one may or may not have started when the count is read
         Assert.InRange(receives, least * N, most * N + 1);
+    }
+
+    // The loop reads and sends with recv and send themselves, not through Socket's wrappers; Sockets keeps those.
+    [Theory(Timeout = 20_000)]
+    [InlineData(HttpTransport.EventLoop, 2)]
+    [InlineData(HttpTransport.Sockets, 0)]
+    public async Task EachKeepAliveRequestMakesThisManyDirectCalls(HttpTransport transport, int perRequest)
+    {
+        Assert.SkipUnless(AllocationTests.Debugger(), "Debug builds count the calls");
+        await using var t = TestServer.Start(Path, o => Use(o, transport));
+        using Client c = await t.ConnectAsync();
+        await c.SendAsync(Get("/warm"));
+        await c.ReadAsync();
+        const int N = 200;
+        int before = Volatile.Read(ref t.Server.DirectCalls);
+        for (int i = 0; i < N; i++)
+        {
+            await c.SendAsync(Get($"/{i}"));
+            Assert.Equal($"/{i}", (await c.ReadAsync()).Text);
+        }
+        Assert.InRange(Volatile.Read(ref t.Server.DirectCalls) - before, perRequest * N, perRequest * N + 1);
     }
 
     [Fact(Timeout = 20_000)]
