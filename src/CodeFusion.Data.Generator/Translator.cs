@@ -304,10 +304,10 @@ sealed partial class Translator
     /// <summary>
     /// A template of the table's key sequence (<see cref="Dialect.LastInsertedKey"/>, <see cref="Dialect.NextKey"/>),
     /// whose arguments are in a string literal: the table as SQL, which Postgres parses (case folded unless quoted),
-    /// and the column as it is.
+    /// the column as it is, and the table's name as it is (SQLite's sqlite_sequence holds that).
     /// </summary>
     public string Sequence(string template, EntityInfo e, ColumnInfo key) =>
-        Dialect.Format(template, TableSql(e).Replace("'", "''"), key.Name.Replace("'", "''"));
+        Dialect.Format(template, TableSql(e).Replace("'", "''"), key.Name.Replace("'", "''"), e.Table.Replace("'", "''"));
 
     public ViewInfo View(ITypeSymbol type, Location? at)
     {

@@ -75,6 +75,7 @@ CodeFusion.Data.Sqlite.SqliteSync.Full = 2 -> CodeFusion.Data.Sqlite.SqliteSync
 CodeFusion.Data.Sqlite.SqliteSync.Normal = 1 -> CodeFusion.Data.Sqlite.SqliteSync
 CodeFusion.Data.Sqlite.SqliteWriter
 CodeFusion.Data.Sqlite.SqliteWriter.Counters.get -> CodeFusion.Data.Sqlite.SqliteWriterCounters!
+CodeFusion.Data.Sqlite.SqliteWriter.Queued.get -> int
 CodeFusion.Data.Sqlite.SqliteWriterCounters
 CodeFusion.Data.Sqlite.SqliteWriterCounters.Checkpoints -> long
 CodeFusion.Data.Sqlite.SqliteWriterCounters.Commits -> long

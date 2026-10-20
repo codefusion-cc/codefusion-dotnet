@@ -30,6 +30,7 @@
     <ProjectReference Include="../../src/CodeFusion.Data.Postgres/CodeFusion.Data.Postgres.csproj" />
     <ProjectReference Include="../../src/CodeFusion.Data.Generator/CodeFusion.Data.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
     <Compile Include="../Shared/Conduit/*.cs" Link="Conduit/%(Filename)%(Extension)" />
+    <Compile Include="../Shared/Ops/*.cs" Link="Ops/%(Filename)%(Extension)" />
     <!-- The contest's statements, frozen, to compare plans with. -->
     <Compile Include="../../benchmarks/CodeFusion.Benchmarks/Reference/Sql.cs" Link="Reference/Sql.cs" />
     <None Include="../../benchmarks/CodeFusion.Benchmarks/schema.sql" Link="schema.sql" CopyToOutputDirectory="PreserveNewest" />

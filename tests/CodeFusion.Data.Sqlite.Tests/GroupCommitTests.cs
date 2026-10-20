@@ -148,19 +148,38 @@ public sealed class GroupCommitTests : IDisposable
     [Fact]
     public async Task WritesPastAFullQueueAreBusyAtOnce()
     {
-        var s = _db.Open(_db.Database(maxQueued: 4));
-        var blocker = Kv.WriteMany(s, "b", 300_000);
-        var queued = new List<ValueTask<DataResult>>();
-        for (int i = 0; i < 10; i++) queued.Add(Kv.Write(s, "q" + i, i));
+        var db = _db.Database(maxQueued: 4);
+        var s = _db.Open(db);
+        // another connection holds the file's write lock: the writer waits on it with what it took, so the queue
+        // stays full (taken as one group, the writes behind a long one would free it)
+        using var other = SqliteConn.Open(db.Path, db, writer: true);
+        Assert.Equal(0, other.Once(new SqliteStatement("BEGIN IMMEDIATE")));
+        var first = Kv.Write(s, "first", 0);
+        // the writer took it alone, and waits on the lock with it
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        while (s.Writer.Queued > 0) Assert.True(waited.Elapsed < TimeSpan.FromSeconds(2), "the writer never took the first write");
+        var pending = new List<ValueTask<DataResult>>();
         int busy = 0, ok = 0;
-        foreach (var t in queued)
+        for (int i = 0; i < 10; i++)
         {
-            var r = await t;
-            if (r.Status == DataStatus.Busy) busy++;
-            else if (r.IsOk) ok++;
+            var t = Kv.Write(s, "q" + i, i);
+            if (!t.IsCompleted)
+            {
+                pending.Add(t);
+                continue;
+            }
+            var r = await t; // refused at once, while the writer still waits
+            Assert.True(r.Status == DataStatus.Busy, $"q{i}: {r}");
+            busy++;
         }
-        Assert.True((await blocker).IsOk);
-        Assert.True(busy >= 5, $"{busy} refused");
+        // the queue holds four of them
+        Assert.Equal(6, busy);
+        Assert.Equal(4, s.Writer.Queued);
+        Assert.False(first.IsCompleted);
+        Assert.Equal(0, other.Once(new SqliteStatement("ROLLBACK")));
+        foreach (var t in pending)
+            if ((await t).IsOk) ok++;
+        Assert.True((await first).IsOk);
         Assert.Equal(10, busy + ok);
         Assert.Equal(ok, Kv.Count(s, "q%"));
     }

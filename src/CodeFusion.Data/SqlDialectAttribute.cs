@@ -69,12 +69,13 @@ public sealed class SqlDialectAttribute : Attribute
     /// value, {1} its <c>ORDER BY</c> clause or empty: <c>array_to_json(array_agg({0}{1}))</c>.</summary>
     public string JsonAggregate { get; init; } = "array_to_json(array_agg({0}{1}))";
 
-    /// <summary>The key the last insert in this unit drew; {0} is the table, {1} the key column:
-    /// <c>currval(pg_get_serial_sequence('{0}', '{1}'))</c>; SQLite <c>last_insert_rowid()</c>.</summary>
+    /// <summary>The key the last insert into the table in this unit drew; {0} is the table as SQL (quoted where it
+    /// must be), {1} the key column, {2} the table's name as it is, each escaped for a string literal:
+    /// <c>currval(pg_get_serial_sequence('{0}', '{1}'))</c>; SQLite's is the table's row of <c>sqlite_sequence</c>.</summary>
     public string LastInsertedKey { get; init; } = "currval(pg_get_serial_sequence('{0}', '{1}'))";
 
-    /// <summary>Draws a new key before the row is inserted, so the row's other values can use it; {0} is the table,
-    /// {1} the key column. Empty: the dialect can't, and an insert whose values use its own key is refused.</summary>
+    /// <summary>Draws a new key before the row is inserted, so the row's other values can use it; {0}, {1} and {2} as
+    /// in <see cref="LastInsertedKey"/>. Empty: the dialect can't, and an insert whose values use its own key is refused.</summary>
     public string NextKey { get; init; } = "nextval(pg_get_serial_sequence('{0}', '{1}'))";
 
     /// <summary>Whether {0} is one of the elements of the array parameter {1}: <c>{0} = ANY({1})</c>.</summary>

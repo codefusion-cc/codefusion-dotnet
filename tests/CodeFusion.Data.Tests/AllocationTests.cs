@@ -117,20 +117,24 @@ public sealed class AllocationTests(ConduitFixture fixture)
 
         async Task<long> Run(int reads, int writes)
         {
+            // the writes first, then the reads: the two writing connections toggle one favorite, which a read on the
+            // write database counts, so no read may run while either still toggles
             var tasks = new Task<long>[Callers];
-            for (int i = 0; i < Callers; i++)
-            {
-                var c = connections[i];
-                // off xunit's synchronization context, so continuations run where the loops complete them
-                tasks[i] = Task.Run(async () => c.Db.Source == fixture.Writes ? await Writes(c, writes).ConfigureAwait(false) + await Reads(c, reads).ConfigureAwait(false)
-                    : await Reads(c, reads).ConfigureAwait(false));
-            }
             long failures = 0;
-            foreach (var t in tasks) failures += await t.ConfigureAwait(false);
+            for (int phase = 0; phase < 2; phase++)
+            {
+                for (int i = 0; i < Callers; i++)
+                {
+                    var c = connections[i];
+                    // off xunit's synchronization context, so continuations run where the loops complete them
+                    tasks[i] = phase == 0 ? (c.Db.Source == fixture.Writes ? Task.Run(() => Writes(c, writes)) : Task.FromResult(0L)) : Task.Run(() => Reads(c, reads));
+                }
+                foreach (var t in tasks) failures += await t.ConfigureAwait(false);
+            }
             return failures;
         }
 
-        Assert.Equal(0, await Run(700, 60)); // warm: pools, slots, statements on every connection, JIT
+        Assert.Equal(0, await Run(ReadsEach, WritesEach)); // warm: pools, slots, statements on every connection, JIT
         long Measure(Func<Task<long>> run, out long failures)
         {
             long before = GC.GetTotalAllocatedBytes(precise: true);
@@ -138,11 +142,17 @@ public sealed class AllocationTests(ConduitFixture fixture)
             return GC.GetTotalAllocatedBytes(precise: true) - before;
         }
         // twice as many queries must not allocate more: what a run allocates is the test's own tasks, not the queries'.
-        // Each size is measured twice and the smaller kept: the runtime's own odd few hundred bytes (a timer, the
-        // thread pool) land in one run now and then, where a query's allocation would be in both
-        long once = Math.Min(Measure(() => Run(ReadsEach, WritesEach), out long failedOnce), Measure(() => Run(ReadsEach, WritesEach), out long failedOnceAgain));
-        long twice = Math.Min(Measure(() => Run(2 * ReadsEach, 2 * WritesEach), out long failedTwice), Measure(() => Run(2 * ReadsEach, 2 * WritesEach), out long failedTwiceAgain));
-        Assert.Equal(0, failedOnce + failedOnceAgain + failedTwice + failedTwiceAgain);
+        // Each size is measured three times, the two in turn, and the smallest kept: the runtime's own few hundred bytes
+        // (a timer, the thread pool), and right after other tests a few KB for a run or two, land in a run now and then,
+        // where a query's allocation would be in all three
+        long once = long.MaxValue, twice = long.MaxValue, failed = 0;
+        for (int k = 0; k < 3; k++)
+        {
+            once = Math.Min(once, Measure(() => Run(ReadsEach, WritesEach), out long failedOnce));
+            twice = Math.Min(twice, Measure(() => Run(2 * ReadsEach, 2 * WritesEach), out long failedTwice));
+            failed += failedOnce + failedTwice;
+        }
+        Assert.Equal(0, failed);
         int operations = Callers * ReadsEach + Callers / 2 * WritesEach;
         string line = $"{once} bytes for {operations} queries, {twice} bytes for {2 * operations} ({(double)(twice - once) / operations:F3} B per extra query)";
         TestContext.Current.TestOutputHelper?.WriteLine(line);

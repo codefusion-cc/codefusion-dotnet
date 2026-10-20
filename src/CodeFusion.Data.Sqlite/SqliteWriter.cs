@@ -30,6 +30,10 @@ public sealed unsafe class SqliteWriter
     /// <summary>The writer's counters.</summary>
     public SqliteWriterCounters Counters { get; } = new();
 
+    /// <summary>Writes waiting for the writer, not counting the group it runs: up to <see cref="SqliteDatabase.MaxQueued"/>,
+    /// past which a write is refused as busy at once. A measure of load, for shedding it before the queue is full.</summary>
+    public int Queued => Volatile.Read(ref _count);
+
     /// <summary>Moves after each commit, before the group's writes complete; the readers compare their snapshots with it.</summary>
     internal readonly CommitClock Clock = new();
     internal SqliteReaders? Readers;
