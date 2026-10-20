@@ -81,6 +81,39 @@ public sealed class ExclusiveTests : IDisposable
         Assert.Equal(2400, Kv.Count(s, "pair-%"));
     }
 
+    [Fact(Timeout = 60_000)]
+    public async Task ReadsAndWritesThatNeverStopTakeTurns()
+    {
+        var s = _db.Open(_db.Database(exclusive: true));
+        Assert.True((await Kv.WriteMany(s, "seed", 20_000)).IsOk);
+        long readsBeside = 0;
+        int writing = 0;
+        using var stop = new CancellationTokenSource();
+        var readers = new Task[4];
+        for (int t = 0; t < readers.Length; t++)
+            readers[t] = Task.Run(() =>
+            {
+                // each read a scan of 20,000 rows, back to back
+                while (!stop.IsCancellationRequested)
+                {
+                    Kv.Count(s, "seed%");
+                    if (Volatile.Read(ref writing) != 0) Interlocked.Increment(ref readsBeside);
+                }
+            }, TestContext.Current.CancellationToken);
+        // the writer is first in line: a write waits for the read running, not for every read that starts after it
+        await Task.Delay(100, TestContext.Current.CancellationToken); // the readers are reading
+        Volatile.Write(ref writing, 1);
+        var took = Stopwatch.StartNew();
+        for (int i = 0; i < 200; i++) Assert.True((await Kv.Write(s, "w" + i, i)).IsOk);
+        took.Stop();
+        Volatile.Write(ref writing, 0);
+        stop.Cancel();
+        await Task.WhenAll(readers);
+        Assert.True(took.Elapsed < TimeSpan.FromMilliseconds(1500), $"200 writes took {took.Elapsed.TotalMilliseconds:F0} ms beside the reads");
+        // and the reads go on beside the writes: a group lets a waiting read through before the next one
+        Assert.True(readsBeside >= 100, $"{readsBeside} reads beside 200 writes");
+    }
+
     [Fact(Timeout = 30_000)]
     public async Task AContinuationOnTheWritersThreadReadsAndWrites()
     {

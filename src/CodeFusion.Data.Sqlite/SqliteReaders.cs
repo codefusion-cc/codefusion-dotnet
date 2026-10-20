@@ -194,8 +194,57 @@ internal sealed class SqliteReaders : IDisposable
     /// not (the writer commits what has queued after a stop).</summary>
     internal void Enter()
     {
+        // turns: a read that waited goes before the next group, and no read starts while the writer waits, so neither
+        // side waits for more than one of the other's. No 1 ms sleeps: a group a millisecond late would pay it at every
+        // commit.
+        if (Volatile.Read(ref _readersWaiting) > 0)
+        {
+            long seen = Volatile.Read(ref _readsDone);
+            SpinWait turn = default;
+            while (Volatile.Read(ref _readsDone) == seen && Volatile.Read(ref _readersWaiting) > 0) turn.SpinOnce(sleep1Threshold: -1);
+        }
+        Volatile.Write(ref _writerWaits, 1);
         SpinWait spin = default;
-        while (Interlocked.CompareExchange(ref _taken[0], 1, 0) != 0) spin.SpinOnce();
+        while (Interlocked.CompareExchange(ref _taken[0], 1, 0) != 0) spin.SpinOnce(sleep1Threshold: -1);
+        Volatile.Write(ref _writerWaits, 0);
+    }
+
+    /// <summary>Exclusive mode: the writer wants the connection; reads wait to start.</summary>
+    int _writerWaits;
+
+    /// <summary>Exclusive mode: reads waiting for the connection, and reads done; the writer lets one through after a
+    /// group.</summary>
+    int _readersWaiting;
+    long _readsDone;
+
+    /// <summary>Exclusive mode: takes the one connection when the writer isn't waiting for it; -1 once stopped.</summary>
+    int TakeShared()
+    {
+        bool counted = false;
+        SpinWait spin = default;
+        try
+        {
+            while (true)
+            {
+                if (Volatile.Read(ref _writerWaits) == 0 && Volatile.Read(ref _taken[0]) == 0 && Interlocked.CompareExchange(ref _taken[0], 1, 0) == 0)
+                {
+                    if (Volatile.Read(ref _stopped) == 0) return 0;
+                    Volatile.Write(ref _taken[0], 0);
+                    return -1;
+                }
+                if (Volatile.Read(ref _stopped) != 0) return -1;
+                if (!counted)
+                {
+                    Interlocked.Increment(ref _readersWaiting);
+                    counted = true;
+                }
+                spin.SpinOnce(sleep1Threshold: -1);
+            }
+        }
+        finally
+        {
+            if (counted) Interlocked.Decrement(ref _readersWaiting);
+        }
     }
 
     /// <summary>Exclusive mode: the writer gives the connection back, before it completes the group's writes.</summary>
@@ -204,6 +253,7 @@ internal sealed class SqliteReaders : IDisposable
     /// <summary>Takes a free connection, starting from one picked by the thread so threads spread out; -1 once stopped.</summary>
     int Take()
     {
+        if (_shared) return TakeShared();
         int n = _conns.Length;
         int start = (int)((uint)Environment.CurrentManagedThreadId % (uint)n);
         SpinWait spin = default;
@@ -213,7 +263,7 @@ internal sealed class SqliteReaders : IDisposable
             {
                 int i = start + k;
                 if (i >= n) i -= n;
-                if (Volatile.Read(ref _taken[i * Stride]) == 0 && Interlocked.CompareExchange(ref _taken[i * Stride], 1, 0) == 0)
+                if (Volatile.Read(ref _taken[i * Stride]) == 0 && (!_shared || Volatile.Read(ref _writerWaits) == 0) && Interlocked.CompareExchange(ref _taken[i * Stride], 1, 0) == 0)
                 {
                     if (Volatile.Read(ref _stopped) == 0) return i;
                     Volatile.Write(ref _taken[i * Stride], 0);
@@ -260,6 +310,7 @@ internal sealed class SqliteReaders : IDisposable
         finally
         {
             conn.Ended();
+            if (_shared) Interlocked.Increment(ref _readsDone);
             Volatile.Write(ref _taken[i * Stride], 0);
         }
     }
