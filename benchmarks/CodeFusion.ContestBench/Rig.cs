@@ -13,13 +13,13 @@ internal sealed record Contest(
 {
     /// <summary>
     /// The multicore box: 8 vCPU / 16 GB like the rules' box, as c4-highcpu-8, the shape PR #8's README measured on.
-    /// The load boxes are n2-highcpu-8 spot machines: each holds up to ~60k users (one connection each, so the local
-    /// port range is the limit before CPU is).
+    /// The load boxes are n2-highcpu-4 spot machines, five of them: each drives up to 60k users (one connection each, so
+    /// the local port range is the limit), and target + loads stay inside the project's 32-vCPU quota.
     /// </summary>
     public static readonly Contest Multicore = new(
         "multicore", "/Volumes/Dev/Projects/multicore-server-challenge", "origin/main",
         "cbench-mc-target", new Shape("c4-highcpu-8", 8, 16, 50, "hyperdisk-balanced", false), "cbench-multicore",
-        "cbench-mc-load", new Shape("n2-highcpu-8", 8, 8, 20, "pd-balanced", true), 4,
+        "cbench-mc-load", new Shape("n2-highcpu-4", 4, 4, 20, "pd-balanced", true), 5,
         new Shape("c4-highcpu-8", 8, 16, 50, "hyperdisk-balanced", false));
 
     /// <summary>
