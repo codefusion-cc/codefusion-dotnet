@@ -499,7 +499,7 @@ public sealed class PgWriterTests : IAsyncDisposable
         var insert = new PgStatement($"INSERT INTO {_table} (v) VALUES ($1)", PgType.Text);
         var tags = new PgStatement($"INSERT INTO {_table}_d SELECT currval(pg_get_serial_sequence('{_table}', 'id')), t FROM unnest($1::text[]) t", PgType.TextArray);
         var back = new PgStatement(
-            $"SELECT a.v, (SELECT string_agg(coalesce(d.v, 'NULL'), ',' ORDER BY d.v NULLS FIRST) FROM {_table}_d d WHERE d.k = a.id), coalesce($1, 'no bio') " +
+            $"SELECT a.v, (SELECT string_agg(coalesce(d.v, 'NULL'), ',' ORDER BY d.v COLLATE \"C\" NULLS FIRST) FROM {_table}_d d WHERE d.k = a.id), coalesce($1, 'no bio') " +
             $"FROM {_table} a WHERE a.id = currval(pg_get_serial_sequence('{_table}', 'id'))", PgType.Text);
         var rows = new List<string>();
         w.Start(1);
