@@ -1,0 +1,37 @@
+<Project>
+
+  <!-- The repository's settings, then the gates every src project builds under. docs/ENGINEERING.md ("Build gates") says what
+       each one catches and how to update the API files. -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <!-- Every CA rule, as errors (TreatWarningsAsErrors). The ones that don't fit these packages are off in
+         src/.editorconfig, each with its reason. -->
+    <!-- CodeFusion.Security.Bcrypt keeps the analysis it shipped 1.x with (latest-recommended, from the root): a new
+         rule's fix in its code goes out in a bcrypt release of its own. -->
+    <CodeFusionBcrypt>$(MSBuildProjectName.StartsWith('CodeFusion.Security.Bcrypt'))</CodeFusionBcrypt>
+    <AnalysisLevel Condition="'$(CodeFusionBcrypt)' != 'true'">latest</AnalysisLevel>
+    <AnalysisMode Condition="'$(CodeFusionBcrypt)' != 'true'">All</AnalysisMode>
+    <!-- dotnet pack checks each package; with a baseline it also fails on an API or framework a release drops. -->
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <!-- After the first publish, the release every next one must stay compatible with:
+    <PackageValidationBaselineVersion>0.1.0</PackageValidationBaselineVersion>
+    -->
+    <!-- The projects that run per request or per query: no LINQ or Task.Run there (BannedSymbols.HotPath.txt). -->
+    <CodeFusionHotPath Condition="'$(MSBuildProjectName)' == 'CodeFusion.Http' or '$(MSBuildProjectName)' == 'CodeFusion.Data.Postgres'">true</CodeFusionHotPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" PrivateAssets="all" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.txt" Visible="false" />
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.HotPath.txt" Visible="false" Condition="'$(CodeFusionHotPath)' == 'true'" />
+  </ItemGroup>
+
+  <!-- The published packages' public API, nullability included, in each project's PublicAPI.Shipped.txt and
+       PublicAPI.Unshipped.txt (the package picks them up): a change to it is a build error until the file says so,
+       so it shows in review. Without the files every public symbol is an error. -->
+  <ItemGroup Condition="'$(IsPackable)' != 'false'">
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

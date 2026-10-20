@@ -1,0 +1,7 @@
+// Every src project, generators included (docs/ENGINEERING.md, "Build gates"). One symbol per line, as a documentation
+// comment ID, then ';' and what to use instead. A use the rule doesn't fit takes a #pragma with its reason.
+
+T:System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore`1;Use CodeFusion's InlineValueTaskSourceCore: the runtime's marks a result ready before it claims the continuation slot (a reset right after completion runs the next operation's continuation early) and queues a late continuation through the thread pool (an allocation)
+T:System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder;Use PooledValueTaskMethodBuilder in a method that runs per request: the runtime's keeps boxes per thread and per core, so one that finishes on another thread misses its cache (15 to 30 B per request). A per-connection loop may keep it, with a #pragma saying why
+T:System.Runtime.CompilerServices.PoolingAsyncValueTaskMethodBuilder`1;Use PooledValueTaskMethodBuilder<TResult> in a method that runs per request: the runtime's keeps boxes per thread and per core, so one that finishes on another thread misses its cache (15 to 30 B per request). A per-connection loop may keep it, with a #pragma saying why
+T:System.Console;The packages don't write to the console: report a failure through a hook (HttpServerOptions.OnError or OnHandlerError, HttpAppErrors.Log), so an app or a test sees it

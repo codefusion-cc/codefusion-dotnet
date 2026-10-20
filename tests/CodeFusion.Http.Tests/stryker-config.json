@@ -1,0 +1,12 @@
+{
+  "stryker-config": {
+    "project": "CodeFusion.Http.csproj",
+    "test-runner": "mtp",
+    "configuration": "Release",
+    "concurrency": 2,
+    "mutate": [ "**/RequestParser.cs", "**/ResponseHead.cs", "**/HttpDate.cs", "**/RequestMethod.cs" ],
+    "reporters": [ "html", "json", "progress" ],
+    "ignore-mutations": [ "string" ],
+    "thresholds": { "high": 90, "low": 80, "break": 0 }
+  }
+}

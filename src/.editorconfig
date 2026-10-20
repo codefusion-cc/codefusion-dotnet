@@ -1,0 +1,30 @@
+# src/ builds with every CA rule as an error (AnalysisMode All, src/Directory.Build.props). These rules don't fit
+# the packages and are off, each with its reason. A single use a rule doesn't fit takes a #pragma with its reason
+# instead. docs/ENGINEERING.md, "Build gates".
+
+[*.cs]
+
+# Catch-alls sit where a failure must not escape: a connection loop, a Postgres loop, a handler's boundary, a
+# disposal. Each passes the exception on (to a result, a hook, a counter or an AggregateException) or drops what
+# can't matter, such as a failed goodbye on a socket that is already gone.
+dotnet_diagnostic.CA1031.severity = none
+
+# The structs are views, results, awaiters and builders: nothing compares them, and equality would be API to keep
+# for no use. The values that are compared, Utf8 and Timestamp, have it.
+dotnet_diagnostic.CA1815.severity = none
+
+# Enums are a byte wide to keep the structs and pooled objects holding them small; PgType's values are Postgres's
+# own uint type OIDs.
+dotnet_diagnostic.CA1028.severity = none
+
+# Each exception carries what went wrong (a Postgres error's fields, why the generator refused a query). A
+# constructor without that would make an exception that says nothing.
+dotnet_diagnostic.CA1032.severity = none
+
+# Only ASCII keys and names are lowered, to compare with lower-case literals (Postgres's own names are lower case).
+# Nothing is lowered and raised again.
+dotnet_diagnostic.CA1308.severity = none
+
+# The implicit conversions are how a handler returns an ErrorReply or a result as a Reply, and a query as a Write.
+# A named twin of each would be API nobody calls: the packages are for C#.
+dotnet_diagnostic.CA2225.severity = none

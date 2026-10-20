@@ -2,6 +2,8 @@
 
   <!-- BenchmarkDotNet; the README says how to run it. -->
   <PropertyGroup>
+    <!-- The repository sets one TargetFramework for its .NET 10 packages; cleared, so this one builds for each of its own. -->
+    <TargetFramework></TargetFramework>
     <TargetFrameworks>$(BcryptFrameworks)</TargetFrameworks>
     <TargetFrameworks Condition="$([MSBuild]::VersionGreaterThanOrEquals('$(NETCoreSdkVersion)', '11.0'))">$(TargetFrameworks);net11.0</TargetFrameworks>
     <OutputType>Exe</OutputType>
@@ -13,7 +15,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="BenchmarkDotNet" />
+    <!-- bcrypt's measurements were made with this one. -->
+    <PackageReference Include="BenchmarkDotNet" VersionOverride="0.16.0-preview.2" />
     <PackageReference Include="BCrypt.Net-Next" />
     <ProjectReference Include="../../src/CodeFusion.Security.Bcrypt/CodeFusion.Security.Bcrypt.csproj" />
   </ItemGroup>

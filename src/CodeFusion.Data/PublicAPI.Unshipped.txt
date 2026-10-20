@@ -1,0 +1,367 @@
+#nullable enable
+abstract CodeFusion.Data.DataSource.Stop() -> void
+abstract CodeFusion.Data.QueryOps.Discard(in CodeFusion.Data.PendingCommand command) -> void
+abstract CodeFusion.Data.QueryOps.IsWrite.get -> bool
+abstract CodeFusion.Data.QueryOps.Kind.get -> CodeFusion.Data.ResultKind
+abstract CodeFusion.Data.QueryOps.Name.get -> string!
+abstract CodeFusion.Data.QueryOps.RunCopy(in CodeFusion.Data.PendingCommand command, CodeFusion.Data.RowState! state, System.Threading.CancellationToken aborted) -> System.Threading.Tasks.ValueTask<CodeFusion.Data.DataResult>
+abstract CodeFusion.Data.QueryOps.RunJson(in CodeFusion.Data.PendingCommand command, CodeFusion.Data.RowState! state, System.Threading.CancellationToken aborted) -> System.Threading.Tasks.ValueTask<CodeFusion.Data.DataResult>
+CodeFusion.Data.DataContext
+CodeFusion.Data.DataContext.Bind(CodeFusion.IResponse! response) -> void
+CodeFusion.Data.DataContext.Hold(in CodeFusion.Data.PendingCommand command, CodeFusion.Data.QueryOps! ops) -> void
+CodeFusion.Data.DataContext.Response.get -> CodeFusion.IResponse?
+CodeFusion.Data.DataContext.Source.get -> CodeFusion.Data.DataSource!
+CodeFusion.Data.DataContext<TProvider>
+CodeFusion.Data.DataContext<TProvider>.DataContext() -> void
+CodeFusion.Data.DataErrors
+CodeFusion.Data.DataErrors.Conflict.get -> CodeFusion.ErrorReply!
+CodeFusion.Data.DataErrors.Conflict.init -> void
+CodeFusion.Data.DataErrors.DatabaseBusy.get -> CodeFusion.ErrorReply!
+CodeFusion.Data.DataErrors.DatabaseBusy.init -> void
+CodeFusion.Data.DataErrors.DataErrors() -> void
+CodeFusion.Data.DataErrors.For(CodeFusion.Data.DataStatus status, bool write, CodeFusion.ErrorReply? conflict = null) -> CodeFusion.ErrorReply?
+CodeFusion.Data.DataErrors.Forbidden.get -> CodeFusion.ErrorReply!
+CodeFusion.Data.DataErrors.Forbidden.init -> void
+CodeFusion.Data.DataErrors.Internal.get -> CodeFusion.ErrorReply!
+CodeFusion.Data.DataErrors.Internal.init -> void
+CodeFusion.Data.DataErrors.NotFound.get -> CodeFusion.ErrorReply!
+CodeFusion.Data.DataErrors.NotFound.init -> void
+CodeFusion.Data.DataErrors.ReadsBusy.get -> CodeFusion.ErrorReply!
+CodeFusion.Data.DataErrors.ReadsBusy.init -> void
+CodeFusion.Data.DataErrors.WritesBusy.get -> CodeFusion.ErrorReply!
+CodeFusion.Data.DataErrors.WritesBusy.init -> void
+CodeFusion.Data.DataResult
+CodeFusion.Data.DataResult.DataResult() -> void
+CodeFusion.Data.DataResult.DataResult(CodeFusion.Data.DataStatus status, int rows = 0, long value = 0, System.Exception? error = null, string? nativeCode = null) -> void
+CodeFusion.Data.DataResult.Error.get -> System.Exception?
+CodeFusion.Data.DataResult.IsOk.get -> bool
+CodeFusion.Data.DataResult.NativeCode.get -> string?
+CodeFusion.Data.DataResult.Rows.get -> int
+CodeFusion.Data.DataResult.Status.get -> CodeFusion.Data.DataStatus
+CodeFusion.Data.DataResult.Value.get -> long
+CodeFusion.Data.DataSource
+CodeFusion.Data.DataSource.CreateContext<TContext>() -> TContext!
+CodeFusion.Data.DataSource.DataSource() -> void
+CodeFusion.Data.DataSource.Errors.get -> CodeFusion.Data.DataErrors!
+CodeFusion.Data.DataSource.Errors.init -> void
+CodeFusion.Data.DataSource.OnFailure.get -> System.Action<string!, CodeFusion.Data.DataResult>?
+CodeFusion.Data.DataSource.OnFailure.init -> void
+CodeFusion.Data.DataStatus
+CodeFusion.Data.DataStatus.Broken = 6 -> CodeFusion.Data.DataStatus
+CodeFusion.Data.DataStatus.Busy = 1 -> CodeFusion.Data.DataStatus
+CodeFusion.Data.DataStatus.Canceled = 2 -> CodeFusion.Data.DataStatus
+CodeFusion.Data.DataStatus.Failed = 8 -> CodeFusion.Data.DataStatus
+CodeFusion.Data.DataStatus.LockTimeout = 3 -> CodeFusion.Data.DataStatus
+CodeFusion.Data.DataStatus.Ok = 0 -> CodeFusion.Data.DataStatus
+CodeFusion.Data.DataStatus.ReaderFailed = 9 -> CodeFusion.Data.DataStatus
+CodeFusion.Data.DataStatus.StatementTimeout = 4 -> CodeFusion.Data.DataStatus
+CodeFusion.Data.DataStatus.Stopped = 7 -> CodeFusion.Data.DataStatus
+CodeFusion.Data.DataStatus.UniqueViolation = 5 -> CodeFusion.Data.DataStatus
+CodeFusion.Data.DataType
+CodeFusion.Data.DataType.Boolean = 2 -> CodeFusion.Data.DataType
+CodeFusion.Data.DataType.Double = 3 -> CodeFusion.Data.DataType
+CodeFusion.Data.DataType.Int32 = 1 -> CodeFusion.Data.DataType
+CodeFusion.Data.DataType.Int64 = 0 -> CodeFusion.Data.DataType
+CodeFusion.Data.DataType.Text = 4 -> CodeFusion.Data.DataType
+CodeFusion.Data.DataType.TextArray = 6 -> CodeFusion.Data.DataType
+CodeFusion.Data.DataType.Timestamp = 5 -> CodeFusion.Data.DataType
+CodeFusion.Data.DeleteQuery<T>
+CodeFusion.Data.DeleteQuery<T>.Select<TResult>(System.Func<T, TResult>! selector) -> CodeFusion.Data.WriteQuery<TResult>!
+CodeFusion.Data.IDataCommand<TStatement>
+CodeFusion.Data.IDataCommand<TStatement>.BeginTextArray() -> void
+CodeFusion.Data.IDataCommand<TStatement>.Boolean(bool value) -> void
+CodeFusion.Data.IDataCommand<TStatement>.Discard() -> void
+CodeFusion.Data.IDataCommand<TStatement>.Double(double value) -> void
+CodeFusion.Data.IDataCommand<TStatement>.Element(System.ReadOnlySpan<byte> utf8) -> void
+CodeFusion.Data.IDataCommand<TStatement>.EndTextArray() -> void
+CodeFusion.Data.IDataCommand<TStatement>.Hold() -> CodeFusion.Data.PendingCommand
+CodeFusion.Data.IDataCommand<TStatement>.Int32(int value) -> void
+CodeFusion.Data.IDataCommand<TStatement>.Int64(long value) -> void
+CodeFusion.Data.IDataCommand<TStatement>.Null() -> void
+CodeFusion.Data.IDataCommand<TStatement>.Text(System.ReadOnlySpan<byte> utf8) -> void
+CodeFusion.Data.IDataCommand<TStatement>.Text(System.ReadOnlySpan<char> text) -> void
+CodeFusion.Data.IDataCommand<TStatement>.Then(TStatement statement) -> void
+CodeFusion.Data.IDataCommand<TStatement>.Timestamp(CodeFusion.Timestamp value) -> void
+CodeFusion.Data.IDataProvider
+CodeFusion.Data.IDataProvider<TSelf, TStatement, TCommand>
+CodeFusion.Data.IDataProvider<TSelf, TStatement, TCommand>.Discard(in CodeFusion.Data.PendingCommand command) -> void
+CodeFusion.Data.IDataProvider<TSelf, TStatement, TCommand>.Read(CodeFusion.Data.DataContext! context, TStatement! statement) -> TCommand
+CodeFusion.Data.IDataProvider<TSelf, TStatement, TCommand>.Run<TReader>(in CodeFusion.Data.PendingCommand command, object? state, System.Threading.CancellationToken aborted) -> System.Threading.Tasks.ValueTask<CodeFusion.Data.DataResult>
+CodeFusion.Data.IDataProvider<TSelf, TStatement, TCommand>.Statement(string! sql, params System.ReadOnlySpan<CodeFusion.Data.DataType> parameters) -> TStatement!
+CodeFusion.Data.IDataProvider<TSelf, TStatement, TCommand>.Write(CodeFusion.Data.DataContext! context, TStatement! statement) -> TCommand
+CodeFusion.Data.IDataRow
+CodeFusion.Data.IDataRow.FieldCount.get -> int
+CodeFusion.Data.IDataRow.GetBoolean(int c) -> bool
+CodeFusion.Data.IDataRow.GetBytes(int c) -> System.ReadOnlySpan<byte>
+CodeFusion.Data.IDataRow.GetDouble(int c) -> double
+CodeFusion.Data.IDataRow.GetJson(int c) -> System.ReadOnlySpan<byte>
+CodeFusion.Data.IDataRow.GetInt64(int c) -> long
+CodeFusion.Data.IDataRow.GetTimestamp(int c) -> CodeFusion.Timestamp
+CodeFusion.Data.IDataRow.IsNull(int c) -> bool
+CodeFusion.Data.Insert<T>
+CodeFusion.Data.Insert<T>.OrIgnore() -> CodeFusion.Data.Insert<T!>!
+CodeFusion.Data.Insert<T>.Select<TResult>(System.Func<T!, TResult>! selector) -> CodeFusion.Data.Write<TResult>
+CodeFusion.Data.Insert<T>.Then(CodeFusion.Data.Write next) -> CodeFusion.Data.Insert<T!>!
+CodeFusion.Data.Insert<T>.Then(System.Func<T!, CodeFusion.Data.Write>! next) -> CodeFusion.Data.Insert<T!>!
+CodeFusion.Data.Insert<T>.ThenIf(bool condition, CodeFusion.Data.Write next) -> CodeFusion.Data.Insert<T!>!
+CodeFusion.Data.Insert<T>.ThenIf(bool condition, System.Func<T!, CodeFusion.Data.Write>! next) -> CodeFusion.Data.Insert<T!>!
+CodeFusion.Data.Insert<T>.ThenSelect<TResult>(System.Func<T!, TResult>! selector) -> CodeFusion.Data.Write<TResult>
+CodeFusion.Data.IRowReader
+CodeFusion.Data.IRowReader.Read<TRow>(scoped in TRow row, object? state) -> long
+CodeFusion.Data.JoinTableAttribute
+CodeFusion.Data.JoinTableAttribute.JoinTableAttribute(string! table) -> void
+CodeFusion.Data.JoinTableAttribute.JoinTableAttribute(string! table, string! thisColumn, string! otherColumn) -> void
+CodeFusion.Data.JoinTableAttribute.OtherColumn.get -> string?
+CodeFusion.Data.JoinTableAttribute.Table.get -> string!
+CodeFusion.Data.JoinTableAttribute.ThisColumn.get -> string?
+CodeFusion.Data.JsonListAttribute
+CodeFusion.Data.JsonListAttribute.CountName.get -> string?
+CodeFusion.Data.JsonListAttribute.CountName.init -> void
+CodeFusion.Data.JsonListAttribute.JsonListAttribute(string! name) -> void
+CodeFusion.Data.JsonListAttribute.Name.get -> string!
+CodeFusion.Data.Many<T>
+CodeFusion.Data.Many<T>.Any() -> bool
+CodeFusion.Data.Many<T>.Any(System.Func<T, bool>! predicate) -> bool
+CodeFusion.Data.Many<T>.AsJson() -> CodeFusion.RawJson
+CodeFusion.Data.Many<T>.Count() -> long
+CodeFusion.Data.Many<T>.Count(System.Func<T, bool>! predicate) -> long
+CodeFusion.Data.Many<T>.Many() -> void
+CodeFusion.Data.Many<T>.Many(CodeFusion.Data.DataContext! context, in CodeFusion.Data.PendingCommand command, CodeFusion.Data.QueryOps! ops) -> void
+CodeFusion.Data.Many<T>.OrderBy<TKey>(System.Func<T, TKey>! key) -> CodeFusion.Data.Many<T>
+CodeFusion.Data.Many<T>.OrderByDescending<TKey>(System.Func<T, TKey>! key) -> CodeFusion.Data.Many<T>
+CodeFusion.Data.Many<T>.OrNotFound(CodeFusion.ErrorReply! reply) -> CodeFusion.Data.Many<T>
+CodeFusion.Data.Many<T>.Select<TResult>(System.Func<T, TResult>! selector) -> CodeFusion.Data.Many<TResult>
+CodeFusion.Data.Many<T>.Take(long count) -> CodeFusion.Data.Many<T>
+CodeFusion.Data.Many<T>.ThenBy<TKey>(System.Func<T, TKey>! key) -> CodeFusion.Data.Many<T>
+CodeFusion.Data.Many<T>.ThenByDescending<TKey>(System.Func<T, TKey>! key) -> CodeFusion.Data.Many<T>
+CodeFusion.Data.Many<T>.Where(System.Func<T, bool>! predicate) -> CodeFusion.Data.Many<T>
+CodeFusion.Data.Many<T>.WithStatus(int status) -> CodeFusion.Data.Many<T>
+CodeFusion.Data.Many<T>.WriteAsync<TResponse>(TResponse response) -> System.Threading.Tasks.ValueTask
+CodeFusion.Data.One<T>
+CodeFusion.Data.One<T>.Conflict(CodeFusion.ErrorReply! reply) -> CodeFusion.Data.One<T>
+CodeFusion.Data.One<T>.GetAwaiter() -> CodeFusion.Data.RowAwaiter<T>
+CodeFusion.Data.One<T>.One() -> void
+CodeFusion.Data.One<T>.One(CodeFusion.Data.DataContext! context, in CodeFusion.Data.PendingCommand command, CodeFusion.Data.QueryOps! ops) -> void
+CodeFusion.Data.One<T>.OrForbidden(CodeFusion.ErrorReply! reply) -> CodeFusion.Data.One<T>
+CodeFusion.Data.One<T>.OrNotFound(CodeFusion.ErrorReply! reply) -> CodeFusion.Data.One<T>
+CodeFusion.Data.One<T>.WithStatus(int status) -> CodeFusion.Data.One<T>
+CodeFusion.Data.One<T>.WriteAsync<TResponse>(TResponse response) -> System.Threading.Tasks.ValueTask
+CodeFusion.Data.OrderedQuery<T>
+CodeFusion.Data.OrderedQuery<T>.ThenBy<TKey>(System.Func<T, TKey>! key) -> CodeFusion.Data.OrderedQuery<T>!
+CodeFusion.Data.OrderedQuery<T>.ThenByDescending<TKey>(System.Func<T, TKey>! key) -> CodeFusion.Data.OrderedQuery<T>!
+CodeFusion.Data.Page<T>
+CodeFusion.Data.Page<T>.Page() -> void
+CodeFusion.Data.Page<T>.Page(CodeFusion.Data.DataContext! context, in CodeFusion.Data.PendingCommand command, CodeFusion.Data.QueryOps! ops) -> void
+CodeFusion.Data.Page<T>.WithStatus(int status) -> CodeFusion.Data.Page<T>
+CodeFusion.Data.Page<T>.WriteAsync<TResponse>(TResponse response) -> System.Threading.Tasks.ValueTask
+CodeFusion.Data.PageCount
+CodeFusion.Data.PageCount.Limited = 0 -> CodeFusion.Data.PageCount
+CodeFusion.Data.PageCount.Probe = 1 -> CodeFusion.Data.PageCount
+CodeFusion.Data.PageQuery<T>
+CodeFusion.Data.PageQuery<T>.Select<TResult>(System.Func<T, TResult>! selector) -> CodeFusion.Data.Page<TResult>
+CodeFusion.Data.Paging
+CodeFusion.Data.Paging.Deconstruct(out long Limit, out long Offset) -> void
+CodeFusion.Data.Paging.Equals(CodeFusion.Data.Paging other) -> bool
+CodeFusion.Data.Paging.Limit.get -> long
+CodeFusion.Data.Paging.Limit.init -> void
+CodeFusion.Data.Paging.Offset.get -> long
+CodeFusion.Data.Paging.Offset.init -> void
+CodeFusion.Data.Paging.Paging() -> void
+CodeFusion.Data.Paging.Paging(long Limit, long Offset) -> void
+CodeFusion.Data.PendingCommand
+CodeFusion.Data.PendingCommand.IsEmpty.get -> bool
+CodeFusion.Data.PendingCommand.Job.get -> object?
+CodeFusion.Data.PendingCommand.Owner.get -> object?
+CodeFusion.Data.PendingCommand.PendingCommand() -> void
+CodeFusion.Data.PendingCommand.PendingCommand(object! owner, object! job, int token) -> void
+CodeFusion.Data.PendingCommand.Token.get -> int
+CodeFusion.Data.Query<T>
+CodeFusion.Data.Query<T>.Any() -> CodeFusion.Data.One<bool>
+CodeFusion.Data.Query<T>.AsJson() -> CodeFusion.Data.One<CodeFusion.RawJson>
+CodeFusion.Data.Query<T>.Count() -> CodeFusion.Data.One<long>
+CodeFusion.Data.Query<T>.Delete() -> CodeFusion.Data.DeleteQuery<T>!
+CodeFusion.Data.Query<T>.DeleteIf(System.Func<T, bool>! condition) -> CodeFusion.Data.DeleteQuery<T>!
+CodeFusion.Data.Query<T>.Many() -> CodeFusion.Data.Many<T>
+CodeFusion.Data.Query<T>.OrderBy<TKey>(System.Func<T, TKey>! key) -> CodeFusion.Data.OrderedQuery<T>!
+CodeFusion.Data.Query<T>.OrderByDescending<TKey>(System.Func<T, TKey>! key) -> CodeFusion.Data.OrderedQuery<T>!
+CodeFusion.Data.Query<T>.Page(CodeFusion.Data.Paging page, long countUpTo, CodeFusion.Data.PageCount count = CodeFusion.Data.PageCount.Limited, int maxLimit = 100) -> CodeFusion.Data.PageQuery<T>!
+CodeFusion.Data.Query<T>.Select<TResult>(System.Func<T, TResult>! selector) -> CodeFusion.Data.Query<TResult>!
+CodeFusion.Data.Query<T>.SelectMany<TChild, TResult>(System.Func<T, CodeFusion.Data.Many<TChild>>! children, System.Func<T, TChild, TResult>! selector) -> CodeFusion.Data.Query<TResult>!
+CodeFusion.Data.Query<T>.Single(System.Func<T, bool>! predicate) -> T
+CodeFusion.Data.Query<T>.Skip(long count) -> CodeFusion.Data.Query<T>!
+CodeFusion.Data.Query<T>.Take(long count) -> CodeFusion.Data.Query<T>!
+CodeFusion.Data.Query<T>.Update(System.Func<T, T>! set) -> CodeFusion.Data.UpdateQuery<T>!
+CodeFusion.Data.Query<T>.UpdateIf(System.Func<T, bool>! condition, System.Func<T, T>! set) -> CodeFusion.Data.UpdateQuery<T>!
+CodeFusion.Data.Query<T>.Where(System.Func<T, bool>! predicate) -> CodeFusion.Data.Query<T>!
+CodeFusion.Data.QueryDefinitionAttribute
+CodeFusion.Data.QueryDefinitionAttribute.QueryDefinitionAttribute() -> void
+CodeFusion.Data.QueryOperators
+CodeFusion.Data.QueryOps
+CodeFusion.Data.QueryOps.QueryOps() -> void
+CodeFusion.Data.ResultKind
+CodeFusion.Data.ResultKind.Many = 1 -> CodeFusion.Data.ResultKind
+CodeFusion.Data.ResultKind.One = 0 -> CodeFusion.Data.ResultKind
+CodeFusion.Data.ResultKind.Page = 2 -> CodeFusion.Data.ResultKind
+CodeFusion.Data.ResultKind.Write = 3 -> CodeFusion.Data.ResultKind
+CodeFusion.Data.Row<T>
+CodeFusion.Data.Row<T>.Error.get -> CodeFusion.ErrorReply?
+CodeFusion.Data.Row<T>.Failed.get -> bool
+CodeFusion.Data.Row<T>.Found.get -> bool
+CodeFusion.Data.Row<T>.OrNull.get -> T?
+CodeFusion.Data.Row<T>.Refused.get -> bool
+CodeFusion.Data.Row<T>.Row() -> void
+CodeFusion.Data.Row<T>.Status.get -> CodeFusion.Data.DataStatus
+CodeFusion.Data.Row<T>.ToNullable() -> T?
+CodeFusion.Data.Row<T>.TryGet(out T value) -> bool
+CodeFusion.Data.Row<T>.Value.get -> T
+CodeFusion.Data.RowAwaiter<T>
+CodeFusion.Data.RowAwaiter<T>.GetResult() -> CodeFusion.Data.Row<T>
+CodeFusion.Data.RowAwaiter<T>.IsCompleted.get -> bool
+CodeFusion.Data.RowAwaiter<T>.OnCompleted(System.Action! continuation) -> void
+CodeFusion.Data.RowAwaiter<T>.RowAwaiter() -> void
+CodeFusion.Data.RowAwaiter<T>.UnsafeOnCompleted(System.Action! continuation) -> void
+CodeFusion.Data.RowCopy
+CodeFusion.Data.RowJson
+CodeFusion.Data.RowSlot<T>
+CodeFusion.Data.RowSlot<T>.HasValue.get -> bool
+CodeFusion.Data.RowSlot<T>.Set(T value) -> void
+CodeFusion.Data.RowState
+CodeFusion.Data.RowState.Arena.get -> CodeFusion.IRequestArena!
+CodeFusion.Data.RowState.First.get -> long
+CodeFusion.Data.RowState.First.set -> void
+CodeFusion.Data.RowState.Json.get -> System.Text.Json.Utf8JsonWriter!
+CodeFusion.Data.RowState.Seen.get -> int
+CodeFusion.Data.RowState.Seen.set -> void
+CodeFusion.Data.SqlDialectAttribute
+CodeFusion.Data.SqlDialectAttribute.BigIntLiteral.get -> string!
+CodeFusion.Data.SqlDialectAttribute.BigIntLiteral.init -> void
+CodeFusion.Data.SqlDialectAttribute.Booleans.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Booleans.init -> void
+CodeFusion.Data.SqlDialectAttribute.Concat.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Concat.init -> void
+CodeFusion.Data.SqlDialectAttribute.InArray.get -> string!
+CodeFusion.Data.SqlDialectAttribute.InArray.init -> void
+CodeFusion.Data.SqlDialectAttribute.InsertOrIgnore.get -> CodeFusion.Data.SqlInsertOrIgnore
+CodeFusion.Data.SqlDialectAttribute.InsertOrIgnore.init -> void
+CodeFusion.Data.SqlDialectAttribute.JsonAggregate.get -> string!
+CodeFusion.Data.SqlDialectAttribute.JsonAggregate.init -> void
+CodeFusion.Data.SqlDialectAttribute.JsonArray.get -> string!
+CodeFusion.Data.SqlDialectAttribute.JsonArray.init -> void
+CodeFusion.Data.SqlDialectAttribute.LastInsertedKey.get -> string!
+CodeFusion.Data.SqlDialectAttribute.LastInsertedKey.init -> void
+CodeFusion.Data.SqlDialectAttribute.LockRows.get -> string!
+CodeFusion.Data.SqlDialectAttribute.LockRows.init -> void
+CodeFusion.Data.SqlDialectAttribute.Limit.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Limit.init -> void
+CodeFusion.Data.SqlDialectAttribute.Name.get -> string!
+CodeFusion.Data.SqlDialectAttribute.NextKey.get -> string!
+CodeFusion.Data.SqlDialectAttribute.NextKey.init -> void
+CodeFusion.Data.SqlDialectAttribute.Now.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Now.init -> void
+CodeFusion.Data.SqlDialectAttribute.NullSafeEqual.get -> string!
+CodeFusion.Data.SqlDialectAttribute.NullSafeEqual.init -> void
+CodeFusion.Data.SqlDialectAttribute.Paging.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Paging.init -> void
+CodeFusion.Data.SqlDialectAttribute.Parameter.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Parameter.init -> void
+CodeFusion.Data.SqlDialectAttribute.Quotes.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Quotes.init -> void
+CodeFusion.Data.SqlDialectAttribute.Returning.get -> CodeFusion.Data.SqlReturning
+CodeFusion.Data.SqlDialectAttribute.Returning.init -> void
+CodeFusion.Data.SqlDialectAttribute.SelectsConditions.get -> bool
+CodeFusion.Data.SqlDialectAttribute.SelectsConditions.init -> void
+CodeFusion.Data.SqlDialectAttribute.SqlDialectAttribute(string! name) -> void
+CodeFusion.Data.SqlFunctions
+CodeFusion.Data.SqlInsertOrIgnore
+CodeFusion.Data.SqlInsertOrIgnore.InsertOrIgnore = 1 -> CodeFusion.Data.SqlInsertOrIgnore
+CodeFusion.Data.SqlInsertOrIgnore.None = 2 -> CodeFusion.Data.SqlInsertOrIgnore
+CodeFusion.Data.SqlInsertOrIgnore.OnConflictDoNothing = 0 -> CodeFusion.Data.SqlInsertOrIgnore
+CodeFusion.Data.SqlQuery<T>
+CodeFusion.Data.SqlQuery<T>.Many() -> CodeFusion.Data.Many<T>
+CodeFusion.Data.SqlQuery<T>.One() -> CodeFusion.Data.One<T>
+CodeFusion.Data.SqlQuery<T>.Page() -> CodeFusion.Data.Page<T>
+CodeFusion.Data.SqlQuery<T>.Write() -> CodeFusion.Data.Write<T>
+CodeFusion.Data.SqlReturning
+CodeFusion.Data.SqlReturning.Output = 1 -> CodeFusion.Data.SqlReturning
+CodeFusion.Data.SqlReturning.Returning = 0 -> CodeFusion.Data.SqlReturning
+CodeFusion.Data.SqlString
+CodeFusion.Data.SqlString.AppendFormatted<T>(T value) -> void
+CodeFusion.Data.SqlString.AppendLiteral(string! literal) -> void
+CodeFusion.Data.SqlString.SqlString() -> void
+CodeFusion.Data.SqlString.SqlString(int literalLength, int formattedCount) -> void
+CodeFusion.Data.SqlTemplateAttribute
+CodeFusion.Data.SqlTemplateAttribute.SqlTemplateAttribute(string! template) -> void
+CodeFusion.Data.SqlTemplateAttribute.Template.get -> string!
+CodeFusion.Data.Table<T>
+CodeFusion.Data.UpdateQuery<T>
+CodeFusion.Data.UpdateQuery<T>.Select<TResult>(System.Func<T, TResult>! selector) -> CodeFusion.Data.Write<TResult>
+CodeFusion.Data.Utf8ListOperators
+CodeFusion.Data.Write
+CodeFusion.Data.Write.Conflict(CodeFusion.ErrorReply! reply) -> CodeFusion.Data.Write
+CodeFusion.Data.Write.GetAwaiter() -> System.Runtime.CompilerServices.ValueTaskAwaiter<CodeFusion.Data.DataResult>
+CodeFusion.Data.Write.Then(CodeFusion.Data.Write next) -> CodeFusion.Data.Write
+CodeFusion.Data.Write.ThenIf(bool condition, CodeFusion.Data.Write next) -> CodeFusion.Data.Write
+CodeFusion.Data.Write.WithStatus(int status) -> CodeFusion.Data.Write
+CodeFusion.Data.Write.Write() -> void
+CodeFusion.Data.Write.Write(CodeFusion.Data.DataContext! context, in CodeFusion.Data.PendingCommand command, CodeFusion.Data.QueryOps! ops) -> void
+CodeFusion.Data.Write.WriteAsync<TResponse>(TResponse response) -> System.Threading.Tasks.ValueTask
+CodeFusion.Data.Write<T>
+CodeFusion.Data.Write<T>.Conflict(CodeFusion.ErrorReply! reply) -> CodeFusion.Data.Write<T>
+CodeFusion.Data.Write<T>.GetAwaiter() -> CodeFusion.Data.RowAwaiter<T>
+CodeFusion.Data.Write<T>.OrForbidden(CodeFusion.ErrorReply! reply) -> CodeFusion.Data.Write<T>
+CodeFusion.Data.Write<T>.OrNotFound(CodeFusion.ErrorReply! reply) -> CodeFusion.Data.Write<T>
+CodeFusion.Data.Write<T>.WithStatus(int status) -> CodeFusion.Data.Write<T>
+CodeFusion.Data.Write<T>.Write() -> void
+CodeFusion.Data.Write<T>.Write(CodeFusion.Data.DataContext! context, in CodeFusion.Data.PendingCommand command, CodeFusion.Data.QueryOps! ops) -> void
+CodeFusion.Data.Write<T>.WriteAsync<TResponse>(TResponse response) -> System.Threading.Tasks.ValueTask
+CodeFusion.Data.WriteQuery<T>
+CodeFusion.Data.WriteQuery<T>.One() -> CodeFusion.Data.One<T>
+const CodeFusion.Data.RowState.Refused = -9223372036854775808 -> long
+override CodeFusion.Data.DataResult.ToString() -> string!
+override CodeFusion.Data.Paging.GetHashCode() -> int
+static CodeFusion.Data.DataErrors.Default.get -> CodeFusion.Data.DataErrors!
+static CodeFusion.Data.DataResult.Of(CodeFusion.Data.DataStatus status) -> CodeFusion.Data.DataResult
+static CodeFusion.Data.DeleteQuery<T>.implicit operator CodeFusion.Data.Write(CodeFusion.Data.DeleteQuery<T>! delete) -> CodeFusion.Data.Write
+static CodeFusion.Data.Insert<T>.implicit operator CodeFusion.Data.Write(CodeFusion.Data.Insert<T!>! insert) -> CodeFusion.Data.Write
+static CodeFusion.Data.Paging.operator !=(CodeFusion.Data.Paging left, CodeFusion.Data.Paging right) -> bool
+static CodeFusion.Data.Paging.operator ==(CodeFusion.Data.Paging left, CodeFusion.Data.Paging right) -> bool
+static CodeFusion.Data.QueryOperators.One<T>(this CodeFusion.Data.Query<T>! query) -> CodeFusion.Data.One<T>
+static CodeFusion.Data.Row<T>.implicit operator T?(CodeFusion.Data.Row<T> row) -> T?
+static CodeFusion.Data.RowCopy.Allocate(CodeFusion.Data.RowState! state, int length) -> CodeFusion.ArenaBytes
+static CodeFusion.Data.RowCopy.JsonLength<TRow>(scoped in TRow row, int column) -> int
+static CodeFusion.Data.RowCopy.Length<TRow>(scoped in TRow row, int column) -> int
+static CodeFusion.Data.RowCopy.NullableBoolean<TRow>(scoped in TRow row, int column) -> bool?
+static CodeFusion.Data.RowCopy.NullableDouble<TRow>(scoped in TRow row, int column) -> double?
+static CodeFusion.Data.RowCopy.NullableInt64<TRow>(scoped in TRow row, int column) -> long?
+static CodeFusion.Data.RowCopy.NullableRaw<TRow>(scoped in TRow row, int column, in CodeFusion.ArenaBytes bytes, ref int at) -> CodeFusion.RawJson?
+static CodeFusion.Data.RowCopy.NullableText<TRow>(scoped in TRow row, int column, in CodeFusion.ArenaBytes bytes, ref int at) -> CodeFusion.Utf8?
+static CodeFusion.Data.RowCopy.NullableTimestamp<TRow>(scoped in TRow row, int column) -> CodeFusion.Timestamp?
+static CodeFusion.Data.RowCopy.Raw<TRow>(scoped in TRow row, int column, in CodeFusion.ArenaBytes bytes, ref int at) -> CodeFusion.RawJson
+static CodeFusion.Data.RowCopy.Text<TRow>(scoped in TRow row, int column, in CodeFusion.ArenaBytes bytes, ref int at) -> CodeFusion.Utf8
+static CodeFusion.Data.RowJson.Boolean<TRow>(System.Text.Json.Utf8JsonWriter! json, System.Text.Json.JsonEncodedText name, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.BooleanValue<TRow>(System.Text.Json.Utf8JsonWriter! json, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.Double<TRow>(System.Text.Json.Utf8JsonWriter! json, System.Text.Json.JsonEncodedText name, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.DoubleValue<TRow>(System.Text.Json.Utf8JsonWriter! json, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.Int64<TRow>(System.Text.Json.Utf8JsonWriter! json, System.Text.Json.JsonEncodedText name, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.Int64Value<TRow>(System.Text.Json.Utf8JsonWriter! json, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.NullableBoolean<TRow>(System.Text.Json.Utf8JsonWriter! json, System.Text.Json.JsonEncodedText name, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.NullableDouble<TRow>(System.Text.Json.Utf8JsonWriter! json, System.Text.Json.JsonEncodedText name, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.NullableInt64<TRow>(System.Text.Json.Utf8JsonWriter! json, System.Text.Json.JsonEncodedText name, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.NullableRaw<TRow>(System.Text.Json.Utf8JsonWriter! json, System.Text.Json.JsonEncodedText name, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.NullableText<TRow>(System.Text.Json.Utf8JsonWriter! json, System.Text.Json.JsonEncodedText name, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.NullableTimestamp<TRow>(System.Text.Json.Utf8JsonWriter! json, System.Text.Json.JsonEncodedText name, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.Raw<TRow>(System.Text.Json.Utf8JsonWriter! json, System.Text.Json.JsonEncodedText name, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.RawValue<TRow>(System.Text.Json.Utf8JsonWriter! json, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.Text<TRow>(System.Text.Json.Utf8JsonWriter! json, System.Text.Json.JsonEncodedText name, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.TextValue<TRow>(System.Text.Json.Utf8JsonWriter! json, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.Timestamp<TRow>(System.Text.Json.Utf8JsonWriter! json, System.Text.Json.JsonEncodedText name, scoped in TRow row, int column) -> void
+static CodeFusion.Data.RowJson.TimestampValue<TRow>(System.Text.Json.Utf8JsonWriter! json, scoped in TRow row, int column) -> void
+static CodeFusion.Data.SqlFunctions.Now() -> CodeFusion.Timestamp
+static CodeFusion.Data.UpdateQuery<T>.implicit operator CodeFusion.Data.Write(CodeFusion.Data.UpdateQuery<T>! update) -> CodeFusion.Data.Write
+static CodeFusion.Data.Utf8ListOperators.Contains(this CodeFusion.Utf8List list, CodeFusion.Utf8 text) -> bool
+virtual CodeFusion.Data.QueryOps.Begin(System.Text.Json.Utf8JsonWriter! json) -> void
+virtual CodeFusion.Data.QueryOps.End(System.Text.Json.Utf8JsonWriter! json, in CodeFusion.Data.DataResult result) -> void
+virtual CodeFusion.Data.QueryOps.HasSource.get -> bool
+virtual CodeFusion.Data.QueryOps.Status.get -> int
+~override CodeFusion.Data.Paging.Equals(object obj) -> bool
+~override CodeFusion.Data.Paging.ToString() -> string

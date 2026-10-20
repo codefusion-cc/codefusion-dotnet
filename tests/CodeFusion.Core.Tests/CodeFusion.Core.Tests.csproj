@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Unit and property tests of the shared values. Run from the repository root: dotnet test. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CodeFusion.Core.Tests</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);CA1861</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <!-- Fails the run on an exception that ended a thread or that no one observed. -->
+    <Compile Include="../Shared/RunGuard.cs" Link="Shared/RunGuard.cs" />
+    <PackageReference Include="FsCheck.Xunit.v3" />
+    <ProjectReference Include="../../src/CodeFusion.Core/CodeFusion.Core.csproj" />
+  </ItemGroup>
+
+</Project>

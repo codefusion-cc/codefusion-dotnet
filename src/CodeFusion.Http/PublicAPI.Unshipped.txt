@@ -1,0 +1,445 @@
+#nullable enable
+abstract CodeFusion.Http.Endpoint.Initialize(CodeFusion.Http.EndpointSetup! setup) -> void
+abstract CodeFusion.Http.Endpoint.Invoke(CodeFusion.Http.RequestContext! context) -> System.Threading.Tasks.ValueTask
+CodeFusion.Http.AuthMode
+CodeFusion.Http.AuthMode.None = 0 -> CodeFusion.Http.AuthMode
+CodeFusion.Http.AuthMode.Optional = 1 -> CodeFusion.Http.AuthMode
+CodeFusion.Http.AuthMode.Required = 2 -> CodeFusion.Http.AuthMode
+CodeFusion.Http.BodyErrorAttribute
+CodeFusion.Http.BodyErrorAttribute.BodyErrorAttribute(string! member) -> void
+CodeFusion.Http.BodyErrorAttribute.Member.get -> string!
+CodeFusion.Http.BodyKind
+CodeFusion.Http.BodyKind.Array = 2 -> CodeFusion.Http.BodyKind
+CodeFusion.Http.BodyKind.Invalid = 5 -> CodeFusion.Http.BodyKind
+CodeFusion.Http.BodyKind.Missing = 0 -> CodeFusion.Http.BodyKind
+CodeFusion.Http.BodyKind.Nested = 4 -> CodeFusion.Http.BodyKind
+CodeFusion.Http.BodyKind.Text = 1 -> CodeFusion.Http.BodyKind
+CodeFusion.Http.BodyKind.Value = 3 -> CodeFusion.Http.BodyKind
+CodeFusion.Http.BodySource
+CodeFusion.Http.BodySource.BodySource() -> void
+CodeFusion.Http.BodySource.BodySource(byte[]! buffer, int start, int length, CodeFusion.IRequestArena! arena, CodeFusion.ErrorReply! invalidBody) -> void
+CodeFusion.Http.BodySource.InvalidBody.get -> CodeFusion.ErrorReply!
+CodeFusion.Http.BodyValue
+CodeFusion.Http.BodyValue.BodyValue() -> void
+CodeFusion.Http.BodyValue.BoolValue.get -> bool
+CodeFusion.Http.BodyValue.FloatValue.get -> double
+CodeFusion.Http.BodyValue.IntegerValue.get -> long
+CodeFusion.Http.BodyValue.IsArray.get -> bool
+CodeFusion.Http.BodyValue.IsInvalid.get -> bool
+CodeFusion.Http.BodyValue.IsMissing.get -> bool
+CodeFusion.Http.BodyValue.IsOptionalText(bool nonEmpty) -> bool
+CodeFusion.Http.BodyValue.IsRequiredText.get -> bool
+CodeFusion.Http.BodyValue.IsValue.get -> bool
+CodeFusion.Http.BodyValue.Kind.get -> CodeFusion.Http.BodyKind
+CodeFusion.Http.Endpoint
+CodeFusion.Http.Endpoint.Auth.get -> CodeFusion.Http.AuthMode
+CodeFusion.Http.Endpoint.Endpoint() -> void
+CodeFusion.Http.EndpointBuilder
+CodeFusion.Http.EndpointBuilder.AuthOptional() -> CodeFusion.Http.EndpointBuilder!
+CodeFusion.Http.EndpointBuilder.AuthRequired() -> CodeFusion.Http.EndpointBuilder!
+CodeFusion.Http.EndpointRouteBuilderExtensions
+CodeFusion.Http.EndpointSetup
+CodeFusion.Http.EndpointSetup.RouteValue(string! name) -> int
+CodeFusion.Http.EndpointSetup.Service<T>(out int slot) -> T?
+CodeFusion.Http.EndpointSetup.Singleton<T>() -> T!
+CodeFusion.Http.EndpointSetup.UsesViewer() -> void
+CodeFusion.Http.FromQueryAttribute
+CodeFusion.Http.FromQueryAttribute.FromQueryAttribute() -> void
+CodeFusion.Http.FromQueryAttribute.Name.get -> string?
+CodeFusion.Http.FromQueryAttribute.Name.set -> void
+CodeFusion.Http.HttpApp
+CodeFusion.Http.HttpApp.DisposeAsync() -> System.Threading.Tasks.ValueTask
+CodeFusion.Http.HttpApp.Errors.get -> CodeFusion.Http.HttpAppErrors!
+CodeFusion.Http.HttpApp.LocalEndPoint.get -> System.Net.IPEndPoint!
+CodeFusion.Http.HttpApp.Map(CodeFusion.Http.RequestMethod method, string! pattern, CodeFusion.Http.Endpoint! endpoint) -> CodeFusion.Http.EndpointBuilder!
+CodeFusion.Http.HttpApp.MapGroup(string! prefix) -> CodeFusion.Http.RouteGroup!
+CodeFusion.Http.HttpApp.Run() -> void
+CodeFusion.Http.HttpApp.RunAsync() -> System.Threading.Tasks.Task!
+CodeFusion.Http.HttpApp.Start() -> void
+CodeFusion.Http.HttpApp.StopAsync() -> System.Threading.Tasks.Task!
+CodeFusion.Http.HttpAppBuilder
+CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret) -> CodeFusion.Http.HttpAppBuilder!
+CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret, System.TimeSpan lifetime) -> CodeFusion.Http.HttpAppBuilder!
+CodeFusion.Http.HttpAppBuilder.AddPerConnection<TService>(System.Func<TService!>! factory) -> void
+CodeFusion.Http.HttpAppBuilder.AddSingleton<TService>(TService! instance) -> void
+CodeFusion.Http.HttpAppBuilder.Build() -> CodeFusion.Http.HttpApp!
+CodeFusion.Http.HttpAppBuilder.Errors.get -> CodeFusion.Http.HttpAppErrors!
+CodeFusion.Http.HttpAppBuilder.OnStopping(System.Action! onStopping) -> void
+CodeFusion.Http.HttpAppBuilder.Options.get -> CodeFusion.Http.HttpServerOptions!
+CodeFusion.Http.HttpAppBuilder.ShutdownTimeout.get -> System.TimeSpan
+CodeFusion.Http.HttpAppBuilder.ShutdownTimeout.set -> void
+CodeFusion.Http.HttpAppErrors
+CodeFusion.Http.HttpAppErrors.BadRequest.get -> CodeFusion.ErrorReply!
+CodeFusion.Http.HttpAppErrors.BadRequest.set -> void
+CodeFusion.Http.HttpAppErrors.BodyTooLarge.get -> CodeFusion.ErrorReply!
+CodeFusion.Http.HttpAppErrors.BodyTooLarge.set -> void
+CodeFusion.Http.HttpAppErrors.HeadersTooLarge.get -> CodeFusion.ErrorReply!
+CodeFusion.Http.HttpAppErrors.HeadersTooLarge.set -> void
+CodeFusion.Http.HttpAppErrors.HttpAppErrors() -> void
+CodeFusion.Http.HttpAppErrors.Internal.get -> CodeFusion.ErrorReply!
+CodeFusion.Http.HttpAppErrors.Internal.set -> void
+CodeFusion.Http.HttpAppErrors.InvalidBody.get -> CodeFusion.ErrorReply!
+CodeFusion.Http.HttpAppErrors.InvalidBody.set -> void
+CodeFusion.Http.HttpAppErrors.Log.get -> System.Action<CodeFusion.Http.HttpExchange!, System.Exception!>?
+CodeFusion.Http.HttpAppErrors.Log.set -> void
+CodeFusion.Http.HttpAppErrors.NotFound.get -> CodeFusion.ErrorReply!
+CodeFusion.Http.HttpAppErrors.NotFound.set -> void
+CodeFusion.Http.HttpAppErrors.Unauthorized.get -> CodeFusion.ErrorReply!
+CodeFusion.Http.HttpAppErrors.Unauthorized.set -> void
+CodeFusion.Http.HttpAppErrors.UriTooLong.get -> CodeFusion.ErrorReply!
+CodeFusion.Http.HttpAppErrors.UriTooLong.set -> void
+CodeFusion.Http.HttpExchange
+CodeFusion.Http.HttpExchange.Aborted.get -> System.Threading.CancellationToken
+CodeFusion.Http.HttpExchange.Advance(int count) -> void
+CodeFusion.Http.HttpExchange.Authorization.get -> System.ReadOnlySpan<byte>
+CodeFusion.Http.HttpExchange.Body.get -> System.ReadOnlyMemory<byte>
+CodeFusion.Http.HttpExchange.BodyLength.get -> int
+CodeFusion.Http.HttpExchange.GetMemory(int sizeHint = 0) -> System.Memory<byte>
+CodeFusion.Http.HttpExchange.GetSpan(int sizeHint = 0) -> System.Span<byte>
+CodeFusion.Http.HttpExchange.HasAuthorization.get -> bool
+CodeFusion.Http.HttpExchange.IsAborted.get -> bool
+CodeFusion.Http.HttpExchange.IsHttp11.get -> bool
+CodeFusion.Http.HttpExchange.Method.get -> CodeFusion.Http.RequestMethod
+CodeFusion.Http.HttpExchange.MethodBytes.get -> System.ReadOnlySpan<byte>
+CodeFusion.Http.HttpExchange.Path.get -> System.ReadOnlySpan<byte>
+CodeFusion.Http.HttpExchange.Query.get -> System.ReadOnlySpan<byte>
+CodeFusion.Http.HttpExchange.ResetResponse() -> void
+CodeFusion.Http.HttpExchange.RetryAfter.get -> int
+CodeFusion.Http.HttpExchange.RetryAfter.set -> void
+CodeFusion.Http.HttpExchange.State.get -> object?
+CodeFusion.Http.HttpExchange.State.set -> void
+CodeFusion.Http.HttpExchange.Status.get -> int
+CodeFusion.Http.HttpExchange.Status.set -> void
+CodeFusion.Http.HttpHandler
+CodeFusion.Http.HttpRejectBody
+CodeFusion.Http.HttpServer
+CodeFusion.Http.HttpServer.Connections.get -> int
+CodeFusion.Http.HttpServer.DisposeAsync() -> System.Threading.Tasks.ValueTask
+CodeFusion.Http.HttpServer.HttpServer(CodeFusion.Http.HttpServerOptions! options, CodeFusion.Http.HttpHandler! handler) -> void
+CodeFusion.Http.HttpServer.LocalEndPoint.get -> System.Net.IPEndPoint!
+CodeFusion.Http.HttpServer.RunAsync(System.TimeSpan shutdownTimeout) -> System.Threading.Tasks.Task!
+CodeFusion.Http.HttpServer.Start() -> void
+CodeFusion.Http.HttpServer.StopAsync(System.TimeSpan timeout) -> System.Threading.Tasks.Task!
+CodeFusion.Http.HttpServerOptions
+CodeFusion.Http.HttpServerOptions.Backlog.get -> int
+CodeFusion.Http.HttpServerOptions.Backlog.set -> void
+CodeFusion.Http.HttpServerOptions.EndPoint.get -> System.Net.IPEndPoint!
+CodeFusion.Http.HttpServerOptions.EndPoint.set -> void
+CodeFusion.Http.HttpServerOptions.HeartbeatInterval.get -> System.TimeSpan
+CodeFusion.Http.HttpServerOptions.HeartbeatInterval.set -> void
+CodeFusion.Http.HttpServerOptions.HttpServerOptions() -> void
+CodeFusion.Http.HttpServerOptions.KeepAliveTimeout.get -> System.TimeSpan
+CodeFusion.Http.HttpServerOptions.KeepAliveTimeout.set -> void
+CodeFusion.Http.HttpServerOptions.MaxPooledBuffers.get -> int
+CodeFusion.Http.HttpServerOptions.MaxPooledBuffers.set -> void
+CodeFusion.Http.HttpServerOptions.MaxPooledConnections.get -> int
+CodeFusion.Http.HttpServerOptions.MaxPooledConnections.set -> void
+CodeFusion.Http.HttpServerOptions.MaxConnections.get -> int?
+CodeFusion.Http.HttpServerOptions.MaxConnections.set -> void
+CodeFusion.Http.HttpServerOptions.MinRequestBodyDataRate.get -> CodeFusion.Http.MinDataRate?
+CodeFusion.Http.HttpServerOptions.MinRequestBodyDataRate.set -> void
+CodeFusion.Http.HttpServerOptions.MinResponseDataRate.get -> CodeFusion.Http.MinDataRate?
+CodeFusion.Http.HttpServerOptions.MinResponseDataRate.set -> void
+CodeFusion.Http.HttpServerOptions.MaxRequestBodySize.get -> int
+CodeFusion.Http.HttpServerOptions.MaxRequestBodySize.set -> void
+CodeFusion.Http.HttpServerOptions.MaxRequestHeaderCount.get -> int
+CodeFusion.Http.HttpServerOptions.MaxRequestHeaderCount.set -> void
+CodeFusion.Http.HttpServerOptions.MaxRequestHeadersTotalSize.get -> int
+CodeFusion.Http.HttpServerOptions.MaxRequestHeadersTotalSize.set -> void
+CodeFusion.Http.HttpServerOptions.MaxRequestLineSize.get -> int
+CodeFusion.Http.HttpServerOptions.MaxRequestLineSize.set -> void
+CodeFusion.Http.HttpServerOptions.OnError.get -> System.Action<string!, System.Exception?>?
+CodeFusion.Http.HttpServerOptions.OnError.set -> void
+CodeFusion.Http.HttpServerOptions.OnHandlerError.get -> System.Action<CodeFusion.Http.HttpExchange!, System.Exception!>?
+CodeFusion.Http.HttpServerOptions.OnHandlerError.set -> void
+CodeFusion.Http.HttpServerOptions.RejectBody.get -> CodeFusion.Http.HttpRejectBody?
+CodeFusion.Http.HttpServerOptions.RejectBody.set -> void
+CodeFusion.Http.HttpServerOptions.RequestBufferSize.get -> int
+CodeFusion.Http.HttpServerOptions.RequestBufferSize.set -> void
+CodeFusion.Http.HttpServerOptions.RequestTimeout.get -> System.TimeSpan
+CodeFusion.Http.HttpServerOptions.RequestTimeout.set -> void
+CodeFusion.Http.HttpServerOptions.ResponseBufferSize.get -> int
+CodeFusion.Http.HttpServerOptions.ResponseBufferSize.set -> void
+CodeFusion.Http.IEndpointRouteBuilder
+CodeFusion.Http.IEndpointRouteBuilder.Map(CodeFusion.Http.RequestMethod method, string! pattern, CodeFusion.Http.Endpoint! endpoint) -> CodeFusion.Http.EndpointBuilder!
+CodeFusion.Http.IEndpointRouteBuilder.MapGroup(string! prefix) -> CodeFusion.Http.RouteGroup!
+CodeFusion.Http.IReplySender<T>
+CodeFusion.Http.IReplySender<T>.Send(T reply, CodeFusion.Http.RequestContext! context) -> System.Threading.Tasks.ValueTask
+CodeFusion.Http.JsonBody
+CodeFusion.Http.JsonBody.JsonBody() -> void
+CodeFusion.Http.JsonBody.JsonBody(in CodeFusion.Http.BodySource source) -> void
+CodeFusion.Http.JsonBody.NextProperty() -> bool
+CodeFusion.Http.JsonBody.PropertyName(System.Span<byte> buffer) -> System.ReadOnlySpan<byte>
+CodeFusion.Http.JsonBody.ReadBoolean() -> CodeFusion.Http.BodyValue
+CodeFusion.Http.JsonBody.ReadDouble() -> CodeFusion.Http.BodyValue
+CodeFusion.Http.JsonBody.ReadInt32() -> CodeFusion.Http.BodyValue
+CodeFusion.Http.JsonBody.ReadInt64() -> CodeFusion.Http.BodyValue
+CodeFusion.Http.JsonBody.ReadNested() -> CodeFusion.Http.BodyKind
+CodeFusion.Http.JsonBody.ReadObject() -> bool
+CodeFusion.Http.JsonBody.ReadRootObject() -> bool
+CodeFusion.Http.JsonBody.ReadText() -> CodeFusion.Http.BodyValue
+CodeFusion.Http.JsonBody.ReadTextArray() -> CodeFusion.Http.BodyValue
+CodeFusion.Http.JsonBody.ReadToEnd() -> void
+CodeFusion.Http.JsonBody.SkipValue() -> void
+CodeFusion.Http.JsonBody.Text(in CodeFusion.Http.BodyValue value) -> CodeFusion.Utf8
+CodeFusion.Http.JsonBody.TextList(in CodeFusion.Http.BodyValue value) -> CodeFusion.Utf8List
+CodeFusion.Http.Jwt
+CodeFusion.Http.MinDataRate
+CodeFusion.Http.MinDataRate.BytesPerSecond.get -> double
+CodeFusion.Http.MinDataRate.GracePeriod.get -> System.TimeSpan
+CodeFusion.Http.MinDataRate.MinDataRate(double bytesPerSecond, System.TimeSpan gracePeriod) -> void
+CodeFusion.Http.Jwt.Bind(CodeFusion.IResponse! response) -> void
+CodeFusion.Http.Jwt.Issue(long userId) -> CodeFusion.Utf8
+CodeFusion.Http.Jwt.Issue(long userId, long now, System.Span<byte> dest) -> int
+CodeFusion.Http.Jwt.Issue(long userId, System.Span<byte> dest) -> int
+CodeFusion.Http.Jwt.Jwt(string! secret) -> void
+CodeFusion.Http.Jwt.Jwt(string! secret, System.TimeSpan lifetime) -> void
+CodeFusion.Http.Jwt.Lifetime.get -> System.TimeSpan
+CodeFusion.Http.Jwt.Verify(System.ReadOnlySpan<byte> token) -> long
+CodeFusion.Http.Jwt.Verify(System.ReadOnlySpan<byte> token, long nowMilliseconds) -> long
+CodeFusion.Http.Pending<T>
+CodeFusion.Http.Pending<T>.AsValueTask() -> System.Threading.Tasks.ValueTask<T>
+CodeFusion.Http.Pending<T>.Awaiter
+CodeFusion.Http.Pending<T>.Awaiter.Awaiter() -> void
+CodeFusion.Http.Pending<T>.Awaiter.GetResult() -> T
+CodeFusion.Http.Pending<T>.Awaiter.IsCompleted.get -> bool
+CodeFusion.Http.Pending<T>.Awaiter.OnCompleted(System.Action! continuation) -> void
+CodeFusion.Http.Pending<T>.Awaiter.UnsafeOnCompleted(System.Action! continuation) -> void
+CodeFusion.Http.Pending<T>.GetAwaiter() -> CodeFusion.Http.Pending<T>.Awaiter
+CodeFusion.Http.Pending<T>.GetResult() -> T
+CodeFusion.Http.Pending<T>.IsCompleted.get -> bool
+CodeFusion.Http.Pending<T>.Pending() -> void
+CodeFusion.Http.Pending<T>.Pending(T result) -> void
+CodeFusion.Http.PendingMethodBuilder<T>
+CodeFusion.Http.PendingMethodBuilder<T>.AwaitOnCompleted<TAwaiter, TStateMachine>(ref TAwaiter awaiter, ref TStateMachine stateMachine) -> void
+CodeFusion.Http.PendingMethodBuilder<T>.AwaitUnsafeOnCompleted<TAwaiter, TStateMachine>(ref TAwaiter awaiter, ref TStateMachine stateMachine) -> void
+CodeFusion.Http.PendingMethodBuilder<T>.PendingMethodBuilder() -> void
+CodeFusion.Http.PendingMethodBuilder<T>.SetException(System.Exception! exception) -> void
+CodeFusion.Http.PendingMethodBuilder<T>.SetResult(T result) -> void
+CodeFusion.Http.PendingMethodBuilder<T>.SetStateMachine(System.Runtime.CompilerServices.IAsyncStateMachine! stateMachine) -> void
+CodeFusion.Http.PendingMethodBuilder<T>.Start<TStateMachine>(ref TStateMachine stateMachine) -> void
+CodeFusion.Http.PendingMethodBuilder<T>.Task.get -> CodeFusion.Http.Pending<T>
+CodeFusion.Http.PooledValueTaskMethodBuilder
+CodeFusion.Http.PooledValueTaskMethodBuilder.AwaitOnCompleted<TAwaiter, TStateMachine>(ref TAwaiter awaiter, ref TStateMachine stateMachine) -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder.AwaitUnsafeOnCompleted<TAwaiter, TStateMachine>(ref TAwaiter awaiter, ref TStateMachine stateMachine) -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder.PooledValueTaskMethodBuilder() -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder.SetException(System.Exception! exception) -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder.SetResult() -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder.SetStateMachine(System.Runtime.CompilerServices.IAsyncStateMachine! stateMachine) -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder.Start<TStateMachine>(ref TStateMachine stateMachine) -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder.Task.get -> System.Threading.Tasks.ValueTask
+CodeFusion.Http.PooledValueTaskMethodBuilder<TResult>
+CodeFusion.Http.PooledValueTaskMethodBuilder<TResult>.AwaitOnCompleted<TAwaiter, TStateMachine>(ref TAwaiter awaiter, ref TStateMachine stateMachine) -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder<TResult>.AwaitUnsafeOnCompleted<TAwaiter, TStateMachine>(ref TAwaiter awaiter, ref TStateMachine stateMachine) -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder<TResult>.PooledValueTaskMethodBuilder() -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder<TResult>.SetException(System.Exception! exception) -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder<TResult>.SetResult(TResult result) -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder<TResult>.SetStateMachine(System.Runtime.CompilerServices.IAsyncStateMachine! stateMachine) -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder<TResult>.Start<TStateMachine>(ref TStateMachine stateMachine) -> void
+CodeFusion.Http.PooledValueTaskMethodBuilder<TResult>.Task.get -> System.Threading.Tasks.ValueTask<TResult>
+CodeFusion.Http.Query
+CodeFusion.Http.QueryNumber
+CodeFusion.Http.QueryNumber.Absent = 0 -> CodeFusion.Http.QueryNumber
+CodeFusion.Http.QueryNumber.Invalid = 2 -> CodeFusion.Http.QueryNumber
+CodeFusion.Http.QueryNumber.Valid = 1 -> CodeFusion.Http.QueryNumber
+CodeFusion.Http.QuerySource
+CodeFusion.Http.QuerySource.QuerySource() -> void
+CodeFusion.Http.QuerySource.QuerySource(byte[]! buffer, int start, int length, CodeFusion.IRequestArena! arena) -> void
+CodeFusion.Http.QuerySource.TryNumber(System.ReadOnlySpan<byte> key, long min, long max, out long value) -> CodeFusion.Http.QueryNumber
+CodeFusion.Http.QuerySource.TryText(System.ReadOnlySpan<byte> key, out CodeFusion.Utf8 value) -> bool
+CodeFusion.Http.Reply
+CodeFusion.Http.Reply.Equals(CodeFusion.Http.Reply other) -> bool
+CodeFusion.Http.Reply.Error.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.Reply.Reply() -> void
+CodeFusion.Http.Reply.RetryAfter.get -> int
+CodeFusion.Http.Reply.Status.get -> int
+CodeFusion.Http.Reply.WriteAsync<TResponse>(TResponse response) -> System.Threading.Tasks.ValueTask
+CodeFusion.Http.Reply<T>
+CodeFusion.Http.Reply<T>.Error.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.Reply<T>.HasValue.get -> bool
+CodeFusion.Http.Reply<T>.Reply() -> void
+CodeFusion.Http.Reply<T>.Status.get -> int
+CodeFusion.Http.Reply<T>.Value.get -> T
+CodeFusion.Http.Reply<T>.WithoutValue.get -> CodeFusion.Http.Reply
+CodeFusion.Http.RequestContext
+CodeFusion.Http.RequestContext.Aborted.get -> System.Threading.CancellationToken
+CodeFusion.Http.RequestContext.Arena.get -> CodeFusion.IRequestArena!
+CodeFusion.Http.RequestContext.Await<T, TSend>(CodeFusion.Http.Pending<T> pending) -> System.Threading.Tasks.ValueTask
+CodeFusion.Http.RequestContext.Body.get -> System.Buffers.IBufferWriter<byte>!
+CodeFusion.Http.RequestContext.Errors.get -> CodeFusion.Http.HttpAppErrors!
+CodeFusion.Http.RequestContext.Exchange.get -> CodeFusion.Http.HttpExchange!
+CodeFusion.Http.RequestContext.Json.get -> System.Text.Json.Utf8JsonWriter!
+CodeFusion.Http.RequestContext.Query.get -> CodeFusion.Http.QuerySource
+CodeFusion.Http.RequestContext.RequestBody.get -> CodeFusion.Http.BodySource
+CodeFusion.Http.RequestContext.Reset() -> void
+CodeFusion.Http.RequestContext.RetryAfter.get -> int
+CodeFusion.Http.RequestContext.RetryAfter.set -> void
+CodeFusion.Http.RequestContext.RouteText(int index) -> CodeFusion.Utf8
+CodeFusion.Http.RequestContext.Scoped<T>(int slot) -> T!
+CodeFusion.Http.RequestContext.Status.get -> int
+CodeFusion.Http.RequestContext.Status.set -> void
+CodeFusion.Http.RequestContext.TryRouteInt32(int index, out int value) -> bool
+CodeFusion.Http.RequestContext.TryRouteInt64(int index, out long value) -> bool
+CodeFusion.Http.RequestContext.Viewer.get -> CodeFusion.Http.Viewer
+CodeFusion.Http.RequestMethod
+CodeFusion.Http.RequestMethod.Delete = 5 -> CodeFusion.Http.RequestMethod
+CodeFusion.Http.RequestMethod.Get = 1 -> CodeFusion.Http.RequestMethod
+CodeFusion.Http.RequestMethod.Head = 2 -> CodeFusion.Http.RequestMethod
+CodeFusion.Http.RequestMethod.Options = 7 -> CodeFusion.Http.RequestMethod
+CodeFusion.Http.RequestMethod.Other = 0 -> CodeFusion.Http.RequestMethod
+CodeFusion.Http.RequestMethod.Patch = 6 -> CodeFusion.Http.RequestMethod
+CodeFusion.Http.RequestMethod.Post = 3 -> CodeFusion.Http.RequestMethod
+CodeFusion.Http.RequestMethod.Put = 4 -> CodeFusion.Http.RequestMethod
+CodeFusion.Http.RouteGroup
+CodeFusion.Http.RouteGroup.Map(CodeFusion.Http.RequestMethod method, string! pattern, CodeFusion.Http.Endpoint! endpoint) -> CodeFusion.Http.EndpointBuilder!
+CodeFusion.Http.RouteGroup.MapGroup(string! prefix) -> CodeFusion.Http.RouteGroup!
+CodeFusion.Http.RouteGroup.Prefix.get -> string!
+CodeFusion.Http.Viewer
+CodeFusion.Http.Viewer.Id.get -> long
+CodeFusion.Http.Viewer.IsAuthenticated.get -> bool
+CodeFusion.Http.Viewer.Token.get -> CodeFusion.Utf8
+CodeFusion.Http.Viewer.Viewer() -> void
+CodeFusion.Http.Viewer.Viewer(long id, CodeFusion.Utf8 token) -> void
+const CodeFusion.Http.Jwt.MaxIssuedBytes = 193 -> int
+const CodeFusion.Http.Jwt.MaxTokenBytes = 4096 -> int
+const CodeFusion.Http.Jwt.MinSecretBytes = 32 -> int
+override CodeFusion.Http.Reply.Equals(object? obj) -> bool
+override CodeFusion.Http.Reply.GetHashCode() -> int
+static CodeFusion.Http.BodyValue.FromNested(bool valid) -> CodeFusion.Http.BodyValue
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Delegate! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, T5, T6, T7, T8, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, T8, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, T5, T6, T7, T8, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, T8, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, T5, T6, T7, T8>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, T8, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, T5, T6, T7, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, T5, T6, T7, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, T5, T6, T7>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, T5, T6, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, T5, T6, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, T5, T6>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, T5, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, T5, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, T5>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, T4>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, T3>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, T2>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<T1>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapDelete<TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Delegate! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, T5, T6, T7, T8, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, T8, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, T5, T6, T7, T8, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, T8, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, T5, T6, T7, T8>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, T8, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, T5, T6, T7, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, T5, T6, T7, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, T5, T6, T7>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, T5, T6, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, T5, T6, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, T5, T6>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, T5, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, T5, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, T5>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, T4>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, T3>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, T2>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<T1>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapGet<TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Delegate! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, T5, T6, T7, T8, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, T8, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, T5, T6, T7, T8, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, T8, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, T5, T6, T7, T8>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, T8, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, T5, T6, T7, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, T5, T6, T7, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, T5, T6, T7>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, T5, T6, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, T5, T6, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, T5, T6>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, T5, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, T5, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, T5>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, T4>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, T3>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, T2>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<T1>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPost<TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Delegate! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, T5, T6, T7, T8, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, T8, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, T5, T6, T7, T8, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, T8, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, T5, T6, T7, T8>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, T8, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, T5, T6, T7, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, T5, T6, T7, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, T5, T6, T7>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, T7, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, T5, T6, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, T5, T6, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, T5, T6>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, T6, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, T5, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, T5, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, T5>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, T5, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, T4>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, T4, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, T3>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, T3, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, T2>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, T2, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1, TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<T1>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<T1, CodeFusion.ErrorReply!>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<CodeFusion.Http.Pending<TResult>>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.EndpointRouteBuilderExtensions.MapPut<TResult>(this CodeFusion.Http.IEndpointRouteBuilder! routes, string! pattern, System.Func<TResult>! handler) -> CodeFusion.Http.EndpointBuilder!
+static CodeFusion.Http.HttpApp.CreateBuilder(string![]! args) -> CodeFusion.Http.HttpAppBuilder!
+static CodeFusion.Http.HttpAppBuilder.Setting(string! name) -> string?
+static CodeFusion.Http.PendingMethodBuilder<T>.Create() -> CodeFusion.Http.PendingMethodBuilder<T>
+static CodeFusion.Http.PooledValueTaskMethodBuilder.Create() -> CodeFusion.Http.PooledValueTaskMethodBuilder
+static CodeFusion.Http.PooledValueTaskMethodBuilder<TResult>.Create() -> CodeFusion.Http.PooledValueTaskMethodBuilder<TResult>
+static CodeFusion.Http.Query.Get(System.ReadOnlySpan<byte> query, System.ReadOnlySpan<byte> key, System.Span<byte> dest) -> int
+static CodeFusion.Http.Query.MaxDecodedLength(int queryLength) -> int
+static CodeFusion.Http.Query.TryParseUint(System.ReadOnlySpan<byte> s, out long value) -> bool
+static CodeFusion.Http.Reply.Busy(CodeFusion.ErrorReply! error, int retryAfter = 1) -> CodeFusion.Http.Reply
+static CodeFusion.Http.Reply.Created<T>(T value) -> CodeFusion.Http.Reply<T>
+static CodeFusion.Http.Reply.Failed(CodeFusion.ErrorReply! error) -> CodeFusion.Http.Reply
+static CodeFusion.Http.Reply.Forbidden(CodeFusion.ErrorReply! error) -> CodeFusion.Http.Reply
+static CodeFusion.Http.Reply.implicit operator CodeFusion.Http.Reply(CodeFusion.ErrorReply! error) -> CodeFusion.Http.Reply
+static CodeFusion.Http.Reply.NoContent() -> CodeFusion.Http.Reply
+static CodeFusion.Http.Reply.NotFound(CodeFusion.ErrorReply! error) -> CodeFusion.Http.Reply
+static CodeFusion.Http.Reply.Ok<T>(T value) -> CodeFusion.Http.Reply<T>
+static CodeFusion.Http.Reply.operator !=(CodeFusion.Http.Reply left, CodeFusion.Http.Reply right) -> bool
+static CodeFusion.Http.Reply.operator ==(CodeFusion.Http.Reply left, CodeFusion.Http.Reply right) -> bool
+static CodeFusion.Http.Reply.Unauthorized(CodeFusion.ErrorReply! error) -> CodeFusion.Http.Reply
+static CodeFusion.Http.Reply.Unprocessable(CodeFusion.ErrorReply! error) -> CodeFusion.Http.Reply
+static CodeFusion.Http.Reply.WithStatus(int status) -> CodeFusion.Http.Reply
+static CodeFusion.Http.Reply<T>.implicit operator CodeFusion.Http.Reply<T>(CodeFusion.ErrorReply! error) -> CodeFusion.Http.Reply<T>
+static CodeFusion.Http.Reply<T>.implicit operator CodeFusion.Http.Reply<T>(CodeFusion.Http.Reply reply) -> CodeFusion.Http.Reply<T>
+virtual CodeFusion.Http.HttpHandler.Invoke(CodeFusion.Http.HttpExchange! exchange) -> System.Threading.Tasks.ValueTask
+virtual CodeFusion.Http.HttpRejectBody.Invoke(int status) -> System.ReadOnlySpan<byte>

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The query generator: compiles a data context's query methods to SQL at build time and takes over their calls
+       (interceptors). It runs inside the compiler, so it targets netstandard2.0 and ships in CodeFusion.Data's
+       package as its analyzer; it is no package of its own. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>CodeFusion.Data.Generator</RootNamespace>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsPackable>false</IsPackable>
+    <IsAotCompatible>false</IsAotCompatible>
+    <!-- Diagnostics are this generator's own, listed in Diagnostics.cs; release tracking is for analyzer packages.
+         CA1822 and CA1859 ask for static members and narrower return types in the translator, whose methods are an
+         instance's on purpose (they share its parameters and aliases) and return the general Value. -->
+    <NoWarn>$(NoWarn);RS2008;CA1822;CA1859</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Its naming rules are checked against System.Text.Json's there. -->
+    <InternalsVisibleTo Include="CodeFusion.Data.Tests" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

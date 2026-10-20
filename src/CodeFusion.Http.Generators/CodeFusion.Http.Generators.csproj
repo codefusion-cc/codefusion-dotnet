@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The endpoint generator and the analyzers, loaded by the compiler: netstandard2.0 against the Roslyn the
+       oldest supported SDK ships. Packed into CodeFusion.Http's analyzers folder, not a package of its own. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>CodeFusion.Http.Generators</RootNamespace>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsPackable>false</IsPackable>
+    <IncludeSymbols>false</IncludeSymbols>
+    <!-- Compiler extensions run in the compiler's process: no culture-sensitive APIs to worry about, and messages
+         are composed from symbol names. -->
+    <NoWarn>$(NoWarn);CA1305;CA1307;CA1309;CA1310;CA1311;CA1304;CA1862;CA1865;CA1866;CA1847;RS2008</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeFusion.Http.Generators.Tests" />
+    <InternalsVisibleTo Include="CodeFusion.Http.CodeFixes" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

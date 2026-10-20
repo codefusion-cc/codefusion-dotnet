@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The endpoint generator, its analyzers and code fixes, driven through Roslyn on sources written here: the
+       generated code against checked-in snapshots (Snapshots/), and every diagnostic. Set UPDATE_SNAPSHOTS=1 to
+       write the snapshots again, then read the diff before keeping it. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CodeFusion.Http.Generators.Tests</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);CA1861</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <!-- Fails the run on an exception that ended a thread or that no one observed. -->
+    <Compile Include="../Shared/RunGuard.cs" Link="Shared/RunGuard.cs" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+    <ProjectReference Include="../../src/CodeFusion.Http/CodeFusion.Http.csproj" />
+    <ProjectReference Include="../../src/CodeFusion.Http.Generators/CodeFusion.Http.Generators.csproj" />
+    <ProjectReference Include="../../src/CodeFusion.Http.CodeFixes/CodeFusion.Http.CodeFixes.csproj" />
+    <!-- Generated code to compare with, not code of this project. -->
+    <Compile Remove="Snapshots/**" />
+    <None Include="Snapshots/**" CopyToOutputDirectory="Never" />
+  </ItemGroup>
+
+</Project>

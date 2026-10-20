@@ -1,0 +1,8 @@
+# ErrorResponse fields: a type byte, a NUL-terminated value; a NUL ends the message
+sev="SERROR\x00"
+vsev="VFATAL\x00"
+code="C23505\x00"
+msg="Mmessage\x00"
+detail="Ddetail\x00"
+constraint="nname\x00"
+end="\x00"

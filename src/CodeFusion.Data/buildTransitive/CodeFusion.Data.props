@@ -1,0 +1,6 @@
+<Project>
+  <!-- The query generator takes over each call to a query method with an interceptor in this namespace. -->
+  <PropertyGroup>
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);CodeFusion.Data.Generated</InterceptorsNamespaces>
+  </PropertyGroup>
+</Project>

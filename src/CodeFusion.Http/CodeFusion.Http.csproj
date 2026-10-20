@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>CodeFusion.Http</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsAotCompatible>true</IsAotCompatible>
+
+    <PackageId>CodeFusion.Http</PackageId>
+    <Description>An HTTP/1.1 server for .NET that allocates nothing per request, and minimal-API endpoints (MapGet, MapPost and friends) that a source generator compiles into the same zero-allocation code: route values, query and JSON bodies bound over the request's bytes, JWT auth, and replies written straight into the connection's buffer.</Description>
+    <PackageTags>http;server;http1;minimal-api;source-generator;zero-allocation;performance</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The parser and the buffer pool are tested and benchmarked directly. -->
+    <InternalsVisibleTo Include="CodeFusion.Http.Tests" />
+    <InternalsVisibleTo Include="CodeFusion.Benchmarks" />
+    <!-- The fuzz targets drive the parsers directly. -->
+    <InternalsVisibleTo Include="CodeFusion.Fuzz" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../CodeFusion.Core/CodeFusion.Core.csproj" />
+  </ItemGroup>
+
+  <!-- The endpoint generator, its analyzers and their code fixes ship inside this package, in analyzers/, with the
+       props that let its interceptors in: a consumer adds nothing. -->
+  <ItemGroup>
+    <ProjectReference Include="../CodeFusion.Http.Generators/CodeFusion.Http.Generators.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <ProjectReference Include="../CodeFusion.Http.CodeFixes/CodeFusion.Http.CodeFixes.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <None Include="../CodeFusion.Http.Generators/bin/$(Configuration)/netstandard2.0/CodeFusion.Http.Generators.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    <None Include="../CodeFusion.Http.CodeFixes/bin/$(Configuration)/netstandard2.0/CodeFusion.Http.CodeFixes.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    <None Include="buildTransitive/CodeFusion.Http.props" Pack="true" PackagePath="buildTransitive/" />
+  </ItemGroup>
+
+</Project>

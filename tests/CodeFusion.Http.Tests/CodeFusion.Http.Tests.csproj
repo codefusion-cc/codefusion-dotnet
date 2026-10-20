@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- What a consumer of the package gets from it: the endpoint generator's interceptors are let in. -->
+  <Import Project="../../src/CodeFusion.Http/buildTransitive/CodeFusion.Http.props" />
+
+  <!-- Unit, property and loopback tests of the server and the minimal-API layer. Run from the repository root:
+       dotnet test. The allocation tests run in Release only. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CodeFusion.Http.Tests</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+    <!-- Inline arrays read clearer in test data, and a handler's per-connection writer lives as long as its
+         pooled connection, as in an app. Body and query structs are fields by design, and Reference/ is the
+         contest's code as it was. BinderRuleTests keeps internal members a body and a query must not set (CFH0109). -->
+    <NoWarn>$(NoWarn);CA1861;CA1001;CA1051;CA1805;CFH0109</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <!-- Fails the run on an exception that ended a thread or that no one observed. -->
+    <Compile Include="../Shared/RunGuard.cs" Link="Shared/RunGuard.cs" />
+    <PackageReference Include="FsCheck.Xunit.v3" />
+    <ProjectReference Include="../../src/CodeFusion.Http/CodeFusion.Http.csproj" />
+    <!-- The sample app and the binder tests are compiled by the endpoint generator, as an app would be. -->
+    <ProjectReference Include="../../src/CodeFusion.Http.Generators/CodeFusion.Http.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <!-- Run as a process of its own by SignalTests. -->
+    <ProjectReference Include="../CodeFusion.Http.SampleApp/CodeFusion.Http.SampleApp.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

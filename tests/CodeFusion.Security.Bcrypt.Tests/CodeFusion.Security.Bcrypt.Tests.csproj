@@ -2,6 +2,8 @@
 
   <!-- Unit and property tests. Run from the repository root: dotnet test -->
   <PropertyGroup>
+    <!-- The repository sets one TargetFramework for its .NET 10 packages; cleared, so this one builds for each of its own. -->
+    <TargetFramework></TargetFramework>
     <TargetFrameworks>$(BcryptFrameworks)</TargetFrameworks>
     <TargetFrameworks Condition="$([MSBuild]::VersionGreaterThanOrEquals('$(NETCoreSdkVersion)', '11.0'))">$(TargetFrameworks);net11.0</TargetFrameworks>
     <OutputType>Exe</OutputType>

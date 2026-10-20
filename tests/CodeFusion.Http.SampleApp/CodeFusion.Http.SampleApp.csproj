@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A minimal app on the package, run as its own process by SignalTests to see Run() stop gracefully on SIGTERM. -->
+  <Import Project="../../src/CodeFusion.Http/buildTransitive/CodeFusion.Http.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CodeFusion.Http.SampleApp</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/CodeFusion.Http/CodeFusion.Http.csproj" />
+    <ProjectReference Include="../../src/CodeFusion.Http.Generators/CodeFusion.Http.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

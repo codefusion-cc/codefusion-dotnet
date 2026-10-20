@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The provider-neutral layer: the data context, the LINQ a query is defined in, the results, and the provider
+       contracts. The query generator (src/CodeFusion.Data.Generator) ships inside this package as its analyzer. -->
+  <PropertyGroup>
+    <RootNamespace>CodeFusion.Data</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsAotCompatible>true</IsAotCompatible>
+
+    <PackageId>CodeFusion.Data</PackageId>
+    <Description>A DbContext-style data layer for .NET whose LINQ queries are compiled to SQL at build time, so a query allocates nothing at run time. Use it with a provider such as CodeFusion.Data.Postgres.</Description>
+    <PackageTags>database;linq;source-generator;zero-allocation;performance</PackageTags>
+    <!-- Int64, Double and Boolean name the values they bind (as Postgres's own Int8 does), and Then, End and Stop are
+         the words for what they do; the packages are for C#, where none of them is a keyword. -->
+    <NoWarn>$(NoWarn);CA1716;CA1720</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeFusion.Data.Tests" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <!-- The generator ships as this package's analyzer, with the setting its interceptors need. -->
+    <None Include="../CodeFusion.Data.Generator/bin/$(Configuration)/netstandard2.0/CodeFusion.Data.Generator.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />
+    <None Include="buildTransitive/CodeFusion.Data.props" Pack="true" PackagePath="buildTransitive/" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../CodeFusion.Core/CodeFusion.Core.csproj" />
+    <!-- Built first, for the package; nothing here uses it. -->
+    <ProjectReference Include="../CodeFusion.Data.Generator/CodeFusion.Data.Generator.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

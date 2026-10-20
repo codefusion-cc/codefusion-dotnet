@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- MinimalApiBenchmarks' endpoints are compiled by the endpoint generator, as an app's are. -->
+  <Import Project="../../src/CodeFusion.Http/buildTransitive/CodeFusion.Http.props" />
+
+  <!-- BenchmarkDotNet: the server against Kestrel and the client against Npgsql, as the contest server (21abce6) used
+       them, and the generated minimal-API layer against the same endpoints written by hand. The repository README
+       says how to run it. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CodeFusion.Benchmarks</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <IsPackable>false</IsPackable>
+    <!-- BenchmarkDotNet's patterns (public [Params] fields, GlobalCleanup instead of Dispose, ValueTasks queued
+         together on purpose), the column interfaces' short parameter names, and Reference/: the contest's 21abce6
+         code, frozen as it was. -->
+    <NoWarn>$(NoWarn);CA1001;CA1051;CA1725;CA2012;CA2211;CA1515;CA1819</NoWarn>
+    <!-- DataBenchmarks' compiled queries: the generator's interceptors live here. -->
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);CodeFusion.Data.Generated</InterceptorsNamespaces>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="Npgsql" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../../src/CodeFusion.Http/CodeFusion.Http.csproj" />
+    <ProjectReference Include="../../src/CodeFusion.Http.Generators/CodeFusion.Http.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../src/CodeFusion.Data.Postgres/CodeFusion.Data.Postgres.csproj" />
+    <ProjectReference Include="../../src/CodeFusion.Data.Generator/CodeFusion.Data.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <!-- The Conduit context the data tests use, compiled here so its calls are taken over here too. -->
+    <Compile Include="../../tests/Shared/Conduit/*.cs" Link="Conduit/%(Filename)%(Extension)" />
+    <!-- PgBenchmarks seeds its schema from it, found next to the binaries. -->
+    <None Include="schema.sql" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
