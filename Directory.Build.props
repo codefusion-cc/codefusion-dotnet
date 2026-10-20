@@ -7,9 +7,8 @@
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
-    <!-- The same bytes from the same commit; CI sets ContinuousIntegrationBuild so paths are normalized too. -->
+    <!-- The same bytes from the same commit. src/Directory.Build.props also normalizes the paths of what ships. -->
     <Deterministic>true</Deterministic>
-    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <!-- CodeFusion.Security.Bcrypt's frameworks: it supports .NET 8 and up, and keeps its own 1.x version. Its tests
          and benchmarks also run on .NET 11 when the SDK is 11 or newer (they add it themselves); its CI job has it. -->
