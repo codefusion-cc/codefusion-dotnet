@@ -28,8 +28,8 @@ if (user.Failed) return user.Error!;
 
 The SQL of every query is a constant (`ConduitDb.QuerySql.ArticleBySlug`). LINQ the translator can't compile is a
 build error that points at `Sql<T>($"...")`, whose interpolation holes become parameters at build time (constant
-strings too, and one where SQL expects a name, as after ORDER BY or FROM, is a build error); a hole calling a
-`[SqlTemplate]` method is its SQL, the way to share a fragment.
+strings too, and one where a parameter can't stand, as a table after FROM or a whole ORDER BY item, is a build
+error); a hole calling a `[SqlTemplate]` method is its SQL, the way to share a fragment.
 
 Entities follow EF's conventions (snake_case names, `AuthorId` with `Author`, `Many<T>` for the other side, and EF's
 attributes) and are never built at run time. Views are `record struct`s of `Utf8`, `Utf8?`, `Timestamp`,

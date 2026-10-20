@@ -548,6 +548,23 @@ public sealed class PgWriterTests : IAsyncDisposable
         Assert.Equal(["a", "b"], await Values());
     }
 
+    [Fact(Timeout = 30_000)]
+    public async Task AWriteThatDeallocatesTheAppsOwnStatementKeepsItsGroup()
+    {
+        var w = await NewWriter();
+        // queued together: one group, the DEALLOCATE between two inserts
+        var prepared = w.Command(new PgStatement("PREPARE apps AS SELECT 1")).Run(Keep, new Box()).AsTask();
+        var a = Run(w, "a");
+        var dropped = w.Command(new PgStatement("DEALLOCATE apps")).Run(Keep, new Box()).AsTask();
+        var b = Run(w, "b");
+        w.Start(1);
+        Assert.True((await prepared).IsOk);
+        Assert.Equal("a", await Ok(a));
+        Assert.True((await dropped).IsOk);
+        Assert.Equal("b", await Ok(b));
+        Assert.Equal(["a", "b"], await Values());
+    }
+
     [Theory(Timeout = 30_000)]
     [InlineData("COMMIT")]
     [InlineData("ROLLBACK")]

@@ -71,9 +71,10 @@ sealed class Emitter
         head.Append("        /// <summary>The SQL of each query method, as the query generator wrote it.</summary>\n");
         head.Append("        public static class QuerySql\n        {\n");
         foreach (var q in queries)
-            foreach (var s in q.Statements)
+            for (int i = 0; i < q.Statements.Count; i++)
             {
-                string what = Xml(q.Method.Name) + (s.Name == q.Method.Name ? "" : ", statement " + s.Name.Substring(q.Method.Name.Length + 1));
+                var s = q.Statements[i];
+                string what = Xml(q.Method.Name) + (i == 0 ? "" : ", statement " + Names.Number(i + 1));
                 head.Append("            /// <summary>").Append(what).Append(".</summary>\n            public const string ").Append(s.Name).Append(" = ").Append(Names.Literal(s.Sql)).Append(";\n");
                 head.Append("            /// <summary>The types of ").Append(what).Append("'s parameters, $1 first.</summary>\n            public static global::System.ReadOnlySpan<global::CodeFusion.Data.DataType> ")
                     .Append(s.Name).Append("Parameters => [").Append(string.Join(", ", s.Params.Select(p => "global::CodeFusion.Data.DataType." + DataType(p.Kind)))).Append("];\n");
@@ -118,8 +119,8 @@ sealed class Emitter
 
         // the interceptor: each value the statements bind is computed first, so one that throws (a method of the
         // app's, a null's .Value) leaves no command half built; then the command is rented and bound. A value
-        // several statements use (an insert's key set by a call, a ThenIf's condition) is computed once, and each
-        // binds that local
+        // several statements use (an insert's key set by a call, a ThenIf's condition, an inlined call's argument)
+        // is computed once, and each binds that local
         string ret = Type(m.ReturnType);
         var pars = m.Parameters.Select(p => $"{Modifier(p)}{Type(p.Type)} {Names.Identifier(p.Name)}").ToList();
         var values = new List<(string Type, string Name)>();
@@ -137,34 +138,51 @@ sealed class Emitter
             values.Add(("bool", name));
             return name;
         }
+        // an inlined call's impure argument, in its own type: each use converts from it, as C# does at the call
+        void Argument(Argument a)
+        {
+            string? when = a.Under is null ? null : GuardOf(a.Under);
+            Line(when is null ? $"var {a.Name} = {a.Code};" : $"var {a.Name} = {when} ? {a.Code} : default!;");
+        }
         for (int i = 0; i < q.Statements.Count; i++)
         {
             var s = q.Statements[i];
+            // the arguments of a call made before this statement's ThenIf, whose condition may read them
+            foreach (var a in q.Arguments.Where(a => a.Before == i && a.Under != s.Condition)) Argument(a);
             string? when = i > 0 && s.Condition is { } g ? GuardOf(g) : null;
             var names = new string?[s.Params.Count];
-            // in the order C# makes them, which the order of the SQL's parameters needn't be
-            foreach (int j in Enumerable.Range(0, s.Params.Count).OrderBy(j => s.Params[j].Made))
+            // in the order C# makes them, which the order of the SQL's parameters needn't be, with the arguments of
+            // the calls inlined on the way
+            var order = Enumerable.Range(0, s.Params.Count).Select(j => (s.Params[j].Made, Param: j, Argument: (Argument?)null))
+                .Concat(q.Arguments.Where(a => a.Before == i && a.Under == s.Condition).Select(a => (a.Made, Param: -1, Argument: (Argument?)a)))
+                .OrderBy(x => x.Made);
+            foreach (var (_, j, argument) in order)
             {
+                if (argument is not null)
+                {
+                    Argument(argument);
+                    continue;
+                }
                 var p = s.Params[j];
                 string type = Type(p.Type);
-                // computed already for a statement that runs whenever this one does: the same local, or (a value
-                // bound as two types, one parameter of an inlined call) a copy of it, since its C# may not run twice
-                var earlier = computed.TryGetValue(p.Key, out var c) ? c.Where(e => Guard.Within(s.Condition, e.Under)).ToList() : [];
+                // computed already for a statement that runs whenever this one does: the same local. An impure value
+                // is bound in one type (the translator refuses another), so only a pure one is computed again here
+                var earlier = computed.TryGetValue(p.Key, out var c) ? c.Where(e => Guard.Within(s.Condition, e.Under)) : [];
                 if (earlier.FirstOrDefault(e => e.Type == type).Name is { } same)
                 {
                     names[j] = same;
                     continue;
                 }
                 string name = names[j] = $"__v{i}_{j}";
-                string code = earlier.Count > 0 && !p.Key.StartsWith("=", StringComparison.Ordinal) ? $"({type}){earlier[0].Name}" : p.Code;
                 // a statement under ThenIf binds its values only when its condition holds: computed then only
-                Line(when is null ? $"{type} {name} = {code};" : $"{type} {name} = {when} ? {code} : default!;");
+                Line(when is null ? $"{type} {name} = {p.Code};" : $"{type} {name} = {when} ? {p.Code} : default!;");
                 values.Add((type, name));
                 if (c is null) computed[p.Key] = c = new();
                 c.Add((name, type, s.Condition));
             }
             locals.Add(names);
         }
+        foreach (var a in q.Arguments.Where(a => a.Before >= q.Statements.Count)) Argument(a);
         Line($"var __command = {_provider}.{(q.IsWrite ? "Write" : "Read")}(__context, {id}S0);");
         Line($"return new {ret}(__context, {id}Bind(__command{string.Concat(values.Select(v => ", " + v.Name))}), {id}Ops.Instance);");
         Close();

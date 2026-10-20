@@ -110,19 +110,31 @@ public sealed class GeneratorTests
                 public Many<Name> D() => Sql<Name>($"SELECT min(id), name FROM people GROUP BY id, {Col}").Many();
                 public Many<Name> E() => Sql<Name>($"SELECT {Tab}.id, name FROM people").Many();
                 public Many<Name> F() => Sql<Name>($"SELECT p.id, p.{Col} FROM people p").Many();
-                public Many<Name> G() => Sql<Name>($"SELECT id, {Col} FROM people").Many();
                 public Write H() => Sql($"INSERT INTO people (age, {Col}) VALUES (1, 'x')");
                 public Write I() => Sql($"UPDATE {Tab} SET age = 1");
                 public Write J() => Sql($"INSERT INTO {Tab} (name) VALUES ('x')");
+                public Many<Name> K() => Sql<Name>($"SELECT id, name FROM people ORDER BY name, {Col} DESC NULLS LAST LIMIT 2").Many();
+                public Many<Name> L() => Sql<Name>($"SELECT id, name FROM people WHERE id IN (SELECT id FROM {Tab})").Many();
+                public Many<Name> M() => Sql<Name>($"SELECT id, name FROM people ORDER BY {Col} NULLS FIRST").Many();
                 public Many<Name> Values() => Sql<Name>($"SELECT id, name FROM people WHERE name = {Ann} OR name IN ({Ann}, 'b') OR coalesce(nick, {Ann}) = name ORDER BY name = {Ann}").Many();
                 public Write Inserted() => Sql($"INSERT INTO people (name, age) VALUES ({Ann}, 1)");
+                // a value where SQL takes one, whatever keyword is near
+                public Many<Name> Listed() => Sql<Name>($"SELECT id, {Ann} FROM people").Many();
+                public Write<Name> Returned() => Sql<Name>($"INSERT INTO people (name, age) VALUES ('x', 1) RETURNING id, {Ann}").Write();
+                public Write Selected() => Sql($"INSERT INTO people (name, age) SELECT {Ann}, 1 FROM people WHERE id = 1");
+                public Many<Name> Substring() => Sql<Name>($"SELECT id, substring(name FROM {Ann}) FROM people").Many();
+                public Many<Name> Extract() => Sql<Name>($"SELECT id, name FROM people WHERE extract(epoch FROM {Ann}::timestamptz) > 0").Many();
+                public Many<Name> Distinct() => Sql<Name>($"SELECT id, name FROM people WHERE name IS DISTINCT FROM {Ann} OR nick IS NOT DISTINCT FROM {Ann}").Many();
+                public Many<Name> Compared() => Sql<Name>($"SELECT id, name FROM people ORDER BY {Ann} = name, name").Many();
+                public Many<Name> Commented() => Sql<Name>($"SELECT id, name FROM people WHERE name = -- order by\n{Ann} OR name = /* from */ {Ann}").Many();
+                public Many<Name> Quoted() => Sql<Name>($"SELECT id, name FROM people WHERE name IN ('ORDER BY', {Ann})").Many();
             """);
         var r = Run(source);
         var errors = r.Generator.Where(d => d.Id == "CFDATA010").ToList();
-        Assert.Equal(10, errors.Count);
         Assert.All(errors, d => Assert.Contains("[SqlTemplate]", Message(d), System.StringComparison.Ordinal));
         Assert.All(errors, d => Assert.Matches(@"^\{(Col|Tab)\}$", At(d, source)));
-        Assert.Equal(10, r.Generator.Length);
+        Assert.Equal(12, errors.Count);
+        Assert.Equal(12, r.Generator.Length);
     }
 
     [Fact]
@@ -379,14 +391,21 @@ public sealed class GeneratorTests
                 public Write<Name> SqlOtherTable(Utf8 a, Utf8 b) => Insert(People, new Person { Name = a })
                     .Then(Sql($"INSERT INTO \"People\" (name) VALUES ({b}); INSERT INTO people_log (name) SELECT name FROM people"))
                     .ThenSelect(x => new Name(x.Id, x.Name));
+                public Write<Name> SqlOnly(Utf8 a, Utf8 b) => Insert(People, new Person { Name = a })
+                    .Then(Sql($"MERGE INTO ONLY people p USING (SELECT {b}::text AS name) s ON p.name = s.name WHEN NOT MATCHED THEN INSERT (name) VALUES (s.name)"))
+                    .ThenSelect(x => new Name(x.Id, x.Name));
+                public Write<Name> SqlCopyOut(Utf8 a) => Insert(People, new Person { Name = a })
+                    .Then(Sql($"COPY (SELECT name FROM people) TO STDOUT"))
+                    .ThenSelect(x => new Name(x.Id, x.Name));
             """);
         var r = Run(source);
         var errors = r.Generator.Where(d => d.Id == "CFDATA001").ToList();
-        Assert.Equal(9, errors.Count);
+        Assert.Equal(10, errors.Count);
         Assert.Contains(errors, d => Message(d).Contains("OrIgnore", System.StringComparison.Ordinal));
         Assert.Contains(errors, d => Message(d).Contains("a query's rows", System.StringComparison.Ordinal));
-        // and none for SqlOtherTable: a quoted name of other case is another table, and a table read isn't written
-        Assert.Equal(7, errors.Count(d => Message(d).Contains("another insert into people", System.StringComparison.Ordinal)));
+        // and none for SqlOtherTable (a quoted name of other case is another table, and a table read isn't written)
+        // or SqlCopyOut (a COPY of a query's rows out writes none)
+        Assert.Equal(8, errors.Count(d => Message(d).Contains("another insert into people", System.StringComparison.Ordinal)));
         // an insert that sets its own key draws none, so the earlier key is still the sequence's
         Assert.Equal("SELECT x.id, x.name FROM people x WHERE x.id = (SELECT currval(pg_get_serial_sequence('people', 'id')))", r.Sql("NestedOwnKey_3"));
         // a key set by the insert is that value; one drawn from the sequence is its current value
@@ -480,25 +499,37 @@ public sealed class GeneratorTests
         Assert.Equal("INSERT INTO pets (id, owner_id, name) VALUES ($1, $2, $3)", r.Sql("Members_3"));
         Assert.Equal("INSERT INTO pets (id, owner_id, name) VALUES ($1, $1, $2)", r.Sql("Members_4"));
         Assert.Equal("INSERT INTO pets (id, owner_id, name) VALUES ($1, $1, $2)", r.Sql("KeyedOnce"));
-        // bound as a long, then as an int: one call, the int a cast of the long
+        // bound as a long, then as an int: one call, in its own type, each use converting from it
         Assert.Equal(1, System.Text.RegularExpressions.Regex.Count(r.Generated, @"Ids\.Small\("));
-        Assert.Matches(@"int __v1_0 = \(int\)__v0_0;", r.Generated);
+        Assert.Matches(@"var (__a\d+) = global::Ids\.Small\(\);[\s\S]*long __v0_0 = \1;[\s\S]*int __v1_0 = \1;", r.Generated);
     }
 
     [Fact]
-    public void AValueOfACallUsedInsideAnotherIsRefused()
+    public void AnArgumentOfACallUsedInsideAnotherValueIsComputedOnce()
     {
-        string source = Context("""
+        var r = Clean(Context("""
                 public Write Twice(long k, Utf8 n) => Insert(Pets, new Pet { Id = k, OwnerId = k + 1, Name = n });
                 public Write TwiceOf(Utf8 n) => Twice(Ids.Next(), n);
                 public Write Within(long k, Utf8 n) => Insert(Pets, new Pet { Id = k * 2, OwnerId = k + 1, Name = n });
                 public Write WithinOf(Utf8 n) => Within(Ids.Next(), n);
-            """, Calls);
-        var r = Run(source);
-        // the argument runs once in C#; written into two expressions, it would run twice
-        var errors = r.Generator.Where(d => d.Id == "CFDATA001").ToList();
-        Assert.Equal(2, errors.Count);
-        Assert.All(errors, d => Assert.Contains("would run twice", Message(d), System.StringComparison.Ordinal));
+            """, Calls));
+        // the argument runs once, at the call, as in C#; the values written over it read its local
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Count(r.Generated, @"Ids\.Next\("));
+        Assert.Equal("INSERT INTO pets (id, owner_id, name) VALUES ($1, $2, $3)", r.Sql("TwiceOf"));
+        Assert.Matches(@"^__a\d+$", r.Bound("TwiceOf")[0]);
+        Assert.Matches(@"^\(__a\d+ \+ 1L\)$", r.Bound("TwiceOf")[1]);
+        Assert.Matches(@"^\(__a\d+ \* 2L\)$", r.Bound("WithinOf")[0]);
+    }
+
+    [Fact]
+    public void AValueWrittenIntoTwoOthersIsRefused()
+    {
+        string source = Context("""
+                public Page<Name> Feed(ref Paging page) => People.OrderBy(p => p.Id).Page(page, countUpTo: 10).Select(p => new Name(p.Id, p.Name));
+            """);
+        // a ref parameter may change between two reads: its limit and its offset, each written over it, would read it twice
+        var d = Single(Run(source), "CFDATA001");
+        Assert.Contains("would run twice (written into another value as well", Message(d), System.StringComparison.Ordinal);
     }
 
     [Fact]
@@ -813,5 +844,192 @@ public sealed class GeneratorTests
         var d2 = Assert.Single(second, x => x.Id == "CFDATA002");
         Assert.Equal(d1.Location.GetLineSpan().StartLinePosition.Line + 1, d2.Location.GetLineSpan().StartLinePosition.Line);
         Assert.Equal("db.People.Where(p => p.Age > 1)", (Usings + after).Substring(d2.Location.SourceSpan.Start, d2.Location.SourceSpan.Length));
+    }
+
+    [Fact]
+    public void InAndRefReadonlyParametersReadTheSameEachTime()
+    {
+        var r = Clean(Context("""
+                public Page<Name> Feed(in Paging page) => People.OrderBy(p => p.Id).Page(page, countUpTo: 10).Select(p => new Name(p.Id, p.Name));
+                public Page<Name> FeedOf(ref readonly Paging page) => People.OrderBy(p => p.Id).Page(page, countUpTo: 10).Select(p => new Name(p.Id, p.Name));
+                public Write Same(in long id, Utf8 n) => Insert(Pets, new Pet { Id = id, OwnerId = id, Name = n });
+            """, """
+            public static class Handler
+            {
+                public static Page<Name> Get(Db db, Paging page) => db.Feed(in page);
+            }
+            """));
+        // the generated code reads a member of the parameter; nothing runs
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Count(r.Generated, @"global::System\.Math\.Max\(0L, page\.Offset\)"));
+        Assert.Equal("INSERT INTO pets (id, owner_id, name) VALUES ($1, $1, $2)", r.Sql("Same"));
+    }
+
+    [Fact]
+    public void APropertyAnOverrideOrAnImplementationMayComputeIsAValuePerPlace()
+    {
+        var r = Clean(Context("""
+                public Write Seq(ISeq seq, Utf8 n) => Insert(Pets, new Pet { Id = seq.Next, OwnerId = seq.Next, Name = n });
+                public Write Abstract(Counter c, Utf8 n) => Insert(Pets, new Pet { Id = c.Next, OwnerId = c.Next, Name = n });
+                public Write Virtual(Counter c, Utf8 n) => Insert(Pets, new Pet { Id = c.Soft, OwnerId = c.Soft, Name = n });
+                public Write Override(Impl i, Utf8 n) => Insert(Pets, new Pet { Id = i.Soft, OwnerId = i.Soft, Name = n });
+                public Write Auto(Fixed f, Utf8 n) => Insert(Pets, new Pet { Id = f.Id, OwnerId = f.Id, Name = n });
+            """, """
+            public interface ISeq { long Next { get; } }
+            public abstract class Counter { public abstract long Next { get; } public virtual long Soft { get; } }
+            public sealed class Impl : Counter { long _n; public override long Next => ++_n; public override long Soft { get; } }
+            public sealed class Fixed { public long Id { get; init; } }
+            """));
+        // an interface's, abstract, virtual or overriding property is read where it is written; a sealed class's
+        // auto-property reads the same each time
+        foreach (var name in new[] { "Seq", "Abstract", "Virtual", "Override" })
+            Assert.Equal("INSERT INTO pets (id, owner_id, name) VALUES ($1, $2, $3)", r.Sql(name));
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Count(r.Generated, @"= seq\.Next;"));
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Count(r.Generated, @"= c\.Next;"));
+        Assert.Equal("INSERT INTO pets (id, owner_id, name) VALUES ($1, $1, $2)", r.Sql("Auto"));
+    }
+
+    [Fact]
+    public void AValueBoundAsADoubleAndAsALongKeepsEveryDigitOfTheLong()
+    {
+        var r = Clean(Entities + """
+            public sealed class Score { public long Id { get; init; } public double Points { get; init; } }
+            public sealed partial class Db : DataContext<Postgres>
+            {
+                public Table<Score> Scores => Table<Score>();
+                public Table<Pet> Pets => Table<Pet>();
+                public Write Scored(long n, Utf8 name) => Insert(Scores, new Score { Id = 1, Points = n }).Then(Insert(Pets, new Pet { Id = n, OwnerId = 1, Name = name }));
+                public Write ScoredOf(Utf8 name) => Scored(Ids.Next(), name);
+                public Write Both(long n) => Insert(Scores, new Score { Points = n, Id = n });
+                public Write BothOf() => Both(Ids.Next());
+            }
+            """ + Calls);
+        // the call's value is kept as its long, and each use converts from it: no long cut back from a double
+        // (2^53 + 1 would come back as 2^53)
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Count(r.Generated, @"Ids\.Next\("));
+        Assert.DoesNotMatch(@"\(long\)__", r.Generated);
+        Assert.DoesNotMatch(@"\(global::System\.Int64\)__", r.Generated);
+        // one statement binds the value as a double and as a long: two parameters, the long's exact
+        Assert.Equal("INSERT INTO scores (points, id) VALUES ($1, $2)", r.Sql("Both"));
+        Assert.Equal("INSERT INTO scores (points, id) VALUES ($1, $2)", r.Sql("BothOf"));
+        var bound = r.Binder("BothOf");
+        Assert.Equal(2, bound.Count);
+        Assert.NotEqual(bound[0], bound[1]);
+    }
+
+    [Fact]
+    public void AnOverloadsStatementsAreDocumentedByTheirNumber()
+    {
+        var r = Clean(Context("""
+                public Write Touch(long id) => Insert(Pets, new Pet { Id = id, OwnerId = 1, Name = Utf8.Empty }).Then(Insert(People, new Person { Age = 1 }));
+                public Write Touch(Utf8 n) => Insert(People, new Person { Name = n }).Then(Insert(People, new Person { Nick = n }));
+            """));
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Count(r.Generated, @"/// <summary>Touch\.</summary>"));
+        Assert.Equal(2, System.Text.RegularExpressions.Regex.Count(r.Generated, @"/// <summary>Touch, statement 2\.</summary>"));
+        Assert.DoesNotContain("statement Int64", r.Generated, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("statement Utf8", r.Generated, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AQueryMethodOfABaseImplementingAnInterfaceTheSubclassAddsIsRefused()
+    {
+        string source = Entities + """
+            public interface INames { One<Name> ByName(Utf8 name); }
+            public abstract partial class BaseDb : DataContext<Postgres>
+            {
+                public Table<Person> People => Table<Person>();
+                public One<Name> ByName(Utf8 name) => People.Where(p => p.Name == name).Select(p => new Name(p.Id, p.Name)).One();
+            }
+            public sealed partial class AppDb : BaseDb, INames;
+            public sealed partial class OwnDb : BaseDb, INames
+            {
+                public One<long> Count() => People.Count();
+            }
+            public static class Handler
+            {
+                public static One<Name> Get(INames db, Utf8 name) => db.ByName(name);
+            }
+            """;
+        var r = Run(source);
+        var errors = r.Generator.Where(d => d.Id == "CFDATA007").ToList();
+        Assert.Equal(2, errors.Count);
+        Assert.All(errors, d => Assert.Contains("'ByName' implements an interface", Message(d), System.StringComparison.Ordinal));
+        Assert.Equal(["AppDb", "OwnDb"], errors.Select(d => At(d, source)).Order());
+        Assert.Empty(r.Errors.Where(e => !e.Id.StartsWith("CFDATA", System.StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void AnInlinedMethodsArgumentIsComputedAtTheCallLikeEveryArgumentInCSharp()
+    {
+        var r = Clean(Context("""
+                public Write Log(long audit, Utf8 n) => Insert(People, new Person { Name = n });
+                public Write LogOf(Utf8 n) => Log(Ids.Next(), n);
+                public Write Maybe(bool b, long k, Utf8 n) => Insert(People, new Person { Name = n }).ThenIf(b, Insert(Pets, new Pet { Id = k, OwnerId = 1, Name = n }));
+                public Write MaybeOf(bool flag, Utf8 n) => Maybe(flag, Ids.Next(), n);
+                static long Second(long a, long b) => b;
+                public Write Static(Utf8 n) => Insert(Pets, new Pet { Id = Second(Ids.Next(), 1), OwnerId = 1, Name = n });
+            """, Calls));
+        // one call each, made whether the body uses the argument or not, and not only when the ThenIf holds
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Count(r.Generated, @"Ids\.Next\("));
+        Assert.Equal(3, System.Text.RegularExpressions.Regex.Count(r.Generated, @"\n\s*var __a\d+ = global::Ids\.Next\(\);"));
+        Assert.Equal("INSERT INTO pets (id, owner_id, name) VALUES (1, 1, $1)", r.Sql("Static"));
+    }
+
+    [Fact]
+    public void ACallInAMethodInlinedTwiceIsMadeOncePerInlining()
+    {
+        var r = Clean(Context("""
+                public Write W(Utf8 n) => Insert(People, new Person { Name = n }).Then(Insert(Pets, new Pet { Id = Ids.Next(), OwnerId = 1, Name = n }));
+                public Write Twice(Utf8 n) => W(n).Then(W(n));
+                public Write Touch(long id) => People.Where(p => p.Id == id && p.Age < Ids.Next()).Update(p => new Person { Active = true });
+                public Write TouchTwice(long a) => Touch(a).Then(Touch(a));
+            """, Calls));
+        // each inlining's call is its own, though written once: in the later statements of a body too
+        Assert.Equal(2, Made(r, "Twice", "Ids.Next("));
+        Assert.Equal(2, Made(r, "TouchTwice", "Ids.Next("));
+    }
+
+    /// <summary>How often the interceptor of <paramref name="method"/> writes <paramref name="call"/>.</summary>
+    static int Made(Result r, string method, string call) => System.Text.RegularExpressions.Regex.Count(
+        System.Text.RegularExpressions.Regex.Match(r.Generated, $@" {method}\(this [\s\S]*?return new").Value, System.Text.RegularExpressions.Regex.Escape(call));
+
+    [Fact]
+    public void AValueUnderAnInnerThenIfAndThenUnderItsOuterOneIsComputedOnce()
+    {
+        var r = Clean(Context("""
+                public Write Tagged(bool a, bool b, long k, Utf8 n) => Insert(People, new Person { Name = n })
+                    .ThenIf(a, Insert(People, new Person { Nick = n })
+                        .ThenIf(b, Insert(Pets, new Pet { Id = k, OwnerId = 1, Name = n }))
+                        .Then(Insert(Pets, new Pet { Id = k, OwnerId = 2, Name = n })));
+                public Write TaggedOf(bool a, bool b, Utf8 n) => Tagged(a, b, Ids.Next(), n);
+            """, Calls));
+        Assert.Equal(1, System.Text.RegularExpressions.Regex.Count(r.Generated, @"Ids\.Next\("));
+        // the pet under b and the one under a only: each binds the one value
+        var bound = r.Bound("TaggedOf");
+        Assert.Equal(6, bound.Count);
+        Assert.Equal(bound[2], bound[4]);
+        Assert.Matches(@"^__a\d+$", bound[2]);
+    }
+
+    [Fact]
+    public void AnSqlInsertMovesTheKeyOfARowOfItsSchemaOnly()
+    {
+        string source = Entities + """
+            [Table("gadgets", Schema = "tenant")] public sealed class Gadget { public long Id { get; init; } public Utf8 Name { get; init; } }
+            public sealed partial class Db : DataContext<Postgres>
+            {
+                public Table<Gadget> Gadgets => Table<Gadget>();
+                public Write<Name> Other(Utf8 a) => Insert(Gadgets, new Gadget { Name = a }).Then(Sql($"INSERT INTO other.gadgets (name) VALUES ('x')")).ThenSelect(g => new Name(g.Id, g.Name));
+                public Write<Name> OtherCase(Utf8 a) => Insert(Gadgets, new Gadget { Name = a }).Then(Sql($"INSERT INTO \"Tenant\".gadgets (name) VALUES ('x')")).ThenSelect(g => new Name(g.Id, g.Name));
+                public Write<Name> Same(Utf8 a) => Insert(Gadgets, new Gadget { Name = a }).Then(Sql($"INSERT INTO Tenant.Gadgets (name) VALUES ('x')")).ThenSelect(g => new Name(g.Id, g.Name));
+                public Write<Name> Unqualified(Utf8 a) => Insert(Gadgets, new Gadget { Name = a }).Then(Sql($"INSERT INTO gadgets (name) VALUES ('x')")).ThenSelect(g => new Name(g.Id, g.Name));
+            }
+            """;
+        var r = Run(source);
+        // another schema's table of that name is another table; with no schema it may be the search path's
+        var errors = r.Generator.Where(d => d.Id == "CFDATA001").ToList();
+        Assert.Equal(2, errors.Count);
+        Assert.All(errors, d => Assert.Contains("another insert into gadgets", Message(d), System.StringComparison.Ordinal));
+        Assert.Equal("SELECT g.id, g.name FROM tenant.gadgets g WHERE g.id = (SELECT currval(pg_get_serial_sequence('tenant.gadgets', 'id')))", r.Sql("Other_3"));
+        Assert.Equal("SELECT g.id, g.name FROM tenant.gadgets g WHERE g.id = (SELECT currval(pg_get_serial_sequence('tenant.gadgets', 'id')))", r.Sql("OtherCase_3"));
     }
 }

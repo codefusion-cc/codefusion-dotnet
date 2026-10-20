@@ -7,6 +7,7 @@ using CodeFusion.Data.Postgres;
 using FsCheck;
 using FsCheck.Fluent;
 using FsCheck.Xunit;
+using Xunit;
 
 #pragma warning disable xUnit1031 // properties run synchronously; the loops complete on their own threads
 
@@ -161,4 +162,36 @@ public sealed class PgPropertyTests
             return res.Status == PgStatus.ServerError && res.SqlState == "22021";
         return res.IsOk && back.Number == number && back.Text == text && back.Array!.SequenceEqual(array);
     }
+
+    /// <summary>The ways to write one DEALLOCATE: the keywords in any case, PREPARE or not, comments and space
+    /// anywhere between, a bare name in any case or a quoted one, a semicolon after.</summary>
+    [Property(MaxTest = 500)]
+    public bool ADeallocateOfAClientsStatementIsReadWhateverItsSpelling(NonNegativeInt id, bool prepare, bool quoted, bool semicolon, int seed)
+    {
+        var random = new Random(seed);
+        string Case(string word) => string.Concat(word.Select(c => random.Next(2) == 0 ? char.ToLowerInvariant(c) : char.ToUpperInvariant(c)));
+        string Gap() => random.Next(4) switch { 0 => " ", 1 => "\n\t", 2 => " /* a /* nested */ one */ ", _ => " -- a line\n" };
+        string name = quoted ? $"\"s{id.Get}\"" : Case($"s{id.Get}");
+        string sql = (random.Next(2) == 0 ? "" : Gap()) + Case("deallocate") + Gap() + (prepare ? Case("prepare") + Gap() : "") + name
+            + (semicolon ? Gap() + ";" : "") + (random.Next(2) == 0 ? "" : Gap());
+        return PgConnection.Deallocated(sql) == id.Get;
+    }
+
+    [Theory]
+    [InlineData("DEALLOCATE myplan", -1)]
+    [InlineData("DEALLOCATE prepare", -1)] // a statement named prepare
+    [InlineData("DEALLOCATE PREPARE s", -1)]
+    [InlineData("DEALLOCATE s01", -1)]
+    [InlineData("DEALLOCATE \"S1\"", -1)] // quoted: another name than s1
+    [InlineData("DEALLOCATE \"s1\"\"\"", -1)]
+    [InlineData("DEALLOCATE s99999999999", -1)]
+    [InlineData("DEALLOCATE s1x", -1)]
+    [InlineData("DEALLOCATE S1", 1)]
+    [InlineData("DEALLOCATE s1; SELECT 1", -2)]
+    [InlineData("DEALLOCATE \"s1", -2)]
+    [InlineData("DEALLOCATE /* never closed", -2)]
+    [InlineData("DEALLOCATE", -2)]
+    [InlineData("SELECT 1", -2)]
+    [InlineData("", -2)]
+    public void ADeallocateNamesTheClientsStatementOnlyInItsForm(string sql, int id) => Assert.Equal(id, PgConnection.Deallocated(sql));
 }
