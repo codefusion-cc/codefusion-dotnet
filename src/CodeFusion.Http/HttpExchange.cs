@@ -59,14 +59,23 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     // this connection's id in its events. The loop's edges are not repeated, so one that comes while no wait is armed
     // is kept in _edge for the next wait (Edge), and a receive that fills the buffer sets it too, since the kernel
     // won't announce the bytes it left. An edge that said the client closed or reset stays (Hangup): the receive that
-    // took the bytes that came with it doesn't see the end, so every later wait reads at once until one does.
+    // took the bytes that came with it doesn't see the end, so every later wait reads at once until one does; a
+    // receive that finds nothing clears it, since after a FIN or an error recv never says EAGAIN, so a made-up or
+    // stale one (a timeout's Kick that lands on the connection object's next socket) costs one read. The bits above
+    // the state count the edges, so that clear can't undo an edge that came after the receive began.
     // Whoever turns _armed from 1 to 0 completes the wait, exactly once.
     internal EventLoop? Loop;
     internal uint ConnectionId;
-    const int NoEdge = 0, Edge = 1, Hangup = 2;
+    const int NoEdge = 0, Edge = 1, Hangup = 2, EdgeState = 3, EdgeCount = 4;
     int _armed, _edge;
+    // A connection always readable again could hold its loop's thread: the reads it starts there in one wake-up.
+    const int ReadsPerWake = 16;
+    int _reads, _readsWake;
     readonly Kicker _kicker;
     readonly SendTurn _sendTurn = new();
+    // A send waiting for room on its event loop: armed until the loop's writable edge (or a Kick) takes it.
+    readonly SendTurn _room = new();
+    int _roomArmed;
 
     // The handler, in the low two bits: none, Running, Abandoned (running, and the client reset or the connection
     // failed: the response is dropped) or HalfClosed (running, and the client sent its FIN: Aborted is canceled, the
@@ -168,8 +177,9 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     /// connection fails. At once, or within <see cref="HttpServerOptions.HeartbeatInterval"/> when the client had sent
     /// its next request first (a FIN behind it is seen on Linux and macOS only). After a FIN the response is still
     /// sent if the handler finishes, since the client may only have closed its sending side; after a reset or a
-    /// failure it is dropped (<see cref="IsAborted"/>). Callbacks registered on it run on the thread pool or the
-    /// connection's thread, never on the server's heartbeat. The source is the connection's own, renewed between
+    /// failure it is dropped (<see cref="IsAborted"/>). Callbacks registered on it run on the thread pool or, with
+    /// <see cref="HttpTransport.Sockets"/>, the connection's own thread; never on the server's heartbeat or on an
+    /// event loop, which other connections share. The source is the connection's own, renewed between
     /// requests.</summary>
     public CancellationToken Aborted => _cts.Token;
 
@@ -267,7 +277,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     internal void Attach(Socket socket)
     {
         // bytes may have come before the loop watches the socket: the first wait reads at once
-        _edge = Edge;
+        _edge = Edge; // its count starts again: only Kick and the loop's own events read it
         Volatile.Write(ref _socket, socket);
     }
 
@@ -672,14 +682,24 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
                     _sendWaited = 0;
                     _sendRun++;
                 }
-                _sendSlice = slice;
+                _sendSlice = Loop is null ? slice : 0; // a loop's wait hands the socket nothing until it has room
                 _sendWaitAt = Environment.TickCount64;
                 SetDeadline(long.MaxValue - ++_sendWaits, false);
                 _sendWait = true;
                 Phase(ExchangePhase.Sending);
                 try
                 {
-                    n = await s.SendAsync(_out.AsMemory(_sendStart, slice), SocketFlags.None).ConfigureAwait(false);
+                    if (Loop is { } loop)
+                    {
+                        Count(ref _server.LoopSendWaits);
+                        await WaitForRoom(loop).ConfigureAwait(false);
+                        n = 0; // the loop goes round and sends what the socket takes now
+                    }
+                    else
+                    {
+                        Count(ref _server.RuntimeSendWaits);
+                        n = await s.SendAsync(_out.AsMemory(_sendStart, slice), SocketFlags.None).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception e) when (e is SocketException or ObjectDisposedException)
                 {
@@ -709,7 +729,10 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         Count(ref _server.SocketReceives);
         if (Loop is null) return _socket!.Receive(buffer, SocketFlags.None, out error);
         Count(ref _server.DirectCalls);
-        return DirectSocket.Receive(_socket!.SafeHandle, buffer, out error);
+        int edge = Volatile.Read(ref _edge);
+        int n = DirectSocket.Receive(_socket!.SafeHandle, buffer, out error);
+        if (error == SocketError.WouldBlock) NothingWaited(edge);
+        return n;
     }
 
     int Send(Socket s, ReadOnlySpan<byte> buffer, out SocketError error)
@@ -752,6 +775,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         _rs = Idle;
         Loop = null;
         _edge = NoEdge;
+        _roomArmed = 0;
         _checkGone = false; // a watch that came back after the last handler ended may have set it
         Volatile.Write(ref _deadline, 0);
         _idleWait = false;
@@ -794,7 +818,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         {
             // Disposed by the heartbeat or a stop, or the receive couldn't start: nothing would tell the loop that
             // the client left, so the request counts as gone. Its handler is still awaited before anything closes.
-            Gone(_handler, reset: true, queue: false);
+            Gone(_handler, reset: true, queue: Loop is not null);
         }
     }
 
@@ -825,43 +849,121 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     bool Arm()
     {
         Interlocked.Exchange(ref _armed, 1);
-        return Volatile.Read(ref _edge) == NoEdge || !Disarm();
+        if ((Volatile.Read(ref _edge) & EdgeState) == NoEdge) return true;
+        // On its loop's thread, past its share of this wake-up, the connection waits for the loop to have served the
+        // others: armed, with its edge kept, and handed to the loop's next round.
+        if (Loop is { } loop && EventLoop.Current == loop && !TakeRead(loop))
+        {
+            loop.Later(this);
+            return true;
+        }
+        return !Disarm();
+    }
+
+    bool TakeRead(EventLoop loop)
+    {
+        if (_readsWake != loop.Wakes)
+        {
+            _readsWake = loop.Wakes;
+            _reads = 0;
+        }
+        return ++_reads <= ReadsPerWake;
     }
 
     /// <summary>Takes back the armed wait: true when this caller is the one to complete it.</summary>
     bool Disarm()
     {
         if (Interlocked.CompareExchange(ref _armed, 0, 1) != 1) return false;
-        // what the edge announced is read after this, by the receive or the peek the completion leads to
-        Interlocked.CompareExchange(ref _edge, NoEdge, Edge);
+        // what the edge announced is read after this, by the receive or the peek the completion leads to; a hang-up
+        // stays until a receive sees the end, or finds nothing
+        SetEdge(Edge, NoEdge, count: false);
         return true;
     }
 
-    /// <summary>Event loop, on its thread: the socket turned readable, or <paramref name="closed"/>. Completes the
-    /// armed wait, or keeps the edge for the next one.</summary>
+    /// <summary>Event loop: the socket turned readable, or <paramref name="closed"/>. Completes the armed wait, or
+    /// keeps the edge for the next one.</summary>
     internal void Readable(bool closed)
     {
-        if (closed) Interlocked.Exchange(ref _edge, Hangup);
-        else Interlocked.CompareExchange(ref _edge, Edge, NoEdge);
+        if (closed) SetEdge(-1, Hangup, count: true);
+        else SetEdge(NoEdge, Edge, count: true);
         if (Disarm()) WatchCompleted();
+    }
+
+    /// <summary>Sets the edge's state to <paramref name="to"/> if it is <paramref name="from"/> (-1: whatever it is),
+    /// counting an edge if <paramref name="count"/>; a plain edge never replaces a hang-up.</summary>
+    void SetEdge(int from, int to, bool count)
+    {
+        while (true)
+        {
+            int e = Volatile.Read(ref _edge);
+            int state = e & EdgeState;
+            if (from >= 0 && state != from)
+            {
+                if (!count) return;
+                to = state; // the state stays; the edge is still counted
+            }
+            int next = ((count ? e + EdgeCount : e) & ~EdgeState) | to;
+            if (Interlocked.CompareExchange(ref _edge, next, e) == e) return;
+        }
     }
 
     /// <summary>A receive filled the buffer: more may wait in the kernel, which an edge-triggered loop won't announce.</summary>
     void MoreMayWait()
     {
-        if (Loop is not null) Interlocked.CompareExchange(ref _edge, Edge, NoEdge);
+        if (Loop is not null) SetEdge(NoEdge, Edge, count: false);
+    }
+
+    /// <summary>A receive found nothing: a hang-up seen before it began, and no edge since, was not the client's.</summary>
+    void NothingWaited(int before)
+    {
+        if ((before & EdgeState) == Hangup) Interlocked.CompareExchange(ref _edge, before & ~EdgeState, before);
     }
 
     /// <summary>The socket was closed under the loop (a timeout, the stop's abort): no edge will tell the connection,
     /// so one is made, on the thread pool rather than the closer's own thread.</summary>
     void Kick()
     {
-        if (Loop is not null) ThreadPool.UnsafeQueueUserWorkItem(_kicker, preferLocal: false);
+        if (Loop is null) return;
+        _kicker.Id = ConnectionId;
+        ThreadPool.UnsafeQueueUserWorkItem(_kicker, preferLocal: false);
     }
 
+    /// <summary>A Kick, for the connection it was queued for: one that runs after the object went to the next socket
+    /// does nothing.</summary>
     sealed class Kicker(HttpExchange owner) : IThreadPoolWorkItem
     {
-        public void Execute() => owner.Readable(closed: true);
+        public volatile uint Id;
+
+        public void Execute()
+        {
+            if (owner.ConnectionId != Id) return;
+            owner.Writable();
+            owner.Readable(closed: true);
+        }
+    }
+
+    /// <summary>Event loop: waits for the socket to have room. Armed before the loop is asked, and the kernel reports
+    /// room already there, so no edge falls between.</summary>
+    ValueTask WaitForRoom(EventLoop loop)
+    {
+        ValueTask wait = _room.Wait();
+        Interlocked.Exchange(ref _roomArmed, 1);
+        try
+        {
+            loop.WaitWritable(_socket!, Slot, ConnectionId);
+        }
+        catch
+        {
+            Interlocked.Exchange(ref _roomArmed, 0); // the wait is never awaited: the send fails with this
+            throw;
+        }
+        return wait;
+    }
+
+    /// <summary>Event loop: the socket has room to send, or failed. Completes a send's wait for it, if one is armed.</summary>
+    internal void Writable()
+    {
+        if (Interlocked.CompareExchange(ref _roomArmed, 0, 1) == 1) _room.Complete();
     }
 
     /// <summary>Before a send: on its loop's thread in a wake-up, the answers wait until the batch's hook has run, then
@@ -927,7 +1029,8 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     /// more to tell after a request or a FIN, so the heartbeat looks from then on.</summary>
     void Seen(int h, Peer p)
     {
-        if (p != Peer.Sending) Gone(h, reset: p == Peer.Reset, queue: false);
+        // a loop's thread is every connection's on it: the cancel and what the handler does after it go to the pool
+        if (p != Peer.Sending) Gone(h, reset: p == Peer.Reset, queue: Loop is not null);
         if (p != Peer.Reset) _checkGone = true;
     }
 
@@ -1030,7 +1133,11 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         bool late = forced || now - Math.Max(_ackedAt, waitAt) > _requestMs
             || (_sendMsPerByte > 0 && clock > Math.Max(_sendGraceMs, _sendPaid));
         // a reset: a plain close would leave the kernel sending what it holds to a client that isn't reading
-        if (late && Interlocked.CompareExchange(ref _deadline, -1, d) == d) s.Close(0);
+        if (late && Interlocked.CompareExchange(ref _deadline, -1, d) == d)
+        {
+            s.Close(0);
+            Kick(); // a loop's wait for room hears nothing of a closed socket
+        }
     }
 
     /// <summary>How much of the run the client's TCP has acknowledged. Linux says how much it acknowledged on the
@@ -1217,7 +1324,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     [Conditional("DEBUG")]
     internal void CheckPooled()
     {
-        if (_in is not null || _out is not null || _rs != Idle || _armed != 0 || Loop is not null || (_handler & HandlerState) != NoHandler || _checkGone || Volatile.Read(ref _deadline) != 0
+        if (_in is not null || _out is not null || _rs != Idle || _armed != 0 || _roomArmed != 0 || Loop is not null || (_handler & HandlerState) != NoHandler || _checkGone || Volatile.Read(ref _deadline) != 0
             || _req.HeadEnd != 0 || _req.Raw != 0 || _cts.IsCancellationRequested)
             throw new InvalidOperationException("a connection went back to the pool holding a buffer, a request or a canceled Aborted");
         CheckInvariants();

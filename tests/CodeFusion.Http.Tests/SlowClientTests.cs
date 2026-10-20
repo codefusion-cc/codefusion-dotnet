@@ -556,6 +556,6 @@ public sealed class SlowClientTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new MinDataRate(double.PositiveInfinity, TimeSpan.Zero));
         Assert.Throws<ArgumentOutOfRangeException>(() => new MinDataRate(1, TimeSpan.FromTicks(-1)));
         Assert.Throws<ArgumentException>(() => new HttpServer(new HttpServerOptions { MaxConnections = 0 }, TestServer.Echo));
-        await using var off = new HttpServer(new HttpServerOptions { MaxConnections = 1, MinRequestBodyDataRate = null, MinResponseDataRate = null }, TestServer.Echo);
+        await using var off = new HttpServer(TestTransport.Apply(new HttpServerOptions { MaxConnections = 1, MinRequestBodyDataRate = null, MinResponseDataRate = null }), TestServer.Echo);
     }
 }

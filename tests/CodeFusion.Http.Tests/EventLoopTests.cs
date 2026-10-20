@@ -22,23 +22,9 @@ namespace CodeFusion.Http.Tests;
 /// </summary>
 public sealed class EventLoopTests
 {
-    /// <summary>Sets <paramref name="transport"/>, skipping the test where it doesn't run.</summary>
-    internal static void Use(HttpServerOptions o, HttpTransport transport)
-    {
-        Assert.SkipWhen(transport == HttpTransport.EventLoop && !TestTransport.EventLoopsSupported, "event loops run on Linux and macOS");
-        o.Transport = transport;
-    }
-
-    /// <summary>As <see cref="Use"/>, with an empty batch hook on the event loop, so its calls are measured too.</summary>
-    internal static void UseWithHook(HttpServerOptions o, HttpTransport transport)
-    {
-        Use(o, transport);
-        if (transport == HttpTransport.EventLoop) o.OnEventLoopBatch = static _ => { };
-    }
-
     static TestServer Start(HttpHandler handler, Action<HttpServerOptions>? configure = null) => TestServer.Start(handler, o =>
     {
-        Use(o, HttpTransport.EventLoop);
+        TestTransport.Use(o, HttpTransport.EventLoop);
         o.EventLoops = 1;
         configure?.Invoke(o);
     });
@@ -69,7 +55,7 @@ public sealed class EventLoopTests
     public async Task EachKeepAliveRequestCostsThisManyReceives(HttpTransport transport, int least, int most)
     {
         Assert.SkipUnless(AllocationTests.Debugger(), "Debug builds count the receives");
-        await using var t = TestServer.Start(Path, o => Use(o, transport));
+        await using var t = TestServer.Start(Path, o => TestTransport.Use(o, transport));
         using Client c = await t.ConnectAsync();
         await c.SendAsync(Get("/warm"));
         await c.ReadAsync();
@@ -82,8 +68,9 @@ public sealed class EventLoopTests
             Assert.Equal($"/{i}", r.Text);
         }
         int receives = Volatile.Read(ref t.Server.SocketReceives) - before;
-        // the last request's wait for the next one may or may not have started when the count is read
-        Assert.InRange(receives, least * N, most * N + 1);
+        // the wait after the warm-up and the one after the last request may each start before or after a count is
+        // read: on Sockets each is a receive call, on the loop none
+        Assert.InRange(receives, least * N, most * N + 2);
     }
 
     // The loop reads and sends with recv and send themselves, not through Socket's wrappers; Sockets keeps those.
@@ -93,7 +80,7 @@ public sealed class EventLoopTests
     public async Task EachKeepAliveRequestMakesThisManyDirectCalls(HttpTransport transport, int perRequest)
     {
         Assert.SkipUnless(AllocationTests.Debugger(), "Debug builds count the calls");
-        await using var t = TestServer.Start(Path, o => Use(o, transport));
+        await using var t = TestServer.Start(Path, o => TestTransport.Use(o, transport));
         using Client c = await t.ConnectAsync();
         await c.SendAsync(Get("/warm"));
         await c.ReadAsync();
@@ -172,8 +159,10 @@ public sealed class EventLoopTests
         {
             if (x.Path.SequenceEqual("/block"u8))
             {
-                blockedOn = Thread.CurrentThread.Name;
-                hold.Wait(TimeSpan.FromSeconds(10));
+                Volatile.Write(ref blockedOn, Thread.CurrentThread.Name ?? "a pool thread");
+                // only the loop's thread is held: the run may have read /block on the pool thread that finished
+                // /warm, if that thread hadn't armed its wait yet when the request came
+                if (Thread.CurrentThread.Name?.StartsWith("http event loop", StringComparison.Ordinal) == true) hold.Wait(TimeSpan.FromSeconds(10));
             }
             return Path(x);
         });
@@ -184,9 +173,15 @@ public sealed class EventLoopTests
             await c.SendAsync(Get("/warm"));
             await c.ReadAsync();
         }
-        await blocker.SendAsync(Get("/block"));
-        await Until(() => Volatile.Read(ref blockedOn) is not null, 5000, () => "the blocking request never started");
-        Assert.StartsWith("http event loop", blockedOn);
+        for (int attempt = 0; ; attempt++)
+        {
+            Volatile.Write(ref blockedOn, null);
+            await blocker.SendAsync(Get("/block"));
+            await Until(() => Volatile.Read(ref blockedOn) is not null, 5000, () => "the blocking request never started");
+            if (Volatile.Read(ref blockedOn)!.StartsWith("http event loop", StringComparison.Ordinal)) break;
+            Assert.Equal("/block", (await blocker.ReadAsync()).Text);
+            Assert.True(attempt < 20, "/block never ran on the loop's thread");
+        }
         await leaver.SendAsync("GET /half");
         if (reset) leaver.Reset();
         else leaver.Socket.Shutdown(SocketShutdown.Send);

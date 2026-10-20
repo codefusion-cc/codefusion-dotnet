@@ -18,7 +18,7 @@ internal static class ServerChecks
     {
         // the stop gives up on connections after its own waits, which a loaded machine can outlast
         long until = Environment.TickCount64 + 5000;
-        while (server.Connections > 0 && Environment.TickCount64 < until) await Task.Delay(5);
+        while ((server.Connections > 0 || server.EventLoopsRunning > 0) && Environment.TickCount64 < until) await Task.Delay(5);
         int failed = Volatile.Read(ref server.FailedConnections);
         Assert.True(failed == 0, $"{failed} connection loop(s) threw (\"http connection failed\" on stderr)");
         int dropped = Volatile.Read(ref server.CallbackFailures);

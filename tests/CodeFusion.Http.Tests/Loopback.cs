@@ -52,6 +52,17 @@ internal sealed class TestServer : IAsyncDisposable
         }
     }
 
+    /// <summary>Waits until <paramref name="done"/>, failing the test with <paramref name="what"/> past the time.</summary>
+    public static async Task Until(Func<bool> done, int timeoutMs, Func<string> what)
+    {
+        long until = Environment.TickCount64 + timeoutMs;
+        while (!done())
+        {
+            if (Environment.TickCount64 > until) Assert.Fail(what());
+            await Task.Delay(5);
+        }
+    }
+
     /// <summary>Stops the server, then fails the test if it didn't stop clean (<see cref="ServerChecks"/>): a
     /// connection loop that threw is only logged ("http connection failed"), so the test would pass, and on a loaded
     /// machine the log line can land in a later allocation test instead and fail that one.</summary>

@@ -102,7 +102,7 @@ public class AllocationTests(ITestOutputHelper output)
     public async Task KeepAliveRequestsAllocateNothing(bool async, int connections, HttpTransport transport)
     {
         Assert.SkipWhen(Debugger(), "Debug builds make every async method's state machine a class: run in Release");
-        await using var t = TestServer.Start(async ? Async : Sync, o => EventLoopTests.UseWithHook(o, transport));
+        await using var t = TestServer.Start(async ? Async : Sync, o => TestTransport.UseWithHook(o, transport));
         byte[] request = System.Text.Encoding.ASCII.GetBytes(Request);
         var sockets = new Socket[connections];
         var responseLength = new int[connections];

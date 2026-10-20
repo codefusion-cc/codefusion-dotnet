@@ -346,13 +346,8 @@ public sealed class CloseTests
         DebugOnly();
         TaskCompletionSource waiting = Signal(), release = Signal();
         using var secondRuns = new ManualResetEventSlim();
-        int calls = 0, forced = 0;
-        await using var t = TestServer.Start(x => Interlocked.Increment(ref calls) switch
-        {
-            1 => First(x),
-            2 => Second(x),
-            _ => Third(x),
-        });
+        int forced = 0, thirdSent = 0;
+        await using var t = TestServer.Start(x => x.Path.SequenceEqual("/1"u8) ? First(x) : x.Path.SequenceEqual("/2"u8) ? Second(x) : Third(x));
         async ValueTask First(HttpExchange x)
         {
             await release.Task;
@@ -370,10 +365,12 @@ public sealed class CloseTests
             return default;
         }
         // the watch's peek "finds" the first request's client gone (as a reset would), but only reports it once the
-        // second request's handler runs: the handler count tells the two apart
+        // second request's handler runs: the handler count tells the two apart. Only the completion /3 makes: an
+        // event loop's edge that came before the watch armed completes it on the connection's own thread, which the
+        // hook would hold before the handler's wait began (the warm-up below spends the connection's first edge)
         t.Server.WatchHook = (x, gone) =>
         {
-            if (Interlocked.Exchange(ref forced, 1) == 1) return gone;
+            if (Volatile.Read(ref thirdSent) == 0 || Interlocked.Exchange(ref forced, 1) == 1) return gone;
             secondRuns.Wait(TimeSpan.FromSeconds(5));
             return true;
         };
@@ -384,9 +381,12 @@ public sealed class CloseTests
             if (p == ExchangePhase.HandlerWaiting) waiting.TrySetResult();
         };
         using Client c = await t.ConnectAsync();
+        await c.SendAsync("GET /warm HTTP/1.1\r\nHost: x\r\n\r\n");
+        Assert.Equal("third", (await c.ReadAsync()).Text);
         // the second is read with the first, so its handler starts while the watch's completion is held
         await c.SendAsync("GET /1 HTTP/1.1\r\nHost: x\r\n\r\nGET /2 HTTP/1.1\r\nHost: x\r\n\r\n");
         await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Volatile.Write(ref thirdSent, 1);
         await c.SendAsync("GET /3 HTTP/1.1\r\nHost: x\r\n\r\n"); // completes the watch while the first handler waits
         await Task.Delay(100);
         release.SetResult();

@@ -15,14 +15,25 @@ internal static class TestTransport
             ? Enum.Parse<HttpTransport>(name, ignoreCase: true)
             : HttpTransport.Sockets;
 
-    /// <summary>Linux (epoll) and macOS (kqueue).</summary>
-    public static bool EventLoopsSupported => OperatingSystem.IsLinux() || OperatingSystem.IsMacOS();
-
     /// <summary>Sets the default transport; two loops, so connections are spread over more than one.</summary>
     public static HttpServerOptions Apply(HttpServerOptions o)
     {
         o.Transport = Default;
         if (Default == HttpTransport.EventLoop) o.EventLoops = 2;
         return o;
+    }
+
+    /// <summary>Sets <paramref name="transport"/>, skipping the test where it doesn't run.</summary>
+    public static void Use(HttpServerOptions o, HttpTransport transport)
+    {
+        Xunit.Assert.SkipWhen(transport == HttpTransport.EventLoop && !EventLoop.Supported, "event loops run on Linux and macOS");
+        o.Transport = transport;
+    }
+
+    /// <summary>As <see cref="Use"/>, with an empty batch hook on the event loop, so its calls are measured too.</summary>
+    public static void UseWithHook(HttpServerOptions o, HttpTransport transport)
+    {
+        Use(o, transport);
+        if (transport == HttpTransport.EventLoop) o.OnEventLoopBatch = static _ => { };
     }
 }

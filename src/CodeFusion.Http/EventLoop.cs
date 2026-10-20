@@ -40,7 +40,13 @@ internal abstract unsafe class EventLoop
     // This thread's loop index + 1 (0 on other threads), and the loop whose wake-up it is handling, if any: answers
     // finished then wait in _sends until the batch hook has run.
     [ThreadStatic] static int t_index;
-    [ThreadStatic] static EventLoop? t_batching;
+    [ThreadStatic] static EventLoop? t_batching, t_loop;
+    // Connections that used their share of a wake-up's reads (HttpExchange.Arm), each with the id it had then: the
+    // next round, after a wait that doesn't block, takes them up once the others had their turn.
+    (HttpExchange X, uint Id)[] _later = new (HttpExchange, uint)[16], _taking = new (HttpExchange, uint)[16];
+    int _laterCount;
+    readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    volatile bool _failed;
     HttpExchange?[] _sends = new HttpExchange?[64];
     int _sendCount;
     // Linux: the loop's own listening socket (SO_REUSEPORT), whose connections it accepts on its thread; null when the
@@ -71,6 +77,25 @@ internal abstract unsafe class EventLoop
     /// <summary>The loop whose wake-up this thread is handling now, if any.</summary>
     public static EventLoop? Batching => t_batching;
 
+    /// <summary>The loop whose thread this is, if any.</summary>
+    public static EventLoop? Current => t_loop;
+
+    /// <summary>The wake-ups so far: what a connection's share of reads is counted against.</summary>
+    public int Wakes { get; private set; }
+
+    /// <summary>Its wait failed: it takes no new connections.</summary>
+    public bool Failed => _failed;
+
+    /// <summary>Completes once the thread has ended (or at once if it never started).</summary>
+    public Task Exited => _exited.Task;
+
+    /// <summary>On this loop's thread: takes up <paramref name="x"/>'s armed wait in the next round.</summary>
+    public void Later(HttpExchange x)
+    {
+        if (_laterCount == _later.Length) Array.Resize(ref _later, _later.Length * 2);
+        _later[_laterCount++] = (x, x.ConnectionId);
+    }
+
     /// <summary>Holds <paramref name="x"/>'s send until the batch's hook has run; the returned wait completes, on
     /// this thread, when its turn comes.</summary>
     public ValueTask WaitToSend(HttpExchange x)
@@ -88,12 +113,15 @@ internal abstract unsafe class EventLoop
     {
         Closed();
         Queue.Dispose();
+        _exited.TrySetResult();
     }
 
-    /// <summary>Wakes the thread to end, and waits for it unless this is that thread.</summary>
+    /// <summary>Wakes the thread to end once its batch is done; <see cref="Exited"/> says when it has. A handler that
+    /// blocks the thread delays that, so the stop waits for it only so long.</summary>
     public void Stop()
     {
         _stopping = true;
+        if (!_thread.IsAlive) _exited.TrySetResult(); // never started, or ended
         try
         {
             Wake();
@@ -102,7 +130,6 @@ internal abstract unsafe class EventLoop
         {
             // it has ended already
         }
-        if (Thread.CurrentThread != _thread && _thread.IsAlive) _thread.Join();
     }
 
     /// <summary>Watches <paramref name="socket"/> from now on: its edges go to the connection in
@@ -132,6 +159,7 @@ internal abstract unsafe class EventLoop
         byte* events = (byte*)NativeMemory.Alloc(MaxEvents, (nuint)EventSize);
         bool held = false;
         t_index = _index + 1;
+        t_loop = this;
         try
         {
             Queue.DangerousAddRef(ref held);
@@ -139,20 +167,28 @@ internal abstract unsafe class EventLoop
             bool stop = false;
             while (!stop)
             {
-                int n = Wait(queue, events, MaxEvents);
+                bool fail = false;
+                WaitFails(ref fail);
+                int n = fail ? -1 : Wait(queue, events, MaxEvents, block: _laterCount == 0);
                 if (n < 0)
                 {
-                    if (Marshal.GetLastPInvokeError() == Interrupted) continue;
-                    // only a broken descriptor gets here: its connections are left to their timeouts
-                    _server.Report("http event loop failed", Errno(OperatingSystem.IsLinux() ? "epoll_wait" : "kevent"));
+                    if (!fail && Marshal.GetLastPInvokeError() == Interrupted) continue;
+                    // Only a broken descriptor gets here. The loop takes no more connections (its listener closes, so
+                    // the kernel sends them to the others), and the ones it had are closed: nothing would wake them.
+                    _failed = true;
+                    _server.Report("http event loop failed", fail ? new IOException("the test hook failed the wait")
+                        : Errno(OperatingSystem.IsLinux() ? "epoll_wait" : "kevent"));
+                    _listener?.Dispose();
+                    _server.AbortConnectionsOf(this);
                     return;
                 }
+                Wakes++;
                 // Every ready connection first, then the hook, then the answers: the batch ends whole even when the
                 // stop's wake comes with it, so no connection is left waiting for its turn to send.
                 t_batching = this;
                 for (int i = 0; i < n; i++)
                 {
-                    ulong token = TokenAt(events, i, out bool closed);
+                    ulong token = TokenAt(events, i, out bool readable, out bool writable, out bool closed);
                     if (token == WakeToken)
                     {
                         stop = _stopping;
@@ -165,7 +201,7 @@ internal abstract unsafe class EventLoop
                     }
                     try
                     {
-                        _server.Readable((int)(uint)token, (uint)(token >> 32), closed);
+                        _server.Ready((int)(uint)token, (uint)(token >> 32), readable, writable, closed);
                     }
                     catch (Exception e)
                     {
@@ -174,6 +210,7 @@ internal abstract unsafe class EventLoop
                         _server.Report("http event loop failed", e);
                     }
                 }
+                TakeLater();
                 if (_server.Options.OnEventLoopBatch is { } hook)
                 {
                     try
@@ -196,7 +233,36 @@ internal abstract unsafe class EventLoop
             if (held) Queue.DangerousRelease();
             Closed();
             Queue.Dispose();
+            _exited.TrySetResult();
         }
+    }
+
+    /// <summary>The connections put off in the last round, each if it is still the one it was.</summary>
+    void TakeLater()
+    {
+        (_taking, _later) = (_later, _taking);
+        int n = _laterCount;
+        _laterCount = 0;
+        for (int i = 0; i < n; i++)
+        {
+            (HttpExchange x, uint id) = _taking[i];
+            _taking[i] = default;
+            try
+            {
+                if (x.ConnectionId == id) x.Readable(closed: false);
+            }
+            catch (Exception e)
+            {
+                Interlocked.Increment(ref _server.FailedConnections);
+                _server.Report("http event loop failed", e);
+            }
+        }
+    }
+
+    [System.Diagnostics.Conditional("DEBUG")]
+    void WaitFails(ref bool fail)
+    {
+        if (_server.LoopWaitHook is { } hook) fail = hook(_index);
     }
 
     /// <summary>Linux: makes <paramref name="listener"/> this loop's own, its connections accepted on this loop's
@@ -332,12 +398,38 @@ internal abstract unsafe class EventLoop
     /// on failure.</summary>
     protected abstract int Add(int queue, int fd, ulong token);
 
-    /// <summary>Waits for events; their count, or -1 and errno.</summary>
-    protected abstract int Wait(int queue, byte* events, int max);
+    /// <summary>Waits for events (or, unless <paramref name="block"/>, takes those already there); their count, or -1
+    /// and errno.</summary>
+    protected abstract int Wait(int queue, byte* events, int max, bool block);
 
-    /// <summary>The token of event <paramref name="i"/>, and whether the client closed or reset: an edge that also
-    /// brought bytes is all the kernel says of that, so the connection must not take a short read for the end of it.</summary>
-    protected abstract ulong TokenAt(byte* events, int i, out bool closed);
+    /// <summary>The token of event <paramref name="i"/>; whether the socket turned readable or writable; and whether the
+    /// client closed or reset: an edge that also brought bytes is all the kernel says of that, so the connection must
+    /// not take a short read for the end of it. A close or an error makes it both readable and writable.</summary>
+    protected abstract ulong TokenAt(byte* events, int i, out bool readable, out bool writable, out bool closed);
+
+    /// <summary>Wakes the connection once socket <paramref name="fd"/>, already in the set, has room to send: on this
+    /// loop rather than the runtime's own epoll. -1 and errno on failure.</summary>
+    protected abstract int WatchWrite(int queue, int fd, ulong token);
+
+    /// <summary>The connection in <paramref name="slot"/> (while its id is <paramref name="id"/>) waits to send:
+    /// its next writable edge goes to it. Throws as <see cref="Add(Socket, int, uint)"/> does.</summary>
+    public void WaitWritable(Socket socket, int slot, uint id)
+    {
+        SafeSocketHandle s = socket.SafeHandle;
+        bool socketHeld = false, queueHeld = false;
+        try
+        {
+            s.DangerousAddRef(ref socketHeld);
+            Queue.DangerousAddRef(ref queueHeld);
+            if (WatchWrite((int)Queue.DangerousGetHandle(), (int)s.DangerousGetHandle(), (uint)slot | (ulong)id << 32) < 0)
+                throw Errno(OperatingSystem.IsLinux() ? "epoll_ctl" : "kevent");
+        }
+        finally
+        {
+            if (queueHeld) Queue.DangerousRelease();
+            if (socketHeld) s.DangerousRelease();
+        }
+    }
 
     /// <summary>Adds the listener (<paramref name="add"/>) or changes its events: readable, level-triggered
     /// (<paramref name="on"/>), or none. -1 and errno on failure.</summary>
@@ -366,7 +458,7 @@ internal abstract unsafe class EventLoop
         const int EpollCtlAdd = 1, EpollCtlMod = 3, CloExec = 0x80000; // EPOLL_CLOEXEC and EFD_CLOEXEC are O_CLOEXEC
         const int SockNonBlock = 0x800, SockCloExec = 0x80000;
         const int EAgain = 11, ENFile = 23, EMFile = 24, ENoMem = 12, ENoBufs = 105;
-        const uint EpollIn = 0x001, EpollErr = 0x008, EpollHup = 0x010, EpollRdHup = 0x2000, EpollEt = 1u << 31;
+        const uint EpollIn = 0x001, EpollOut = 0x004, EpollErr = 0x008, EpollHup = 0x010, EpollRdHup = 0x2000, EpollEt = 1u << 31;
         // struct epoll_event is packed on x86 and x86-64: 12 bytes with the data at 4. Elsewhere it is aligned: 16, at 8.
         static readonly bool Packed = RuntimeInformation.ProcessArchitecture is Architecture.X64 or Architecture.X86;
 
@@ -414,7 +506,7 @@ internal abstract unsafe class EventLoop
             return epoll_ctl(queue, EpollCtlAdd, fd, ev);
         }
 
-        protected override int Wait(int queue, byte* events, int max) => epoll_wait(queue, events, max, -1);
+        protected override int Wait(int queue, byte* events, int max, bool block) => epoll_wait(queue, events, max, block ? -1 : 0);
 
         protected override int Watch(int queue, int fd, ulong token, bool add, bool on)
         {
@@ -429,11 +521,23 @@ internal abstract unsafe class EventLoop
 
         protected override bool OutOfResources(int errno) => errno is EMFile or ENFile or ENoMem or ENoBufs;
 
-        protected override ulong TokenAt(byte* events, int i, out bool closed)
+        protected override ulong TokenAt(byte* events, int i, out bool readable, out bool writable, out bool closed)
         {
             byte* ev = events + i * EventSize;
-            closed = (Unsafe.ReadUnaligned<uint>(ev) & (EpollRdHup | EpollHup | EpollErr)) != 0;
+            uint e = Unsafe.ReadUnaligned<uint>(ev);
+            closed = (e & (EpollRdHup | EpollHup | EpollErr)) != 0;
+            readable = closed || (e & EpollIn) != 0;
+            writable = (e & (EpollOut | EpollHup | EpollErr)) != 0;
             return Unsafe.ReadUnaligned<ulong>(ev + (Packed ? 4 : 8));
+        }
+
+        // Edge-triggered EPOLLOUT stays in the set once added: it fires only when a full socket gets room again, which
+        // costs nothing while the sends fit.
+        protected override int WatchWrite(int queue, int fd, ulong token)
+        {
+            byte* ev = stackalloc byte[16];
+            Event(ev, EpollIn | EpollRdHup | EpollEt | EpollOut, token);
+            return epoll_ctl(queue, EpollCtlMod, fd, ev);
         }
 
         protected override void Wake()
@@ -476,8 +580,8 @@ internal abstract unsafe class EventLoop
     /// <summary>macOS: kqueue, with EV_CLEAR for edges and a user event to wake it.</summary>
     sealed class Kqueue : EventLoop
     {
-        const short EvfiltRead = -1, EvfiltUser = -10;
-        const ushort EvAdd = 0x1, EvClear = 0x20, EvEof = 0x8000;
+        const short EvfiltRead = -1, EvfiltWrite = -2, EvfiltUser = -10;
+        const ushort EvAdd = 0x1, EvOneShot = 0x10, EvClear = 0x20, EvEof = 0x8000;
         const uint NoteTrigger = 0x01000000;
 
         public Kqueue(HttpServer server, int index) : base(server, index, Create())
@@ -505,13 +609,28 @@ internal abstract unsafe class EventLoop
             return kevent(queue, &ev, 1, null, 0, null);
         }
 
-        protected override int Wait(int queue, byte* events, int max) => kevent(queue, null, 0, (KEvent*)events, max, null);
+        protected override int Wait(int queue, byte* events, int max, bool block)
+        {
+            long* zero = stackalloc long[2]; // struct timespec { 0, 0 }
+            zero[0] = zero[1] = 0;
+            return kevent(queue, null, 0, (KEvent*)events, max, block ? null : zero);
+        }
 
-        protected override ulong TokenAt(byte* events, int i, out bool closed)
+        protected override ulong TokenAt(byte* events, int i, out bool readable, out bool writable, out bool closed)
         {
             ref KEvent ev = ref ((KEvent*)events)[i];
-            closed = (ev.Flags & EvEof) != 0;
+            bool eof = (ev.Flags & EvEof) != 0;
+            readable = ev.Filter == EvfiltRead;
+            writable = ev.Filter == EvfiltWrite;
+            closed = eof && readable;
             return ev.UData;
+        }
+
+        // One-shot: a write filter left on would fire on every acknowledgment that frees room.
+        protected override int WatchWrite(int queue, int fd, ulong token)
+        {
+            KEvent ev = new() { Ident = (nuint)fd, Filter = EvfiltWrite, Flags = EvAdd | EvOneShot, UData = token };
+            return kevent(queue, &ev, 1, null, 0, null);
         }
 
         protected override void Wake()

@@ -66,6 +66,10 @@ public sealed class HttpServer : IAsyncDisposable
     /// For tests.</summary>
     internal int DirectCalls;
 
+    /// <summary>Debug builds count here the sends that waited for room: on the runtime's SendAsync, or on an event
+    /// loop. For tests.</summary>
+    internal int RuntimeSendWaits, LoopSendWaits;
+
     /// <summary>Debug builds call it on a connection's own thread as it reaches each <see cref="ExchangePhase"/>,
     /// so a test can close, reset or stop exactly there. Release builds make no such calls.</summary>
     internal Action<HttpExchange, ExchangePhase>? PhaseHook;
@@ -83,6 +87,10 @@ public sealed class HttpServer : IAsyncDisposable
     /// <summary>Debug builds call it on the heartbeat as soon as it has read a send wait's deadline; it may hold the
     /// heartbeat there, and true makes the check find that wait too slow. Release builds make no such calls.</summary>
     internal Func<HttpExchange, bool>? SendCheckHook;
+
+    /// <summary>Debug builds call it on an event loop's thread, with its index, before each wait; true makes that wait
+    /// fail as a broken descriptor would. Release builds make no such calls.</summary>
+    internal Func<int, bool>? LoopWaitHook;
 
     readonly Lock _lock = new();
     HttpExchange?[] _slots = new HttpExchange?[256];
@@ -236,10 +244,12 @@ public sealed class HttpServer : IAsyncDisposable
 
     /// <summary>An event loop's edge for the connection in <paramref name="slot"/>, if it is still the one with
     /// <paramref name="id"/>: one in another slot, or a later socket's in this one, is left alone.</summary>
-    internal void Readable(int slot, uint id, bool closed)
+    internal void Ready(int slot, uint id, bool readable, bool writable, bool closed)
     {
         HttpExchange?[] slots = Volatile.Read(ref _slots);
-        if ((uint)slot < (uint)slots.Length && Volatile.Read(ref slots[slot]) is { } c && c.ConnectionId == id) c.Readable(closed);
+        if ((uint)slot >= (uint)slots.Length || Volatile.Read(ref slots[slot]) is not { } c || c.ConnectionId != id) return;
+        if (writable) c.Writable();
+        if (readable) c.Readable(closed);
     }
 
     async Task AcceptAsync(Socket listener)
@@ -329,11 +339,33 @@ public sealed class HttpServer : IAsyncDisposable
             }
             c.Slot = slot;
             c.ConnectionId = unchecked(++_connectionIds);
-            c.Loop = loop ?? _loops?[(int)(c.ConnectionId % (uint)_loops.Length)];
+            c.Loop = loop ?? LoopFor(c.ConnectionId);
             Volatile.Write(ref _slots[slot], c);
             _active++;
             return c;
         }
+    }
+
+    /// <summary>The loop for a connection the runtime accepted: in turn, skipping any whose wait failed. With none
+    /// left the connection waits on its socket as Sockets does.</summary>
+    EventLoop? LoopFor(uint id)
+    {
+        if (_loops is not { } loops) return null;
+        for (int i = 0; i < loops.Length; i++)
+        {
+            EventLoop l = loops[(int)((id + (uint)i) % (uint)loops.Length)];
+            if (!l.Failed) return l;
+        }
+        return null;
+    }
+
+    /// <summary>A loop whose wait failed: nothing will wake its connections again, so they are closed.</summary>
+    internal void AbortConnectionsOf(EventLoop loop)
+    {
+        HttpExchange?[] left;
+        lock (_lock) left = _slots[.._slotCount];
+        foreach (HttpExchange? c in left)
+            if (c is not null && c.Loop == loop) c.Abort();
     }
 
     internal void Release(HttpExchange c)
@@ -422,7 +454,18 @@ public sealed class HttpServer : IAsyncDisposable
             long hard = Environment.TickCount64 + 1000;
             while (Connections > 0 && Environment.TickCount64 < hard) await Task.Delay(10).ConfigureAwait(false);
         }
-        foreach (EventLoop l in _loops ?? []) l.Stop();
+        // A loop ends after its batch; one a handler blocks is left behind after the same second a handler that never
+        // completes gets above, as a background thread that closes its descriptors when it ends.
+        if (_loops is { } loops)
+        {
+            var exits = new Task[loops.Length];
+            for (int i = 0; i < loops.Length; i++)
+            {
+                loops[i].Stop();
+                exits[i] = loops[i].Exited;
+            }
+            await Task.WhenAny(Task.WhenAll(exits), Task.Delay(1000)).ConfigureAwait(false);
+        }
         _stopped = true;
         _wake.Set();
         _heartbeat?.Join();

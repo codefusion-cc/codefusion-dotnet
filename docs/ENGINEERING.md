@@ -945,9 +945,27 @@ A handler that blocks its thread holds up every connection on its loop: Sockets 
     share its connections instead of failing to bind.
   - macOS keeps one listener and the runtime's accepts.
 
+### Review fixes (review of f00a731)
+
+Each fix had its test first, seen failing on the code before it (`EventLoopGuaranteeTests` unless named).
+
+| Finding | Fix | Test |
+|---|---|---|
+| 1 (high): a made-up "closed" edge (a timeout's Kick, a stale event) landing on the pooled object's next connection made every wait complete at once: a spin with no end | The edge word counts edges in its upper bits; a receive that finds nothing clears a hang-up seen before it began if no edge came since (after a FIN or an error recv never says EAGAIN). A Kick carries the connection id it was queued for. | `ALateClosedEdgeOnAReusedConnectionCostsOneReadNotASpin`: the late edge returns, costs at most 4 reads, and the connection and a new one still answer |
+| 2 (high): the stop joined each loop with no limit, so a handler blocking a loop held the stop | Loops signal `Exited`; the stop waits for them at most a second, as it waits for a handler that never completes, and leaves a held loop's background thread to end with the handler | `AStopEndsWithinItsHardAbortWhileAHandlerHoldsTheLoop` |
+| 3 (medium): a client keeping every read full held its loop | 16 reads per connection per wake-up on the loop's thread, then its armed wait goes to the loop's next round (after a wait that doesn't block), behind the others | `AClientThatPipelinesWithoutPauseDoesNotHoldItsLoop`: a neighbour answered within 500 ms while one client floods |
+| 4 (medium): CI never ran the Debug-only tests on epoll | Left to the coordinator, who adds a Linux Debug pass in PR #1 | |
+| 5 (medium): the cancel of `Aborted`, and what the handler runs after it, ran on the loop's thread | `Gone` is queued to the thread pool for a loop's connection, as the heartbeat's is | `ACancelCallbackThatBlocksDoesNotHoldTheLoop`: a callback sleeping 3 s, a neighbour answered within 1 s |
+| 6 (low): the id check before `Readable` leaves a window for a stale event | Harmless after 1: a stale edge costs one read | |
+| 7 (low): a send that waited registered the socket with the runtime's epoll for good | A send waits for room on its loop: EPOLLOUT added edge-triggered to the socket's registration (it fires only when a full socket gets room), or a one-shot EVFILT_WRITE. A Kick, and the slow-send cut, wake it. | `ASendThatWaitsWaitsOnTheLoop`: 8 MB answers, no runtime send waits on the loop, at least one on Sockets |
+| 8 (low): a loop whose wait failed kept getting connections, closed without a word | The failed loop closes its listener (the kernel sends new connections to the others) and its connections; new ones go to the loops still running, or to Sockets' waits with none left | `ALoopThatFailsTakesNoNewConnections`, with a Debug hook that fails one wait |
+| 9 (low): `BytesAndTheCloseInOneEdgeStillCloseTheConnection` failed if `/block` ran on a pool thread | It holds only the loop's thread and sends `/block` again until it runs there | |
+| 10 (low): the docs didn't say what the loop gives up | SECURITY.md, `Aborted`, the package README | |
+| 11 (low): copied helpers, a server without the suite's transport, allocation rows run twice in CI | `TestTransport.Use` and `UseWithHook` over `EventLoop.Supported`; `SlowClientTests` applies the transport; CI's second run leaves out the allocation classes | |
+
 ### Tests
 
-`EventLoopTests` (17), on kqueue here and epoll in CI. `AllocationTests` and `AppAllocationTests` have EventLoop rows
+`EventLoopTests`, `EventLoopBatchTests` and `EventLoopGuaranteeTests`, on kqueue here and epoll in CI. `AllocationTests` and `AppAllocationTests` have EventLoop rows
 (0.004 to 0.05 B/request, as Sockets). `TestTransport` makes every server the tests start use the transport that
 `CODEFUSION_HTTP_TRANSPORT` names, and CI runs `CodeFusion.Http.Tests` a second time with `EventLoop`. Debug builds count
 every receive call (`HttpServer.SocketReceives`): `EachKeepAliveRequestCostsThisManyReceives` asserts 1 per request on

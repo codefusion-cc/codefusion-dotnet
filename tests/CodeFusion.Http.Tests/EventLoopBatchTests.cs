@@ -32,7 +32,7 @@ public sealed class EventLoopBatchTests
 
     static TestServer Start(HttpHandler handler, Action<int> hook) => TestServer.Start(handler, o =>
     {
-        EventLoopTests.Use(o, HttpTransport.EventLoop);
+        TestTransport.Use(o, HttpTransport.EventLoop);
         o.EventLoops = 1;
         o.OnEventLoopBatch = hook;
     });
@@ -158,7 +158,7 @@ public sealed class EventLoopBatchTests
             return default;
         }, o =>
         {
-            EventLoopTests.Use(o, HttpTransport.EventLoop);
+            TestTransport.Use(o, HttpTransport.EventLoop);
             o.EventLoops = 3;
             o.OnEventLoopBatch = loop => loops[loop] = HttpServer.CurrentEventLoop == loop;
         });
@@ -212,7 +212,7 @@ public sealed class EventLoopBatchTests
         int calls = 0;
         await using var t = TestServer.Start(Path, o =>
         {
-            EventLoopTests.Use(o, HttpTransport.Sockets);
+            TestTransport.Use(o, HttpTransport.Sockets);
             o.OnEventLoopBatch = _ => Interlocked.Increment(ref calls);
         });
         using Client c = await t.ConnectAsync();
