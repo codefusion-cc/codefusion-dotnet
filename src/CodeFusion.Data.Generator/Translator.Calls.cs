@@ -93,9 +93,13 @@ sealed partial class Translator
             if (!_inlining.Add(m.OriginalDefinition)) throw new Refused(at, $"'{m.Name}', which calls itself");
             try
             {
-                var e = new Env();
-                for (int i = 0; i < args.Count && i < m.Parameters.Length; i++) e = e.With(m.OriginalDefinition.Parameters[i], Eval(args[i], env));
-                return Through(inv.Syntax, () => Eval(body!, e));
+                var e = new Env(sites: env.Sites + SiteOf(inv.Syntax));
+                for (int i = 0; i < args.Count && i < m.Parameters.Length; i++)
+                {
+                    var v = Eval(args[i], env);
+                    e = e.With(m.OriginalDefinition.Parameters[i], v is Host h ? Argument(h) : v);
+                }
+                return Eval(body!, e);
             }
             finally
             {

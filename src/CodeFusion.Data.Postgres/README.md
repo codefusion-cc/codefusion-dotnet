@@ -81,6 +81,8 @@ a double too, but an int8 or a float read as the other throws `InvalidCastExcept
 
 A statement that opens, commits or rolls back a transaction itself (BEGIN, COMMIT, ROLLBACK and the like) breaks a
 write's group: its writes end `Broken` and the connection is replaced. So does one that drops the statements the
-connection prepared (DEALLOCATE, DISCARD ALL), in a read's group too: the next connection parses them again. After a
+connection prepared (DEALLOCATE ALL, DISCARD ALL, or a DEALLOCATE of one of them), in a read's group too: the next
+connection parses them again. The app's own `DEALLOCATE myplan` leaves the connection be. A DEALLOCATE run inside a
+function or a `DO` block isn't seen, and the next use of a statement it dropped fails with 26000. After a
 failed connect a loop waits `ReconnectDelay`, doubling up to `MaxReconnectDelay`, and fails its commands at once
 meanwhile.

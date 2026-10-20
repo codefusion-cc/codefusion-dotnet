@@ -429,7 +429,7 @@ sealed class PgConnection : IDisposable
                         break;
                     case (byte)'C': // CommandComplete
                         if (keep && ControlsTransaction(body)) throw OwnTransaction(body);
-                        if (DropsStatements(body)) throw DroppedStatements(body);
+                        if (DropsStatements(body, group, step)) throw DroppedStatements(body);
                         goto case (byte)'I';
                     case (byte)'I': // EmptyQueryResponse
                         if (error is not null || step == _stepCount || phase != 2) throw Protocol("CommandComplete out of place");
@@ -522,13 +522,120 @@ sealed class PgConnection : IDisposable
     static PgConnectionException OwnTransaction(ReadOnlySpan<byte> tag) =>
         new($"a write ran {Encoding.UTF8.GetString(tag.TrimEnd((byte)0))}, which ends or splits the transaction its group commits in");
 
-    /// <summary>A statement that dropped what this connection prepared (DEALLOCATE, DISCARD ALL): the next Bind of a
-    /// statement it thinks is parsed would fail, so the connection is replaced and the next one parses afresh. Its group
-    /// is Broken, as for a statement that controls the transaction.</summary>
-    static bool DropsStatements(ReadOnlySpan<byte> tag)
+    /// <summary>
+    /// A statement that dropped what this connection prepared (DEALLOCATE ALL, DISCARD ALL, or a DEALLOCATE of a
+    /// statement it parsed): the next Bind of a statement it thinks is parsed would fail, so the connection is replaced
+    /// and the next one parses afresh. Its group is Broken, as for a statement that controls the transaction. The tag
+    /// of one DEALLOCATE doesn't say which statement it dropped: the SQL that ran does, and the app's own (DEALLOCATE
+    /// myplan) leaves the connection be; SQL the client can't read that from counts as dropping one of its own. A
+    /// DEALLOCATE that a function or a DO block runs completes with that statement's tag, and isn't seen.
+    /// </summary>
+    bool DropsStatements(ReadOnlySpan<byte> tag, PgJob?[] group, int step)
     {
         if (tag.Length > 0 && tag[^1] == 0) tag = tag[..^1];
-        return tag.SequenceEqual("DEALLOCATE"u8) || tag.SequenceEqual("DEALLOCATE ALL"u8) || tag.SequenceEqual("DISCARD ALL"u8);
+        if (tag.SequenceEqual("DEALLOCATE ALL"u8) || tag.SequenceEqual("DISCARD ALL"u8)) return true;
+        if (!tag.SequenceEqual("DEALLOCATE"u8)) return false;
+        string? sql = null;
+        if (step < _stepCount && group[_steps[step].Slot] is { } job)
+            for (int i = 0; i < job.Count; i++)
+                if (job.Statements[i].Id == _steps[step].StatementId) sql = job.Statements[i].Sql;
+        int id = sql is null ? Unreadable : Deallocated(sql);
+        return id == Unreadable || id >= 0 && id < _prepared.Length && _prepared[id] != 0;
+    }
+
+    const int Unreadable = -2, NotOurs = -1;
+
+    /// <summary>The id of the client's statement <c>s{Id}</c> that <paramref name="sql"/>, a <c>DEALLOCATE [PREPARE]
+    /// name</c>, drops; <see cref="NotOurs"/> for another name, <see cref="Unreadable"/> for SQL it can't read so.</summary>
+    internal static int Deallocated(ReadOnlySpan<char> sql)
+    {
+        if (!Word(ref sql, out var first) || !first.Equals("DEALLOCATE", StringComparison.OrdinalIgnoreCase)) return Unreadable;
+        if (!Name(ref sql, out var name, out bool quoted)) return Unreadable;
+        // DEALLOCATE PREPARE name, or a statement named prepare
+        var rest = sql;
+        if (!quoted && name.Equals("PREPARE", StringComparison.OrdinalIgnoreCase) && Name(ref rest, out var named, out bool q))
+        {
+            name = named;
+            quoted = q;
+            sql = rest;
+        }
+        Skip(ref sql);
+        if (sql.StartsWith(";")) sql = sql[1..];
+        Skip(ref sql);
+        if (!sql.IsEmpty) return Unreadable;
+        // a bare name is folded to lower case, as Postgres folds it; the client's names are s and digits
+        if (name.Length < 2 || name[0] != 's' && (quoted || name[0] != 'S')) return NotOurs;
+        int id = 0;
+        foreach (char c in name[1..])
+        {
+            if (c is < '0' or > '9' || id > (int.MaxValue - 9) / 10) return NotOurs;
+            id = id * 10 + (c - '0');
+        }
+        return name.Length > 2 && name[1] == '0' ? NotOurs : id;
+    }
+
+    /// <summary>Past whitespace and comments.</summary>
+    static void Skip(ref ReadOnlySpan<char> sql)
+    {
+        while (true)
+        {
+            sql = sql.TrimStart();
+            if (sql.StartsWith("--"))
+            {
+                int end = sql.IndexOf('\n');
+                sql = end < 0 ? default : sql[(end + 1)..];
+            }
+            else if (sql.StartsWith("/*"))
+            {
+                int depth = 0, i = 0;
+                while (i < sql.Length)
+                {
+                    if (sql[i..].StartsWith("/*"))
+                    {
+                        depth++;
+                        i += 2;
+                    }
+                    else if (sql[i..].StartsWith("*/"))
+                    {
+                        i += 2;
+                        if (--depth == 0) break;
+                    }
+                    else i++;
+                }
+                sql = sql[Math.Min(i, sql.Length)..];
+            }
+            else return;
+        }
+    }
+
+    /// <summary>A bare word: letters, digits, _ and $, not starting with a digit.</summary>
+    static bool Word(ref ReadOnlySpan<char> sql, out ReadOnlySpan<char> word)
+    {
+        Skip(ref sql);
+        int n = 0;
+        while (n < sql.Length && (char.IsAsciiLetter(sql[n]) || sql[n] == '_' || n > 0 && (char.IsAsciiDigit(sql[n]) || sql[n] == '$'))) n++;
+        word = sql[..n];
+        sql = sql[n..];
+        return n > 0;
+    }
+
+    /// <summary>A name: a bare word, or a quoted one (a doubled quote is one in it).</summary>
+    static bool Name(ref ReadOnlySpan<char> sql, out ReadOnlySpan<char> name, out bool quoted)
+    {
+        Skip(ref sql);
+        quoted = sql.StartsWith("\"");
+        if (!quoted) return Word(ref sql, out name);
+        // a doubled quote is one in the name; kept doubled here, as no name of the client's has one
+        int end = 1;
+        while (end < sql.Length && !(sql[end] == '"' && (end + 1 == sql.Length || sql[end + 1] != '"'))) end += sql[end] == '"' ? 2 : 1;
+        if (end >= sql.Length)
+        {
+            name = default;
+            return false;
+        }
+        name = sql[1..end];
+        sql = sql[(end + 1)..];
+        return !name.IsEmpty;
     }
 
     static PgConnectionException DroppedStatements(ReadOnlySpan<byte> tag) =>

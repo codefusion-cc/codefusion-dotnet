@@ -253,9 +253,12 @@ public sealed class PgReaderTests : IAsyncDisposable
         await PgTestDb.Asleep(reader);
         Assert.NotEqual(pid, await Read(reader, Pid));
 
-        // a session that would idle on: an administrator ends it (FATAL 57P01), and the backend is gone before the
-        // next read, which goes to a new one
-        Assert.True((await Try(reader, new PgStatement("SET idle_session_timeout = 0"))).IsOk);
+        LoopChecks.Stop(reader);
+
+        // a session that would idle on (a reader without the timeout, so no timer races the steps below): an
+        // administrator ends it (FATAL 57P01), and the backend is gone before the next read, which goes to a new one
+        reader = _reader = new PgReader(PgTestDb.Settings());
+        reader.Start(1);
         long second = await Read(reader, Pid);
         await PgTestDb.Asleep(reader);
         Assert.Equal(true, await _admin.Scalar($"SELECT pg_terminate_backend({second}, 10000)"));
@@ -283,6 +286,7 @@ public sealed class PgReaderTests : IAsyncDisposable
     [InlineData("DEALLOCATE ALL")]
     [InlineData("DISCARD ALL")]
     [InlineData("DEALLOCATE {0}")]
+    [InlineData("/* its own */ deallocate prepare \"{0}\"")]
     public async Task AStatementThatDropsTheConnectionsPreparedStatementsEndsItAndTheNextReadParsesAgain(string sql)
     {
         var reader = NewReader();
@@ -294,6 +298,24 @@ public sealed class PgReaderTests : IAsyncDisposable
         Assert.Equal(PgStatus.Broken, dropped.Status);
         Assert.Equal(7, await Read(reader, Seven));
         Assert.NotEqual(pid, await Read(reader, Pid));
+    }
+
+    [Theory(Timeout = 30_000)]
+    [InlineData("myplan", "DEALLOCATE myplan")]
+    [InlineData("myplan", "deallocate prepare MyPlan")]
+    [InlineData("\"Plan\"", "DEALLOCATE \"Plan\"")]
+    [InlineData("s999999", "DEALLOCATE s999999")] // the client's form, but no statement it prepared here
+    public async Task ADeallocateOfTheAppsOwnPreparedStatementKeepsTheConnection(string name, string sql)
+    {
+        var reader = NewReader();
+        reader.Start(1);
+        long pid = await Read(reader, Pid);
+        Assert.Equal(7, await Read(reader, Seven));
+        Assert.True((await Try(reader, new PgStatement($"PREPARE {name} AS SELECT 1"))).IsOk);
+        var res = await Try(reader, new PgStatement(sql));
+        Assert.True(res.IsOk, res.ToString());
+        Assert.Equal(7, await Read(reader, Seven));
+        Assert.Equal(pid, await Read(reader, Pid));
     }
 
     [Fact(Timeout = 60_000)]

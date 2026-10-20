@@ -27,6 +27,11 @@ enum Marker
 /// <summary>One statement of a command, with the C# condition it is sent under (ThenIf).</summary>
 sealed record Statement(string Name, string Sql, List<Param> Params, Guard? Condition);
 
+/// <summary>An impure argument of an inlined call: the local <see cref="Name"/>, computed from <see cref="Code"/>
+/// where the call is (under <see cref="Under"/>, before statement <see cref="Before"/>, in the order C# makes it,
+/// <see cref="Made"/>), which the body reads.</summary>
+sealed record Argument(string Name, string Code, Guard? Under, int Before, int Made);
+
 /// <summary>A ThenIf's condition: its C#, evaluated once for all the statements under it, and the ThenIf it is in.</summary>
 sealed class Guard(string code, Guard? outer)
 {
@@ -57,6 +62,7 @@ sealed class Compiled
     public bool HasSource;
     public string? ListName, CountName;
     public List<InterceptAt> Calls = new();
+    public readonly List<Argument> Arguments = new();
 }
 
 /// <summary>A call to take over.</summary>
@@ -84,6 +90,8 @@ sealed partial class Translator
         StartMethod(method);
         _inserted.Clear();
         _evaluations.Clear();
+        _arguments.Clear();
+        _guard = null;
         var q = _q = new Compiled { Method = method };
         var ret = (INamedTypeSymbol)method.ReturnType;
         q.Shape = Known.Is(ret, K.One) ? Shape.One : Known.Is(ret, K.Many) ? Shape.Many : Known.Is(ret, K.Page) ? Shape.Page
@@ -172,14 +180,14 @@ sealed partial class Translator
                     if (!_inlining.Add(m.OriginalDefinition)) throw new Refused(at, $"'{m.Name}', which calls itself");
                     try
                     {
-                        var e = new Env();
+                        var e = new Env(sites: env.Sites + SiteOf(inv.Syntax));
                         for (int i = 0; i < args.Count && i < m.Parameters.Length; i++)
                         {
                             var v = Eval(args[i], env);
                             if (v is not (Host or Constant)) throw new Refused(args[i].Syntax.GetLocation(), "an argument to a query method that isn't known when called");
-                            e = e.With(m.OriginalDefinition.Parameters[i], v);
+                            e = e.With(m.OriginalDefinition.Parameters[i], v is Host h ? Argument(h) : v);
                         }
-                        return Through(inv.Syntax, () => Parse(body!, e));
+                        return Parse(body!, e);
                     }
                     finally
                     {
@@ -261,9 +269,9 @@ sealed partial class Translator
         }
     }
 
-    /// <summary>A value bound to a statement (under its ThenIf), as the emitter computes it: one local per value, reused
-    /// where its statement runs only when that local's did.</summary>
-    sealed record Bound(Guard? Under);
+    /// <summary>A value bound to a statement (under its ThenIf) as <see cref="Type"/>, as the emitter computes it: one
+    /// local per value, reused where its statement runs only when that local's did.</summary>
+    sealed record Bound(Guard? Under, ITypeSymbol Type);
 
     /// <summary>Per impure value of the query: where it runs (<see cref="Bound"/>, a <see cref="Guard"/> it is the
     /// condition of, or "in" another value whose C# holds it).</summary>
@@ -280,31 +288,59 @@ sealed partial class Translator
     }
 
     /// <summary>
-    /// Counts where an impure value runs. C# runs it once, so it may be bound wherever one local serves, but not also
-    /// written into another value's C# (an inlined call's argument used as is and in <c>k + 1</c>), nor under two
-    /// ThenIfs neither inside the other: there it would run twice, and is refused.
+    /// Counts where an impure value runs. C# runs it once, so it may be bound wherever one local serves: in one type
+    /// (each use converts from it), where its first binding ran. Written into another value's C# as well (a
+    /// <c>ref</c> parameter's member read as is and in <c>p.Limit + 1</c>), or bound again where that binding may not
+    /// have run, it would run twice, and is refused. An inlined call's argument is a local of its own
+    /// (<see cref="Argument(Host)"/>), so none of this refuses it.
     /// </summary>
     void Evaluated(Host h, object use)
     {
         if (h.Pure) return;
         if (!_evaluations.TryGetValue(h.Key, out var uses)) _evaluations[h.Key] = uses = new();
-        bool same = use is Bound b ? uses.Any(u => u is Bound p && Guard.Within(b.Under, p.Under)) : uses.Contains(use);
+        var at = h.Where ?? _q.Method.Locations.FirstOrDefault();
+        if (use is Bound b && uses.OfType<Bound>().FirstOrDefault() is { } first && !Known.Same(first.Type, b.Type))
+            throw new Refused(at, $"'{Short(h.Code)}', which runs when the query is called, bound as '{first.Type.ToDisplayString()}' and as " +
+                $"'{b.Type.ToDisplayString()}' (it is computed once, and one of them would lose digits: pass its value as a parameter of the query method), so it");
+        bool same = use is Bound bound ? uses.Any(u => u is Bound p && Guard.Within(bound.Under, p.Under)) : uses.Contains(use);
         if (!same)
         {
             if (uses.Count > 0)
-                throw new Refused(h.Where ?? _q.Method.Locations.FirstOrDefault(), $"'{Short(h.Code)}', which runs when the query is called, where it would run twice " +
-                    "(written into another value, or under two ThenIfs neither inside the other: pass its value as a parameter of the query method), so it");
+                throw new Refused(at, $"'{Short(h.Code)}', which runs when the query is called, where it would run twice " +
+                    "(written into another value as well, or bound inside a ThenIf and again outside it: pass its value as a parameter of the query method), so it");
             uses.Add(use);
         }
         // its parts run where it runs
         foreach (var part in h.Parts) Evaluated(part, "in" + h.Key);
     }
 
+    /// <summary>The ThenIf the statements being translated are under: where an inlined call's arguments are computed.</summary>
+    Guard? _guard;
+
+    /// <summary>The locals of the inlined calls' impure arguments, by the argument's value.</summary>
+    readonly Dictionary<string, Host> _arguments = new();
+
+    /// <summary>
+    /// <paramref name="h"/>, an argument of an inlined call: when impure, computed where the call is (under its
+    /// ThenIf, in the order C# makes it), as C# computes every argument, whether the body uses it or not, or only
+    /// under a ThenIf that doesn't hold. The body reads the local, which reads the same each time: as is, in another
+    /// value (<c>k + 1</c>) and under any ThenIf inside the call's.
+    /// </summary>
+    Host Argument(Host h)
+    {
+        if (h.Pure) return h;
+        if (_arguments.TryGetValue(h.Key, out var local)) return local;
+        Evaluated(h, new Bound(_guard, h.Type));
+        string name = "__a" + Names.Number(_q.Arguments.Count);
+        _q.Arguments.Add(new Argument(name, h.Code, _guard, _q.Statements.Count, h.Made));
+        return _arguments[h.Key] = new Host(name, h.Type) { Pure = true };
+    }
+
     Statement Add(string sql, Guard? condition)
     {
         foreach (var p in Params.Items)
             foreach (var h in p.Origins)
-                Evaluated(h, new Bound(condition));
+                Evaluated(h, new Bound(condition, p.Type));
         // named once the context's queries are all compiled (QueryGenerator.NameStatements)
         var s = new Statement(_q.Method.Name, sql, Params.Items.ToList(), condition);
         _q.Statements.Add(s);
@@ -1055,6 +1091,20 @@ sealed partial class Translator
     /// <summary>A write of a unit (Then's argument): its statements, after the ones so far.</summary>
     void Unit(IOperation write, Env env, Row? inserted, Guard? condition)
     {
+        var outer = _guard;
+        _guard = condition;
+        try
+        {
+            UnitCore(write, env, inserted, condition);
+        }
+        finally
+        {
+            _guard = outer;
+        }
+    }
+
+    void UnitCore(IOperation write, Env env, Row? inserted, Guard? condition)
+    {
         if (write is IAnonymousFunctionOperation lambda)
         {
             if (inserted is null) throw new Refused(lambda.Syntax.GetLocation(), "a lambda here (only an insert's Then has a row to give it)");
@@ -1180,13 +1230,15 @@ sealed partial class Translator
 
     /// <summary>
     /// The interpolated SQL with each hole a parameter, a constant string too (its text is a value, never SQL, and
-    /// one where SQL expects a name is refused); a constant number or bool is a literal. A call of a [SqlTemplate] method is SQL, its template with its
-    /// arguments: a shared fragment. Interpolated strings joined with + are one text.
+    /// one where SQL can't take a value is refused); a constant number or bool is a literal. A call of a [SqlTemplate]
+    /// method is SQL, its template with its arguments: a shared fragment. Interpolated strings joined with + are one text.
     /// </summary>
     string SqlText(SqlSource source)
     {
         var model = Model(source.Text.SyntaxTree);
         var b = new StringBuilder();
+        // the constant strings' parameters, checked once the whole text is known
+        var constants = new List<(int Start, int End, Location At, string Hole)>();
         void Part(ExpressionSyntax e)
         {
             switch (e)
@@ -1226,11 +1278,9 @@ sealed partial class Translator
                         }
                         if (v is Constant { Constant_: string value })
                         {
-                            // code written when a constant was spliced in as SQL: a parameter there is wrong SQL, or
-                            // (ORDER BY $1) right SQL that does nothing
-                            string after = i + 1 < text.Contents.Count && text.Contents[i + 1] is InterpolatedStringTextSyntax next ? next.TextToken.ValueText : "";
-                            if (NamePosition(b.ToString(), after)) throw new Refused(hat, Diagnostics.NameHole, hole.Expression.ToString());
+                            int start = b.Length;
                             b.Append(Param(new Host(Names.Literal(value), op.Type!) { Pure = true }, hat));
+                            constants.Add((start, b.Length, hat, hole.Expression.ToString()));
                         }
                         else if (v is Constant c) b.Append(Literal(c, hat));
                         else if (v is Host h) b.Append(Param(h, hat));
@@ -1243,39 +1293,85 @@ sealed partial class Translator
             }
         }
         Part(source.Text);
-        return b.ToString();
+        string sql = b.ToString();
+        if (constants.Count > 0)
+        {
+            // code written when a constant was spliced in as SQL: a parameter there is wrong SQL, or (ORDER BY $1)
+            // right SQL that does nothing
+            string code = Sql.Code(sql);
+            foreach (var (start, end, hat, hole) in constants)
+                if (NamePosition(code.Substring(0, start), code.Substring(end))) throw new Refused(hat, Diagnostics.NameHole, hole);
+        }
+        return sql;
     }
 
-    static readonly Regex NameBefore = new(@"(?:\b(?:ORDER\s+BY|GROUP\s+BY|(?<!\bDISTINCT\s+)FROM|JOIN|INTO|UPDATE|TABLE)|\.)\s*$",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly Regex ListStart = new(@"\b(?:SELECT(?:\s+DISTINCT)?|RETURNING|ORDER\s+BY|GROUP\s+BY)\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-    static readonly Regex ClauseEnd = new(@"\b(?:SELECT|RETURNING|ORDER\s+BY|GROUP\s+BY|FROM|WHERE|SET|VALUES|ON|USING|HAVING|LIMIT|OFFSET|JOIN|WITH|AND|OR|NOT|CASE|WHEN|THEN|ELSE)$",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    static readonly Regex NameBefore = new(@"\b(?:(?<!\bDISTINCT\s+)(?<from>FROM)|JOIN|INTO|UPDATE|TABLE)\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    static readonly Regex StatementWord = new(@"\b(?:SELECT|DELETE|UPDATE|COPY)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    static readonly Regex Clause = new(@"\b(?:SELECT|FROM|WHERE|GROUP\s+BY|HAVING|WINDOW|ORDER\s+BY|LIMIT|OFFSET|FETCH|FOR|RETURNING|SET|VALUES|ON|USING|JOIN|WITH|UNION|INTERSECT|EXCEPT)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.RightToLeft);
+    static readonly Regex OrderingWords = new(@"^(?:ORDER|GROUP)\s+BY$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    static readonly Regex ItemEnd = new(@"^\s*(?:[,)]|(?:ASC|DESC|NULLS|LIMIT|OFFSET)\b|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     static readonly Regex IntoTable = new(@"\bINTO\s+[^\s(]+\s*$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     /// <summary>
-    /// Whether a hole after <paramref name="before"/> and before <paramref name="after"/> stands where SQL expects a
-    /// name, not a value: after ORDER BY, GROUP BY, FROM, JOIN, INTO, UPDATE or a qualifier's dot, before a dot, or as an
-    /// item of a SELECT, RETURNING, ORDER BY or GROUP BY list or of an INSERT's column list. The common places only:
-    /// this reads no more SQL than the clause the hole is in.
+    /// Whether a hole after <paramref name="before"/> and before <paramref name="after"/> (comments and literals
+    /// blanked: <see cref="Sql.Code"/>) stands where SQL can't take a value: a name right after FROM (a table's, not
+    /// IS DISTINCT FROM's or a function's, as in <c>substring(x FROM y)</c>), JOIN, INTO, UPDATE or TABLE, beside a
+    /// qualifier's dot, in an INSERT's column list, or a whole item of ORDER BY or GROUP BY (<c>ORDER BY $1</c> sorts
+    /// by nothing; <c>ORDER BY $1 = name</c> is a value). Anywhere else, a SELECT or RETURNING list's item too, a
+    /// value is SQL. The common places only: this reads no more SQL than the clause the hole is in.
     /// </summary>
     static bool NamePosition(string before, string after)
     {
-        if (after.TrimStart().StartsWith(".", StringComparison.Ordinal) || NameBefore.IsMatch(before) || ListStart.IsMatch(before)) return true;
         string t = before.TrimEnd();
         if (t.Length == 0) return false;
+        if (after.TrimStart().StartsWith(".", StringComparison.Ordinal) || t[t.Length - 1] == '.') return true;
+        if (NameBefore.Match(t) is { Success: true } name)
+            return !name.Groups["from"].Success || StatementWord.IsMatch(Level(t, name.Index));
         if (t[t.Length - 1] == '(') return IntoTable.IsMatch(t.Substring(0, t.Length - 1));
-        if (t[t.Length - 1] != ',') return false;
-        // the list the item is in: the parenthesis it is in, or the clause
+        if (!ItemEnd.IsMatch(after)) return t[t.Length - 1] == ',' && InColumnList(t);
+        if (OrderingWords.IsMatch(LastWords(t, 2))) return true;
+        return t[t.Length - 1] == ',' && (InColumnList(t) || Clause.Match(Level(t, t.Length - 1)) is { Success: true } clause && OrderingWords.IsMatch(clause.Value));
+    }
+
+    /// <summary>The last <paramref name="words"/> words of <paramref name="t"/>, one space between.</summary>
+    static string LastWords(string t, int words)
+    {
+        var all = t.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        return string.Join(" ", all, Math.Max(0, all.Length - words), Math.Min(words, all.Length));
+    }
+
+    /// <summary>Whether the item ending <paramref name="t"/> (with its comma) is in an INSERT's column list.</summary>
+    static bool InColumnList(string t)
+    {
+        int open = Open(t, t.Length - 1);
+        return open >= 0 && IntoTable.IsMatch(t.Substring(0, open));
+    }
+
+    /// <summary>Where the parenthesis that <paramref name="at"/> is in opens; -1 at the top level.</summary>
+    static int Open(string t, int at)
+    {
         int depth = 0;
-        for (int i = t.Length - 2; i >= 0; i--)
+        for (int i = at - 1; i >= 0; i--)
         {
-            char c = t[i];
-            if (c == ')') depth++;
-            else if (c == '(' && depth-- == 0) return IntoTable.IsMatch(t.Substring(0, i));
-            else if (depth == 0 && char.IsLetter(c) && (i + 1 == t.Length || !char.IsLetterOrDigit(t[i + 1])) && ClauseEnd.Match(t.Substring(0, i + 1)) is { Success: true } m)
-                return ListStart.IsMatch(m.Value);
+            if (t[i] == ')') depth++;
+            else if (t[i] == '(' && depth-- == 0) return i;
         }
-        return false;
+        return -1;
+    }
+
+    /// <summary>The text of the parenthesis (or the top level) that <paramref name="at"/> is in, up to it, with what
+    /// nested parentheses hold blanked.</summary>
+    static string Level(string t, int at)
+    {
+        var b = new StringBuilder(t, Open(t, at) + 1, at - Open(t, at) - 1, at);
+        int depth = 0;
+        for (int i = 0; i < b.Length; i++)
+        {
+            if (b[i] == '(') depth++;
+            else if (b[i] == ')') depth--;
+            else if (depth > 0) b[i] = ' ';
+        }
+        return b.ToString();
     }
 }

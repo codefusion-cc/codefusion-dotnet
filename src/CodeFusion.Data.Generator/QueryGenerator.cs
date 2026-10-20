@@ -146,6 +146,8 @@ public sealed class QueryGenerator : IIncrementalGenerator
     static void Context(SourceProductionContext spc, Known k, INamedTypeSymbol type, Dictionary<string, List<CallSite>> calls)
     {
         var at = type.Locations.FirstOrDefault();
+        // a query method of a base, compiled with the base, implementing an interface this class adds
+        foreach (var m in Inherited(k, type)) ReportInterface(spc, type, m, at);
         // a class that declares no queries (a base with the tables, generic or not partial, say) gets nothing
         // generated, so nothing is asked of it
         if (!type.GetMembers().OfType<IMethodSymbol>().Any(m => !m.IsStatic && ReturnsResult(m))) return;
@@ -251,10 +253,23 @@ public sealed class QueryGenerator : IIncrementalGenerator
         m.ExplicitInterfaceImplementations.Length > 0 || type.AllInterfaces.SelectMany(i => i.GetMembers().OfType<IMethodSymbol>())
             .Any(im => SymbolEqualityComparer.Default.Equals(type.FindImplementationForInterfaceMember(im), m));
 
+    /// <summary>The query methods <paramref name="type"/> inherits that implement a method of an interface it adds
+    /// (its base doesn't have it): the base's own check never sees that interface.</summary>
+    static IEnumerable<IMethodSymbol> Inherited(Known k, INamedTypeSymbol type)
+    {
+        var bases = type.BaseType?.AllInterfaces ?? ImmutableArray<INamedTypeSymbol>.Empty;
+        return type.AllInterfaces.Where(i => !bases.Contains(i, SymbolEqualityComparer.Default))
+            .SelectMany(i => i.GetMembers().OfType<IMethodSymbol>())
+            .Select(im => type.FindImplementationForInterfaceMember(im) as IMethodSymbol)
+            .OfType<IMethodSymbol>()
+            .Where(m => !Known.Same(m.ContainingType, type) && !m.IsStatic && ReturnsResult(m) && k.DerivesFromContext(m.ContainingType))
+            .Distinct<IMethodSymbol>(SymbolEqualityComparer.Default);
+    }
+
     /// <summary>A call through the interface names the interface's method, which nothing takes over: the definition
     /// would run.</summary>
-    static void ReportInterface(SourceProductionContext spc, INamedTypeSymbol type, IMethodSymbol m) =>
-        spc.ReportDiagnostic(Diagnostic.Create(Diagnostics.BadContext, m.Locations.FirstOrDefault(), type.Name,
+    static void ReportInterface(SourceProductionContext spc, INamedTypeSymbol type, IMethodSymbol m, Location? at = null) =>
+        spc.ReportDiagnostic(Diagnostic.Create(Diagnostics.BadContext, at ?? m.Locations.FirstOrDefault(), type.Name,
             $"query method '{m.Name}' implements an interface's method, and a call through the interface isn't taken over, so its definition " +
             "would run: give the interface no query methods, and call the context's"));
 
