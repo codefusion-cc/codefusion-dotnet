@@ -133,7 +133,7 @@ public sealed class ReadTests : IDisposable
         Assert.Equal(16L * 500 * 1000, total);
     }
 
-    [Fact]
+    [Fact(Timeout = 20_000)]
     public async Task AReadPastTheTimeoutIsInterruptedAndTheConnectionReadsOnAfter()
     {
         var s = _db.Open(_db.Database(readers: 1, timeout: TimeSpan.FromMilliseconds(200)));
@@ -150,13 +150,16 @@ public sealed class ReadTests : IDisposable
     [Fact]
     public async Task IdleReadersDontKeepTheWalFromBeingCheckpointed()
     {
-        var db = _db.Database(readers: 4);
+        var db = _db.Database(readers: 4, checkpointFrames: 100);
         var s = _db.Open(db);
         // every reader connection reads once, then sits idle with its snapshot
         Parallel.For(0, 64, _ => Kv.Count(s));
-        for (int i = 0; i < 400; i++) Assert.True((await Kv.WriteMany(s, $"w{i}-", 50)).IsOk);
+        // about 1,500 frames (6 MiB) of writes, rows of 300 bytes: with an idle snapshot kept, a checkpoint could copy
+        // none of them back and the WAL would never start over; swept, it starts over every 100 frames or so
+        string pad = new('x', 300);
+        for (int i = 0; i < 500; i++) Assert.True((await Kv.WriteMany(s, $"w{i}-{pad}-", 20)).IsOk);
         long wal = new FileInfo(db.Path + "-wal").Length;
-        Assert.True(wal < 16L << 20, $"the WAL grew to {wal >> 20} MiB");
+        Assert.True(wal < 2L << 20, $"the WAL grew to {wal >> 10} KiB");
         Assert.True(s.Writer.Counters.Checkpoints > 0);
     }
 

@@ -62,12 +62,12 @@ jobs:
       # bcrypt runs in its own job, on every framework it supports.
       - name: Test
         run: |
-          for t in CodeFusion.Core.Tests CodeFusion.Http.Tests CodeFusion.Http.Generators.Tests CodeFusion.Data.Postgres.Tests CodeFusion.Data.Tests CodeFusion.Fuzz; do
+          for t in CodeFusion.Core.Tests CodeFusion.Http.Tests CodeFusion.Http.Generators.Tests CodeFusion.Data.Postgres.Tests CodeFusion.Data.Tests CodeFusion.Data.Sqlite.Tests CodeFusion.Fuzz; do
             dotnet test --project tests/$t -c Release --no-build -- --max-threads 2 --timeout 10m
           done
       - name: Pack
         run: |
-          for p in CodeFusion.Core CodeFusion.Http CodeFusion.Data CodeFusion.Data.Postgres; do
+          for p in CodeFusion.Core CodeFusion.Http CodeFusion.Data CodeFusion.Data.Postgres CodeFusion.Data.Sqlite; do
             dotnet pack src/$p -c Release --no-build -o artifacts
           done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -200,7 +200,7 @@ jobs:
           global-json-file: global.json
       - name: Pack
         run: |
-          for p in CodeFusion.Core CodeFusion.Http CodeFusion.Data CodeFusion.Data.Postgres; do
+          for p in CodeFusion.Core CodeFusion.Http CodeFusion.Data CodeFusion.Data.Postgres CodeFusion.Data.Sqlite; do
             dotnet pack src/$p -c Release -o artifacts -p:Version=${GITHUB_REF_NAME#v}
           done
       - name: NuGet login

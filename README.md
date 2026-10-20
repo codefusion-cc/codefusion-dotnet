@@ -10,6 +10,7 @@ application can use the same code without writing it by hand.
 | [CodeFusion.Http](src/CodeFusion.Http/README.md) | An HTTP/1.1 server, and minimal-API endpoints a source generator compiles into code that writes straight into the connection. 0 B per request. |
 | [CodeFusion.Data](src/CodeFusion.Data/README.md) | A DbContext-shaped data layer whose LINQ queries a source generator compiles to SQL at build time. 0 B per query. |
 | [CodeFusion.Data.Postgres](src/CodeFusion.Data.Postgres/README.md) | A Postgres wire-protocol client and CodeFusion.Data's Postgres provider: prepared statements, read groups, group commit, rows read in place. 0 B per query. |
+| [CodeFusion.Data.Sqlite](src/CodeFusion.Data.Sqlite/README.md) | CodeFusion.Data's SQLite provider, in process: reads on the caller's thread, group commit on one writer thread, the same LINQ as on Postgres. 0 B per query. |
 | [CodeFusion.Security.Bcrypt](src/CodeFusion.Security.Bcrypt/README.md) | bcrypt for .NET 8 and up, BCrypt.Net-Next compatible: allocation-free, up to five hashes interleaved per thread, a batching queue for servers. No dependencies, and a version of its own. |
 
 Handlers that read like minimal APIs are in CodeFusion.Http, and LINQ queries compiled to SQL at build time are in
@@ -47,6 +48,13 @@ allocations) use the same database:
 
 ```bash
 CODEFUSION_TEST_DB="Host=127.0.0.1;Port=5432;Username=codefusion;Password=codefusion;Database=codefusion_test" dotnet test --project tests/CodeFusion.Data.Tests -c Release -- --max-threads 2
+```
+
+The SQLite provider's tests need nothing set up: the same execution and operator tests as on Postgres, against files
+in a temp folder, and its own (group commit, crash recovery with a child process killed mid-write, races):
+
+```bash
+dotnet test --project tests/CodeFusion.Data.Sqlite.Tests -c Release -- --max-threads 2
 ```
 
 The allocation tests run in Release only: a Debug build makes every async state machine an object. They count the

@@ -134,7 +134,19 @@ public sealed class AllocationTests(ConduitFixture fixture)
             return failures;
         }
 
-        Assert.Equal(0, await Run(ReadsEach, WritesEach)); // warm: pools, slots, statements on every connection, JIT
+        Assert.Equal(0, await Run(ReadsEach, WritesEach)); // warm: pools, slots, statements, JIT
+        // and every query on every connection, which prepares it there once: more callers at once than a provider has
+        // reader connections, so each caller that finds its own taken goes on to the next. (SQLite's 4 callers on 4
+        // readers could leave a connection unused until the measured runs, and its first statement grew its table.)
+        var burst = new Connection[16];
+        for (int i = 0; i < burst.Length; i++) burst[i] = new Connection(fixture, writes: false);
+        var warming = new Task<long>[burst.Length];
+        for (int i = 0; i < burst.Length; i++)
+        {
+            var c = burst[i];
+            warming[i] = Task.Run(() => Reads(c, 70));
+        }
+        foreach (var t in warming) Assert.Equal(0, await t);
         long Measure(Func<Task<long>> run, out long failures)
         {
             long before = GC.GetTotalAllocatedBytes(precise: true);

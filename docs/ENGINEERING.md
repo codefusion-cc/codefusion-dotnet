@@ -742,10 +742,67 @@ hot paths is the same as before: each check is a `[Conditional("DEBUG")]` call, 
 Http 505: all pass in Release (the 7 Debug-only check tests skip) and in Debug (the allocation tests skip), against a
 Postgres 18 with CODEFUSION_TEST_DB and the four CODEFUSION_TEST_PG_* logins set. The allocation tests pass in Release.
 
+## The SQLite provider (tests/CodeFusion.Data.Sqlite.Tests)
+
+122 tests, nothing to set up. 48 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked
+unchanged: the same Conduit queries, seed and expected replies as on Postgres. 48 are the operator tests ported: each
+query's SQL in SQLite's dialect, checked as text, and the same results on the same seed. The rest are the provider's
+own: group commit (9), reads and snapshots (8), migrations (4), and crash recovery (4: a child process killed mid-group
+and after a commit, each with `synchronous` NORMAL and FULL). Every test that stops a source checks that the writer
+caught nothing unexpected and, in Debug builds, that every job it rented is back in the pool (`SqliteChecks`).
+
+The schema and LINQ queries both providers run live in `tests/Shared/Conduit` and `tests/Shared/Ops`; each provider's
+part of a context (`ConduitDb.Sqlite.cs`, `OpsDb.Sqlite.cs`) names the provider and holds the queries written in its
+SQL.
+
+### Proven red (each broken on purpose in this worktree, seen failing, restored from git)
+
+| Broken | Caught by |
+|---|---|
+| the writer doesn't sweep idle readers' snapshots | `IdleReadersDontKeepTheWalFromBeingCheckpointed` (the WAL grows past 2 MiB) |
+| the commit clock doesn't move after a commit | `AReadAfterItsWriteSeesIt`, `AReadNeverSeesHalfOfAUnit` |
+| a reader never starts a new snapshot | the same two |
+| a unit's failed statement isn't rolled back to its savepoint | `AUnitWhoseSecondStatementFailsIsUndoneWhole` |
+| a group SQLite rolled back isn't run again | `ATransactionSqliteRollsBackRunsAgainWithoutTheWriteThatFailed` |
+| a cancelled write runs anyway | `ACancelledWriteIsCanceledAndWritesNothing` |
+| a held command can be claimed twice | `AHeldCommandRunsOnceAndAStaleCopyIsRefused` |
+| the watchdog never interrupts a read | `AReadPastTheTimeoutIsInterruptedAndTheConnectionReadsOnAfter` (its 20 s timeout) |
+| migrations ignore `user_version` | all 4 `MigrationTests` |
+| a child row of `SelectMany` joins without LEFT | `CommentsNewestFirstAndAnEmptyListAndAMissingArticle` (shared) |
+| `IS` written as `=` for nullable equality | `EqualityOfTwoNullablesHoldsForTwoNulls` |
+| a key read from `sqlite_sequence` by the quoted table name | `AnInsertedKeyOfATableNeedingQuotes` |
+
+The crash tests can't be made red by breaking the provider: what they check (nothing of an open group survives, every
+completed write does) is SQLite's WAL recovery, which a kill can't get past. They check that the provider keeps to it:
+a write completes only after its COMMIT, and the file opens again.
+
+### Found on the way
+
+- Keys of a table whose name needs quotes: `sqlite_sequence` holds the bare name, and the generator gave the key
+  templates only the quoted one, so the insert's row was never found again (404). The templates now get the bare name
+  too (`{2}`); Postgres's SQL is unchanged. Found by the operator tests.
+- CodeFusion.Data.Tests' allocation test raced with itself: its two writing callers toggle one favorite that the
+  reads count, and each started reading while the other still toggled (a count of 3, not 2, now and then, on Postgres
+  too). The writes now run before the reads.
+- The same test's warm-up left some reader connections unused: on SQLite each connection prepares a statement the
+  first time it runs it, and its first statement grows its statement table (two arrays indexed by a statement's
+  process-wide number: 21.5 KB once there were many statements). Measured as the queries' about one run in five. The
+  warm-up now runs 16 callers at once, more than any provider's connections.
+- `WritesPastAFullQueueAreBusyAtOnce` assumed the writer took the long write alone; it takes whatever has queued as
+  one group, which freed the queue. The test now holds the file's write lock from another connection and waits until
+  the writer took its first write (`SqliteWriter.Queued`).
+
+### Not done here
+
+- Power loss: `synchronous=FULL` against NORMAL needs a machine that loses power, not a killed process.
+- Many processes writing one file: SQLite makes them wait for each other; the tests hold the lock from one other
+  connection only (`AConditionalDeleteSeesTheRowAsAnotherConnectionsWriteLeftIt`, `WritesPastAFullQueueAreBusyAtOnce`).
+
 ## Fuzzing (tests/CodeFusion.Fuzz)
 
-Coverage-guided fuzzing of everything that reads network bytes: 11 SharpFuzz targets (the table is in
-`tests/CodeFusion.Fuzz/README.md`). Each throws when an invariant breaks, and the same `Run` serves three engines:
+Coverage-guided fuzzing of everything that reads network bytes, and of the SQLite provider's encodings: 13 SharpFuzz
+targets (the table is in `tests/CodeFusion.Fuzz/README.md`). Each throws when an invariant breaks, and the same `Run`
+serves three engines:
 
 - `dotnet test`: `Corpus/<target>/` (551 seeds taken from the existing tests' inputs, plus the regressions below) and a
   fixed number of mutations from a seed fixed per target, about 50,000 inputs in 1.2 to 2 s. In the CI test loop.
@@ -759,8 +816,8 @@ transport), not only `HttpParser`: where a request ends is decided in Kestrel's 
 input tells "waits for more" from "refused". Both taking a request and disagreeing on method, decoded path, query,
 body or end byte fails, as does one ending a request where the other waits. One side refusing is recorded.
 
-Outside the project: `InternalsVisibleTo CodeFusion.Fuzz` in the Http and Data.Postgres csproj files (the parsers are
-internal), the project in `CodeFusion.slnx`, and `.github/workflows/ci.yml` (the replay in the test loop, the `fuzz`
+Outside the project: `InternalsVisibleTo CodeFusion.Fuzz` in the Http, Data.Postgres and Data.Sqlite csproj files (the
+parsers are internal), the project in `CodeFusion.slnx`, and `.github/workflows/ci.yml` (the replay in the test loop, the `fuzz`
 job, the test job skipped on the nightly schedule). SharpFuzz's version is in the project file, not
 Directory.Packages.props: nothing else uses it.
 
@@ -826,6 +883,8 @@ Each break on its own, then its target on the seeds (the lone surrogate one need
 - DataRow trailing bytes ignored: pg-row. An ErrorResponse field without its NUL: pg-error.
 - Any SCRAM server signature accepted: pg-scram-final. The iteration count unchecked: pg-scram-first.
 - Settings without a user: pg-settings.
+- A text array's `"` left unescaped: sqlite-json-array (an element became two; valid UTF-8 refused as malformed JSON).
+- A write's kept doubles narrowed to float: sqlite-saved-row (GetDouble and GetInt64 differ from the row in place).
 
 ### Not done here
 

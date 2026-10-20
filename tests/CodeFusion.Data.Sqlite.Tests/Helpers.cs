@@ -29,7 +29,8 @@ public sealed class TempDb : IDisposable
     }
 
     /// <summary>A database in this folder with a key-value table (k TEXT PRIMARY KEY, v INTEGER).</summary>
-    public SqliteDatabase Database(string name = "test.db", int readers = 2, TimeSpan? timeout = null, int maxQueued = 8192, bool leader = false) =>
+    public SqliteDatabase Database(string name = "test.db", int readers = 2, TimeSpan? timeout = null, int maxQueued = 8192, bool leader = false,
+        int checkpointFrames = 1000) =>
         new(File(name))
         {
             Synchronous = SqliteSync.Normal,
@@ -37,6 +38,7 @@ public sealed class TempDb : IDisposable
             StatementTimeout = timeout ?? TimeSpan.FromSeconds(30),
             MaxQueued = maxQueued,
             LeaderCommit = leader,
+            CheckpointFrames = checkpointFrames,
             Migrations = ["CREATE TABLE kv (k TEXT PRIMARY KEY, v INTEGER NOT NULL) WITHOUT ROWID"],
         };
 
