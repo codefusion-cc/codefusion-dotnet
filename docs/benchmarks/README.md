@@ -35,6 +35,7 @@ Two things the table leaves out:
 
 | Date | File | What was tested | Result |
 |---|---|---|---|
+| 2026-10-21 | [2026-10-21-rust-entries-techniques.md](2026-10-21-rust-entries-techniques.md) | Code study of the best Rust entries in both contests: what carries over, where, and the expected gain | 12 ideas ranked; #1 is mostly on perf/http-transport; the rest is new library work (Data.Postgres pipelining, Data.Sqlite per-wake-up transaction) |
 | 2026-10-21 | [2026-10-21-each-slot-locks.md](2026-10-21-each-slot-locks.md) | An Each's slots rented and returned under one lock each, not two per read; Each(20) of World, 1 and 16 connections | 40 slot-pool locks per Each(20) down to 2; times within the busy Mac's noise; kept |
 | 2026-10-21 | [2026-10-21-tfb-loop-pools.md](2026-10-21-tfb-loop-pools.md) | perf/http-loop-pools against perf/http-transport, plaintext and json, A B B A; a shared listener, 6 loops | Pools +2.5% plaintext, +1.9% json, the lock gone; shared listener ±2.5%; 6 loops -10 to -16% |
 | 2026-10-21 | [2026-10-21-tfb-gate-jobs.md](2026-10-21-tfb-gate-jobs.md) | Postgres jobs made under steady load | 20-32 in 5 min: 7-16% of what db and fortunes allocate; the rest (≈0.001 B/request) unnamed |
