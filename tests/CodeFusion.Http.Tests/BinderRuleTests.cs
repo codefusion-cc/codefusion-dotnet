@@ -55,6 +55,7 @@ public class BinderRuleTests
     {
         var builder = HttpApp.CreateBuilder([]);
         builder.Options.EndPoint = new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0);
+        TestTransport.Apply(builder.Options);
         HttpApp app = builder.Build();
         IEndpointRouteBuilder? maybe = app;
         app.MapPost("/signup", static (Signup s) => Reply.NoContent());

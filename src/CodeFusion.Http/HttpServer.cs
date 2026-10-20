@@ -58,6 +58,10 @@ public sealed class HttpServer : IAsyncDisposable
     /// once. For tests.</summary>
     internal int RunsStarted, RunsEnded, HandlersStarted, HandlersEnded;
 
+    /// <summary>Debug builds count here every receive call on a connection's socket: reads, peeks and the zero-byte
+    /// receive that waits for a request. For tests.</summary>
+    internal int SocketReceives;
+
     /// <summary>Debug builds call it on a connection's own thread as it reaches each <see cref="ExchangePhase"/>,
     /// so a test can close, reset or stop exactly there. Release builds make no such calls.</summary>
     internal Action<HttpExchange, ExchangePhase>? PhaseHook;
@@ -85,6 +89,8 @@ public sealed class HttpServer : IAsyncDisposable
     int _poolCount;
     int _active;
     readonly int _maxConnections;
+    uint _connectionIds;
+    EventLoop[]? _loops;
 
     Socket? _listener;
     Task? _accepting;
@@ -122,6 +128,17 @@ public sealed class HttpServer : IAsyncDisposable
         }
     }
 
+    /// <summary>Event loops started and not yet ended. For tests.</summary>
+    internal int EventLoopsRunning
+    {
+        get
+        {
+            int n = 0;
+            foreach (EventLoop l in _loops ?? []) if (l.Running) n++;
+            return n;
+        }
+    }
+
     /// <summary>Open connections.</summary>
     public int Connections => Volatile.Read(ref _active);
 
@@ -142,6 +159,7 @@ public sealed class HttpServer : IAsyncDisposable
             if (!OperatingSystem.IsWindows()) listener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             listener.Bind(ep);
             listener.Listen(Options.Backlog);
+            if (Options.Transport == HttpTransport.EventLoop) _loops = StartLoops(Options.EventLoops);
         }
         catch
         {
@@ -155,6 +173,30 @@ public sealed class HttpServer : IAsyncDisposable
 #pragma warning disable CA2025
         _accepting = AcceptAsync(listener);
 #pragma warning restore CA2025
+    }
+
+    EventLoop[] StartLoops(int count)
+    {
+        var loops = new EventLoop[count];
+        try
+        {
+            for (int i = 0; i < count; i++) loops[i] = EventLoop.Create(this, i);
+        }
+        catch
+        {
+            foreach (EventLoop? l in loops) l?.Discard();
+            throw;
+        }
+        foreach (EventLoop l in loops) l.Start();
+        return loops;
+    }
+
+    /// <summary>An event loop's edge for the connection in <paramref name="slot"/>, if it is still the one with
+    /// <paramref name="id"/>: one in another slot, or a later socket's in this one, is left alone.</summary>
+    internal void Readable(int slot, uint id, bool closed)
+    {
+        HttpExchange?[] slots = Volatile.Read(ref _slots);
+        if ((uint)slot < (uint)slots.Length && Volatile.Read(ref slots[slot]) is { } c && c.ConnectionId == id) c.Readable(closed);
     }
 
     async Task AcceptAsync(Socket listener)
@@ -236,6 +278,8 @@ public sealed class HttpServer : IAsyncDisposable
                 slot = _slotCount++;
             }
             c.Slot = slot;
+            c.ConnectionId = unchecked(++_connectionIds);
+            c.Loop = _loops?[(int)(c.ConnectionId % (uint)_loops.Length)];
             Volatile.Write(ref _slots[slot], c);
             _active++;
             return c;
@@ -326,6 +370,7 @@ public sealed class HttpServer : IAsyncDisposable
             long hard = Environment.TickCount64 + 1000;
             while (Connections > 0 && Environment.TickCount64 < hard) await Task.Delay(10).ConfigureAwait(false);
         }
+        foreach (EventLoop l in _loops ?? []) l.Stop();
         _stopped = true;
         _wake.Set();
         _heartbeat?.Join();

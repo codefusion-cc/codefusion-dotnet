@@ -27,11 +27,11 @@ internal sealed class TestServer : IAsyncDisposable
 
     public static TestServer Start(HttpHandler handler, Action<HttpServerOptions>? configure = null)
     {
-        var o = new HttpServerOptions
+        var o = TestTransport.Apply(new HttpServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, 0),
             HeartbeatInterval = TimeSpan.FromMilliseconds(20),
-        };
+        });
         configure?.Invoke(o);
         TestServer? t = null;
         o.OnHandlerError ??= (_, e) => { lock (t!.Errors) t.Errors.Add(e); };

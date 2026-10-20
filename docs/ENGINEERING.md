@@ -879,3 +879,87 @@ include (`--test-project` can add them).
 
 Targeted reruns: `mutate` takes character spans, `**/File.cs{start..end}`, so a rerun of only the lines that had
 survivors takes minutes instead of the whole file's run.
+
+## The event-loop transport (HttpTransport.EventLoop)
+
+### Why
+
+On one pinned CPU with 256 keep-alive connections the Sockets transport made 2 `recvfrom` and 1 `sendto` per
+response. The first receive is the zero-byte one that waits for the next request: .NET's `ReceiveAsync` always tries
+the call at once before it registers for readiness, and right after a response the client hasn't answered yet, so
+that try finds nothing. Its readiness completion then costs no call (the runtime skips the syscall for a zero-byte
+read), and the real `Receive` reads the request. No option of `System.Net.Sockets` skips the first try: any receive
+started while its queue is ready makes the call. So one receive per request needs readiness from somewhere else.
+
+### How
+
+`HttpServerOptions.Transport = HttpTransport.EventLoop` starts `EventLoops` threads (one per core by default), each
+with its own epoll (Linux) or kqueue (macOS) set. A connection's socket is added once, for reading only and
+edge-triggered (`EPOLLIN | EPOLLRDHUP | EPOLLET`, `EVFILT_READ` with `EV_CLEAR`), with its slot and a connection id
+as the event's data, so a late event of a closed socket can't reach the connection object's next socket. The
+connection's wait for a request becomes `Arm()`: no call, only a flag. The loop's edge completes the wait on the
+loop's thread, and the request is read, handled and answered there until the handler first waits. Everything else in
+`HttpExchange` (the parse, deadlines, the close watch, the linger, send waits on the socket's own `SendAsync`) is the
+same code for both transports.
+
+Edges are not repeated, so the exchange keeps one that comes while no wait is armed (`_edge`), and whoever turns
+`_armed` from 1 to 0 completes the wait, exactly once. Three ways an edge would be lost, each with its test:
+
+- A receive that fills the buffer may leave bytes the kernel won't announce again: it sets the edge itself
+  (`ARequestLargerThanTheBufferIsReadWhole`).
+- The client's last bytes and its FIN or reset can come in one edge; the short read takes the bytes and doesn't see
+  the end. An edge with `EPOLLRDHUP`, `EPOLLHUP`, `EPOLLERR` or `EV_EOF` stays set until a receive sees the end
+  (`BytesAndTheCloseInOneEdgeStillCloseTheConnection`, which holds the loop with another connection's handler so both
+  arrive in one edge). The stress test found this one: 30 to 60 of 1,200 connections that sent half a head and reset
+  stayed open.
+- Closing a socket takes it out of the set without an event. The connection's own close takes back its armed wait
+  (`AnAsyncHandlersLastAnswerEndsTheConnection`); a timeout or the stop's abort, which close it from the heartbeat or
+  the stop, queue a made-up edge to the thread pool (`AnIdleConnectionPastItsKeepAliveTimeoutIsClosed`,
+  `AHeadThatStallsIsClosedAfterTheRequestTimeout`, `AStopClosesIdleConnectionsAtOnce`).
+
+The loops end with the server's stop, after its connections; `ServerChecks` now fails a test whose server left one
+running. Descriptors are `SafeFileHandle`s, so an `Add` racing the end gets `ObjectDisposedException` (the connection
+closes quietly) rather than a reused descriptor; a refused `epoll_ctl` is an `IOException`, reported as a failed
+connection. `struct epoll_event` is 12 bytes on x86 and x86-64 (packed) and 16 elsewhere; CI runs the suite on both.
+
+A handler that blocks its thread holds up every connection on its loop: Sockets stays the default.
+
+### Tests
+
+`EventLoopTests` (17), on kqueue here and epoll in CI. `AllocationTests` and `AppAllocationTests` have EventLoop rows
+(0.004 to 0.05 B/request, as Sockets). `TestTransport` makes every server the tests start use the transport that
+`CODEFUSION_HTTP_TRANSPORT` names, and CI runs `CodeFusion.Http.Tests` a second time with `EventLoop`. Debug builds count
+every receive call (`HttpServer.SocketReceives`): `EachKeepAliveRequestCostsThisManyReceives` asserts 1 per request on
+the loop and 2 on Sockets.
+
+Proven red (broken in the tree, seen failing, restored): no edge after a full read (the 64 KB body hangs); the close
+flag ignored (both close-in-one-edge cases); no made-up edge after a timeout or abort (the three timeout and stop
+tests); no disarm on close (the async handler's last answer leaves the connection open).
+
+Green on this Mac (SDK 10.0.402), 0 warnings for the whole tree in Debug and Release. `CodeFusion.Http.Tests`: Debug
+516 pass and 26 skip, Release 532 pass and 10 skip, each with Sockets and with `CODEFUSION_HTTP_TRANSPORT=EventLoop`.
+
+### Numbers
+
+The $12 challenge entry (csharp-codefusion-XeonFX) with this library, in the cf-bench VM (server pinned to one arm64
+CPU with 2 GB, load generator on three others, 256 keep-alive connections, no think time; health, post and feed for
+15 s each, the mix for 30 s). "Before" is the parent commit's library, "after" the same entry with `Transport =
+HttpTransport.EventLoop`. Syscalls from `strace -c -f` over 5 s, per `sendto` (one per response).
+
+| | before (Sockets) | after (EventLoop) | change |
+|---|---:|---:|---:|
+| GET /health | 110,272 req/s | 133,529 | +21% |
+| GET /posts/:id | 74,377 | 84,842 | +14% |
+| GET /feed | 34,272 | 37,570 | +10% |
+| mix | 33,710 | 35,370 | +5% |
+| recvfrom per response (health, mix) | 2.000, 2.000 | 1.000, 1.000 | |
+| sendto per response | 1.000 | 1.000 | |
+| epoll_pwait per response (health) | 0.001 | 0.004 | |
+
+The challenge's 42 checks pass on both. The same library with Sockets did 115 and 118k on health against 112 and 116k
+before, so that path didn't move. In the same session the epoll entry (#74) did 181k on health: per request it spends
+about 5.1 µs in the kernel, this server 6.0 µs in the kernel and 1 µs in its own code and libc, spread thin
+(`RunAsync` 1.4%, `ParseHead` 0.8%, `FlushAsync` 0.6%, the runtime's send wrapper 0.6%). Both spend about 20% in
+`__wake_up_sync_key`, the wakeup of the client, and both now make one receive and one send per request. #74 reads
+every ready connection before it sends any answer; whether batching the sends that way explains the kernel's extra
+0.9 µs is not measured.

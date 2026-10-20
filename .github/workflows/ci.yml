@@ -65,6 +65,9 @@ jobs:
           for t in CodeFusion.Core.Tests CodeFusion.Http.Tests CodeFusion.Http.Generators.Tests CodeFusion.Data.Postgres.Tests CodeFusion.Data.Tests CodeFusion.Fuzz; do
             dotnet test --project tests/$t -c Release --no-build -- --max-threads 2 --timeout 10m
           done
+      # The server's tests again, every server on the epoll event loops (HttpTransport.EventLoop).
+      - name: Test the event loops
+        run: CODEFUSION_HTTP_TRANSPORT=EventLoop dotnet test --project tests/CodeFusion.Http.Tests -c Release --no-build -- --max-threads 2 --timeout 10m
       - name: Pack
         run: |
           for p in CodeFusion.Core CodeFusion.Http CodeFusion.Data CodeFusion.Data.Postgres; do

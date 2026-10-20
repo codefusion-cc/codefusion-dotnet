@@ -9,7 +9,7 @@ namespace CodeFusion.Http.Tests;
 /// <summary>
 /// What holds once a server has stopped, whatever its test did: no connection loop threw and no exception from the
 /// handler's callbacks was dropped (the server only counts and logs those, so the test would pass), every connection
-/// ended, every buffer is back in its pool, and in Debug builds every connection run and handler call ended exactly
+/// and event loop ended, every buffer is back in its pool, and in Debug builds every connection run and handler call ended exactly
 /// once (each ValueTask consumed once).
 /// </summary>
 internal static class ServerChecks
@@ -24,6 +24,7 @@ internal static class ServerChecks
         int dropped = Volatile.Read(ref server.CallbackFailures);
         Assert.True(dropped == 0, $"{dropped} exception(s) from the handler's callbacks were dropped");
         Assert.True(server.Connections == 0, $"{server.Connections} connection(s) still open after the stop");
+        Assert.True(server.EventLoopsRunning == 0, $"{server.EventLoopsRunning} event loop(s) still running after the stop");
         AssertPoolsBalance(server, arena);
 #if DEBUG
         Assert.True(server.RunsStarted == server.RunsEnded, $"{server.RunsStarted} connection runs started, {server.RunsEnded} ended");

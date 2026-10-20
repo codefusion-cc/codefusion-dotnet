@@ -137,6 +137,14 @@ with 8 cores shared with other work; CPU per request is the whole process's, the
 An idle keep-alive connection holds no buffers. With 2,000 of them open, the server kept about 2.3 KB of GC heap per
 connection and Kestrel about 17.6 KB (`HttpIdleBenchmarks`, measured on the contest server before extraction).
 
+## Event loops on Linux and macOS
+
+`HttpServerOptions.Transport = HttpTransport.EventLoop` swaps .NET's sockets for the server's own threads, each waiting
+on epoll (Linux) or kqueue (macOS) for its share of the connections (`EventLoops`, one per core by default). A
+request then costs one receive call instead of two, and its handler runs on the loop's thread until it first awaits,
+with no hop through the runtime's socket thread or the thread pool. Idle connections still hold no buffer. A handler
+that blocks its thread holds up every connection on that loop, so keep the default `Sockets` for code that blocks.
+
 ## Limits
 
 HTTP/1.1 only, no TLS: put it behind a proxy that terminates TLS when it faces the internet. Request and response

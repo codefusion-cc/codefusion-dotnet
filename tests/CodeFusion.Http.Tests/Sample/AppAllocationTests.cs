@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using CodeFusion.Http;
 using CodeFusion.Http.Tests.Sample;
 using Xunit;
 
@@ -30,20 +31,26 @@ public class AppAllocationTests(ITestOutputHelper output)
             + "\r\n" + (body ?? "");
     }
 
-    public static TheoryData<string, int> Cases() => new()
+    public static TheoryData<string, int, HttpTransport> Cases() => new()
     {
-        { "route, query, viewer, singleton, JSON", 1 },
-        { "route, query, viewer, singleton, JSON", 8 },
-        { "body with escapes and tags, token issued into the arena", 1 },
-        { "body with escapes and tags, token issued into the arena", 8 },
-        { "async handler, wait ends on another thread", 1 },
-        { "async handler, wait ends on another thread", 8 },
-        { "async handler with a body", 1 },
-        { "reply whose write waits", 1 },
-        { "long route value, 204", 1 },
-        { "error reply", 1 },
-        { "no route: 404", 1 },
-        { "invalid token: 401", 1 },
+        { "route, query, viewer, singleton, JSON", 1, HttpTransport.Sockets },
+        { "route, query, viewer, singleton, JSON", 8, HttpTransport.Sockets },
+        { "body with escapes and tags, token issued into the arena", 1, HttpTransport.Sockets },
+        { "body with escapes and tags, token issued into the arena", 8, HttpTransport.Sockets },
+        { "async handler, wait ends on another thread", 1, HttpTransport.Sockets },
+        { "async handler, wait ends on another thread", 8, HttpTransport.Sockets },
+        { "async handler with a body", 1, HttpTransport.Sockets },
+        { "reply whose write waits", 1, HttpTransport.Sockets },
+        { "long route value, 204", 1, HttpTransport.Sockets },
+        { "error reply", 1, HttpTransport.Sockets },
+        { "no route: 404", 1, HttpTransport.Sockets },
+        { "invalid token: 401", 1, HttpTransport.Sockets },
+        { "route, query, viewer, singleton, JSON", 1, HttpTransport.EventLoop },
+        { "route, query, viewer, singleton, JSON", 8, HttpTransport.EventLoop },
+        { "body with escapes and tags, token issued into the arena", 8, HttpTransport.EventLoop },
+        { "async handler, wait ends on another thread", 1, HttpTransport.EventLoop },
+        { "async handler, wait ends on another thread", 8, HttpTransport.EventLoop },
+        { "reply whose write waits", 1, HttpTransport.EventLoop },
     };
 
     static string RequestFor(string name) => name switch
@@ -62,10 +69,10 @@ public class AppAllocationTests(ITestOutputHelper output)
 
     [Theory(Timeout = 120_000)]
     [MemberData(nameof(Cases))]
-    public async Task KeepAliveRequestsAllocateNothing(string name, int connections)
+    public async Task KeepAliveRequestsAllocateNothing(string name, int connections, HttpTransport transport)
     {
         Assert.SkipWhen(AllocationTests.Debugger(), "Debug builds make every async method's state machine a class: run in Release");
-        await using HttpApp app = SampleApp.Build();
+        await using HttpApp app = SampleApp.Build(b => EventLoopTests.Use(b.Options, transport));
         await using var check = new AppCheck(app);
         app.Start();
         byte[] request = Encoding.UTF8.GetBytes(RequestFor(name));
@@ -92,7 +99,7 @@ public class AppAllocationTests(ITestOutputHelper output)
         foreach (var s in sockets) s.Dispose();
 
         double perRequest = (double)allocated / (measured * connections);
-        output.WriteLine($"{name}, {connections} connection(s): {allocated} bytes over {measured * connections} requests: {perRequest:F3} B/request");
+        output.WriteLine($"{name}, {connections} connection(s), {transport}: {allocated} bytes over {measured * connections} requests: {perRequest:F3} B/request");
         foreach (var g in ticks.Types.GroupBy(t => t).OrderByDescending(g => g.Count())) output.WriteLine($"  {g.Count(),4} samples: {g.Key}");
         Assert.True(perRequest < 0.5, $"{perRequest:F3} bytes per request");
     }
