@@ -337,7 +337,7 @@ public readonly struct RowAwaiter<T> : ICriticalNotifyCompletion where T : struc
         if (r.Status != DataStatus.Ok)
         {
             // as a reply reports it: not for a client that left
-            if (r.Status is DataStatus.Broken or DataStatus.Failed or DataStatus.ReaderFailed && _context.Response?.Aborted.IsCancellationRequested != true)
+            if (DataSource.Reports(r.Status) && _context.Response?.Aborted.IsCancellationRequested != true)
                 _context.Source.OnFailure?.Invoke(_ops.Name, r);
             return new Row<T>(r.Status, false, false, default, _context.Source.Errors.For(r.Status, _ops.IsWrite, _options.Conflict));
         }

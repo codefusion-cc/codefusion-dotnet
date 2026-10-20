@@ -287,7 +287,7 @@ public abstract class DataContext : IRequestScoped
             if (r.Status != DataStatus.Ok)
             {
                 error = errors.For(r.Status, ops.IsWrite, _options.Conflict);
-                if (r.Status is DataStatus.Broken or DataStatus.Failed or DataStatus.ReaderFailed && !response.Aborted.IsCancellationRequested)
+                if (DataSource.Reports(r.Status) && !response.Aborted.IsCancellationRequested)
                     _context.Source.OnFailure?.Invoke(ops.Name, r);
             }
             else if (ops.Kind == ResultKind.One && (r.Rows == 0 || r.Value == Refused))

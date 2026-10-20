@@ -293,7 +293,9 @@ public sealed class PgWriterTests : IAsyncDisposable
         var stays = Run(w, "stays", leaving.Token);
         var failing = Run(w, "taken");
         w.Start(1);
-        while (w.Queued > 0) await Task.Delay(5);
+        // an empty queue only means the loop took the group; leave once Postgres is running it
+        while ((long)(await Sql("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state = 'active' AND query LIKE 'SELECT pg_sleep(0.5)%'"))! == 0)
+            await Task.Delay(5);
         leaving.Cancel();
 
         Assert.True((await sleep).IsOk);

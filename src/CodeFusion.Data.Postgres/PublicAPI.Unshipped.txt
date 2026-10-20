@@ -165,6 +165,7 @@ static CodeFusion.Data.Postgres.Postgres.Read(CodeFusion.Data.DataContext! conte
 static CodeFusion.Data.Postgres.Postgres.Run<TReader>(in CodeFusion.Data.PendingCommand command, object? state, System.Threading.CancellationToken aborted) -> System.Threading.Tasks.ValueTask<CodeFusion.Data.DataResult>
 static CodeFusion.Data.Postgres.Postgres.Statement(string! sql, params System.ReadOnlySpan<CodeFusion.Data.DataType> parameters) -> CodeFusion.Data.Postgres.PgStatement!
 static CodeFusion.Data.Postgres.Postgres.Write(CodeFusion.Data.DataContext! context, CodeFusion.Data.Postgres.PgStatement! statement) -> CodeFusion.Data.Postgres.PgCommand
+static CodeFusion.Data.Postgres.PostgresServices.AddDatabase<TContext>(this CodeFusion.IServiceRegistry! services, CodeFusion.Data.Postgres.PgDataSource! source) -> CodeFusion.Data.Postgres.PgDataSource!
 static CodeFusion.Data.Postgres.PostgresServices.AddDatabase<TContext>(this CodeFusion.IServiceRegistry! services, CodeFusion.Data.Postgres.PostgresDatabase! database, int readers, int writers) -> CodeFusion.Data.Postgres.PgDataSource!
 virtual CodeFusion.Data.Postgres.PgRowHandler.Invoke(in CodeFusion.Data.Postgres.PgRow row, object? state) -> long
 virtual CodeFusion.Data.Postgres.PgTransport.Started() -> void

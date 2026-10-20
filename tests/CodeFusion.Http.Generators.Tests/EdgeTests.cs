@@ -465,6 +465,29 @@ public class EdgeTests
         Assert.Empty(Harness.Problems(output));
     }
 
+    [Fact]
+    public void APragmaAtTheMemberSilencesItsWarning()
+    {
+        // the warning came with a location outside the compilation's trees, which a pragma can't reach: an app had to
+        // turn it off for the whole project
+        string source = """
+            #pragma warning disable CS0169, CS0649
+            internal partial struct Signup
+            {
+                public Utf8 Name;
+            #pragma warning disable CFH0109
+                internal bool IsAdmin;
+            #pragma warning restore CFH0109
+                internal long Level { get; set; }
+            }
+            public static class P { public static void Map(IEndpointRouteBuilder api) => api.MapPost("/a", static (Signup s) => Reply.NoContent()); }
+            """;
+        var (_, diagnostics, _) = Harness.Generate(source);
+        Assert.Equal(["CFH0109 6:19 Signup.IsAdmin", "CFH0109 8:19 Signup.Level"], Unbound(diagnostics));
+        Assert.All(diagnostics, d => Assert.Equal("Program.cs", d.Location.SourceTree?.FilePath));
+        Assert.Equal([true, false], diagnostics.OrderBy(d => d.Location.SourceSpan.Start).Select(d => d.IsSuppressed));
+    }
+
     [Theory]
     [InlineData("internal partial struct S { internal required long N; }", "S.N")]
     [InlineData("internal partial struct S { [JsonIgnore] public required long N; }", "S.N")]

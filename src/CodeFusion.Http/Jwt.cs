@@ -18,7 +18,8 @@ public sealed class Jwt : IRequestScoped
 {
     const long Ttl = 30L * 24 * 3600;
 
-    /// <summary>The shortest secret, in UTF-8 bytes: HS256 wants a key at least as long as its 32-byte hash.</summary>
+    /// <summary>The shortest secret, in UTF-8 bytes: HS256 wants a key at least as long as its 32-byte hash. Only
+    /// <c>allowShortSecret</c> takes a shorter one.</summary>
     public const int MinSecretBytes = 32;
 
     /// <summary>The longest token this server accepts.</summary>
@@ -43,15 +44,23 @@ public sealed class Jwt : IRequestScoped
 
     /// <summary>Tokens signed with <paramref name="secret"/>'s UTF-8 bytes (at least <see cref="MinSecretBytes"/>),
     /// valid for 30 days.</summary>
-    public Jwt(string secret) : this(secret, TimeSpan.FromSeconds(Ttl)) { }
+    public Jwt(string secret) : this(secret, TimeSpan.FromSeconds(Ttl), false) { }
 
     /// <summary>Tokens signed with <paramref name="secret"/>'s UTF-8 bytes (at least <see cref="MinSecretBytes"/>),
     /// valid for <paramref name="lifetime"/> (whole seconds, at least one) from their issue.</summary>
-    public Jwt(string secret, TimeSpan lifetime)
+    public Jwt(string secret, TimeSpan lifetime) : this(secret, lifetime, false) { }
+
+    /// <summary>
+    /// <see cref="Jwt(string, TimeSpan)"/>, and with <paramref name="allowShortSecret"/> a secret shorter than
+    /// <see cref="MinSecretBytes"/> (but not empty) too, for a deployment handed a fixed one. Its tokens are standard
+    /// HS256 (RFC 2104 pads a short key), but a short or guessable secret can be found offline from any one token,
+    /// and then anyone can sign as anyone: only when the secret isn't yours to choose (SECURITY.md).
+    /// </summary>
+    public Jwt(string secret, TimeSpan lifetime, bool allowShortSecret)
     {
         ArgumentException.ThrowIfNullOrEmpty(secret);
-        if (Encoding.UTF8.GetByteCount(secret) < MinSecretBytes)
-            throw new ArgumentException($"the secret is shorter than {MinSecretBytes} bytes of UTF-8", nameof(secret));
+        if (!allowShortSecret && Encoding.UTF8.GetByteCount(secret) < MinSecretBytes)
+            throw new ArgumentException($"the secret is shorter than {MinSecretBytes} bytes of UTF-8 (allowShortSecret takes it)", nameof(secret));
         if (lifetime < TimeSpan.FromSeconds(1) || lifetime.Ticks % TimeSpan.TicksPerSecond != 0)
             throw new ArgumentOutOfRangeException(nameof(lifetime), lifetime, "whole seconds, at least one");
         _key = Encoding.UTF8.GetBytes(secret);

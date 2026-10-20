@@ -18,7 +18,8 @@ namespace CodeFusion.Http.Tests;
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class Quiet
 {
-    /// <summary>Tests that measure the whole process's allocations run alone.</summary>
+    /// <summary>Tests that measure the whole process's allocations, and tests that block thread-pool threads for
+    /// seconds, run alone.</summary>
     public const string Name = "quiet";
 }
 
