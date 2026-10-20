@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The contest rig: Google Cloud machines set up like the two contests' benchmark boxes, the entries deployed and
+       built on them, and the contests' scoring searches. README.md says how to run it. The same binary runs on the
+       target box as its switch and monitor hooks (`agent ...`), published for linux-x64. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>cbench</AssemblyName>
+    <RootNamespace>CodeFusion.ContestBench</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+    <UseSystemResourceKeys>true</UseSystemResourceKeys>
+    <!-- A command-line tool: its messages are English text, and it prints what it does. -->
+    <NoWarn>$(NoWarn);CA1303;CA1515;CA1848;CA1031;CA2007</NoWarn>
+  </PropertyGroup>
+
+</Project>
