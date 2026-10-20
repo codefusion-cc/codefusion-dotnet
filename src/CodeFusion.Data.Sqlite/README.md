@@ -84,6 +84,24 @@ sealed class FirstColumn : IRowReader
 | `MmapSize`, `CacheKiB` | 256 MiB, 8 MiB | per connection |
 | `CompleteOnWriterThread` | off | a write's caller continues on the writer's thread: one thread switch less, but it must never wait on another write there |
 | `LeaderCommit` | off | a write that finds the writer idle commits on its caller's thread |
+| `Exclusive` | off | one connection for every read and write, the file locked to this process: for one or two cores (below) |
+
+## One core
+
+`Exclusive = true` gives the file to this process alone (`PRAGMA locking_mode=EXCLUSIVE`) and runs every read and
+write on one connection: SQLite keeps the WAL index in the process's memory, and reads and the writer take turns
+instead of reading beside it. On one core, where they take turns anyway, that is much faster under a mixed load:
+
+| 1 vCPU, 2 GiB | default | `Exclusive` |
+|---|---|---|
+| point reads, 1 thread | 1.55 to 1.67 M/s | 1.43 to 1.74 M/s |
+| 64 writers, `Normal` | 59 to 74 k/s | 58 to 69 k/s |
+| 16 callers, 9 reads to each write, `Normal` | 49 to 78 k ops/s | 374 to 431 k ops/s |
+| the same, `Full` | 48 to 51 k ops/s | 144 to 179 k ops/s |
+
+(100,000 rows, reads and updates by key; a container pinned to one CPU of a Colima VM, linux-arm64; three rounds
+alternating the two, two with `Full`.) On more cores it costs: reads no longer run beside each other, so 4 threads on an 8-core Mac
+read 1.8 to 2.1 M/s where the default reads 6.1 to 6.8 M/s.
 
 ## Failures
 

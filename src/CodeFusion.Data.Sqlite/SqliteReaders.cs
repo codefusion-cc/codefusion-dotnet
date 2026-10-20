@@ -154,6 +154,10 @@ internal sealed class SqliteReaders : IDisposable
     readonly CommitClock _clock;
     readonly SqliteStatement _begin = new("BEGIN"), _end = new("COMMIT");
     int _stopped;
+    /// <summary>Exclusive mode (<see cref="SqliteDatabase.Exclusive"/>): the one connection is the writer's, which takes it
+    /// for each group as a read takes it (<see cref="Enter"/>). Reads keep their read transaction from read to read; the
+    /// writer ends it before its own BEGIN.</summary>
+    readonly bool _shared;
 
     public SqliteReaders(string path, SqliteDatabase options, CommitClock clock)
     {
@@ -174,7 +178,28 @@ internal sealed class SqliteReaders : IDisposable
         }
     }
 
+    /// <summary>Exclusive mode: the writer's connection, shared with it.</summary>
+    public SqliteReaders(SqliteConn writer, CommitClock clock)
+    {
+        _clock = clock;
+        _conns = [writer];
+        _taken = new int[Stride];
+        _snapshot = [-1];
+        _shared = true;
+    }
+
     internal SqliteConn[] Connections => _conns;
+
+    /// <summary>Exclusive mode: the writer takes the connection for a group, waiting for a read running on it, stopped or
+    /// not (the writer commits what has queued after a stop).</summary>
+    internal void Enter()
+    {
+        SpinWait spin = default;
+        while (Interlocked.CompareExchange(ref _taken[0], 1, 0) != 0) spin.SpinOnce();
+    }
+
+    /// <summary>Exclusive mode: the writer gives the connection back, before it completes the group's writes.</summary>
+    internal void Exit() => Volatile.Write(ref _taken[0], 0);
 
     /// <summary>Takes a free connection, starting from one picked by the thread so threads spread out; -1 once stopped.</summary>
     int Take()
@@ -210,7 +235,13 @@ internal sealed class SqliteReaders : IDisposable
         try
         {
             long now = Volatile.Read(ref _clock.Seq);
-            if (_snapshot[i] != now)
+            if (_shared)
+            {
+                conn.ClearClock();
+                // a read transaction kept from read to read, as the readers' snapshots are: the writer ends it before its BEGIN
+                if (Sqlite3.GetAutocommit(conn.Db) != 0 && conn.Once(_begin) is var b && b != Sqlite3.Ok) return SqliteRun.Failed(conn, b);
+            }
+            else if (_snapshot[i] != now)
             {
                 if (_snapshot[i] >= 0) _ = conn.Once(_end);
                 _snapshot[i] = -1;
@@ -221,7 +252,7 @@ internal sealed class SqliteReaders : IDisposable
             int rc = SqliteRun.Steps<TReader>(conn, job, state, save: false, out int rows, out long value, out var failure);
             if (rc != Sqlite3.Ok)
             {
-                if (Sqlite3.GetAutocommit(conn.Db) != 0) _snapshot[i] = -1; // the error ended the transaction
+                if (!_shared && Sqlite3.GetAutocommit(conn.Db) != 0) _snapshot[i] = -1; // the error ended the transaction
                 return SqliteRun.Failed(conn, rc, rows);
             }
             return failure is null ? new DataResult(DataStatus.Ok, rows, value) : new DataResult(DataStatus.ReaderFailed, rows, value, failure);
@@ -237,6 +268,7 @@ internal sealed class SqliteReaders : IDisposable
     /// don't hold the WAL back from a checkpoint. The writer calls it after each group.</summary>
     public void Sweep()
     {
+        if (_shared) return;
         long now = Volatile.Read(ref _clock.Seq);
         for (int i = 0; i < _conns.Length; i++)
         {
@@ -259,7 +291,8 @@ internal sealed class SqliteReaders : IDisposable
         {
             SpinWait spin = default;
             while (Interlocked.CompareExchange(ref _taken[i * Stride], 1, 0) != 0) spin.SpinOnce();
-            _conns[i].Dispose();
+            if (_shared) Volatile.Write(ref _taken[0], 0); // the writer's: it closes it after its last group
+            else _conns[i].Dispose();
         }
     }
 }

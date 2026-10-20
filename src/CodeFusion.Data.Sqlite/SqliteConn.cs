@@ -108,6 +108,8 @@ internal sealed unsafe class SqliteConn : IDisposable
             // journal_mode=WAL is the file's, kept in it: the writer sets it, before any reader opens the file
             if (writer)
             {
+                // exclusive before the WAL is first touched: SQLite then keeps the WAL index in this process's memory
+                if (options.Exclusive) conn.Exec("PRAGMA locking_mode=EXCLUSIVE");
                 conn.Exec("PRAGMA journal_mode=WAL");
                 // no checkpoint inside COMMIT: the writer runs one after the group's writes have completed
                 _ = Sqlite3.WalHook(db, &SqlFunctions.WalFrames, (nint)conn.WalFrames);
@@ -215,6 +217,9 @@ internal sealed unsafe class SqliteConn : IDisposable
         _ = Sqlite3.Reset(stmt);
         return rc is Sqlite3.Done or Sqlite3.Row ? Sqlite3.Ok : Sqlite3.ExtendedErrCode(_db);
     }
+
+    /// <summary>cf_now() is the time of each call again, not a group's start (a read on the writer's connection).</summary>
+    public void ClearClock() => *Clock = 0;
 
     /// <summary>A job starts on this connection (for the watchdog).</summary>
     public void Started() => Volatile.Write(ref _started, Stopwatch.GetTimestamp());

@@ -744,11 +744,11 @@ Postgres 18 with CODEFUSION_TEST_DB and the four CODEFUSION_TEST_PG_* logins set
 
 ## The SQLite provider (tests/CodeFusion.Data.Sqlite.Tests)
 
-122 tests, nothing to set up. 48 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked
+129 tests, nothing to set up. 48 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked
 unchanged: the same Conduit queries, seed and expected replies as on Postgres. 48 are the operator tests ported: each
 query's SQL in SQLite's dialect, checked as text, and the same results on the same seed. The rest are the provider's
-own: group commit (9), reads and snapshots (8), migrations (4), and crash recovery (4: a child process killed mid-group
-and after a commit, each with `synchronous` NORMAL and FULL). Every test that stops a source checks that the writer
+own: group commit (9), reads and snapshots (8), migrations (4), the one-connection `Exclusive` mode (7), and crash
+recovery (4: a child process killed mid-group and after a commit, each with `synchronous` NORMAL and FULL). Every test that stops a source checks that the writer
 caught nothing unexpected and, in Debug builds, that every job it rented is back in the pool (`SqliteChecks`).
 
 The schema and LINQ queries both providers run live in `tests/Shared/Conduit` and `tests/Shared/Ops`; each provider's
@@ -771,6 +771,12 @@ SQL.
 | a child row of `SelectMany` joins without LEFT | `CommentsNewestFirstAndAnEmptyListAndAMissingArticle` (shared) |
 | `IS` written as `=` for nullable equality | `EqualityOfTwoNullablesHoldsForTwoNulls` |
 | a key read from `sqlite_sequence` by the quoted table name | `AnInsertedKeyOfATableNeedingQuotes` |
+| Exclusive: the writer runs a group without taking the connection from the reads | `AReadSeesEveryWriteThatCompletedBeforeItAndNoUnitHalfDone` and the watchdog test, then the run died |
+| Exclusive: the writer gives the connection back after completing the group | the run hung, with no summary |
+| Exclusive: the writer doesn't end the reads' transaction before its BEGIN | 5 of the 7 `ExclusiveTests` |
+| Exclusive: a read keeps the last group's time for `cf_now()` | `NowInAReadIsTheTimeOfTheRead` |
+| Exclusive: Stop closes the writer before the reads stop | the run hung or crashed, with no summary |
+| a cancelled write completed inside the transaction | `AContinuationOnTheWritersThreadReadsAndWrites` (with `CompleteOnWriterThread`, its continuation read on the held connection) |
 
 The crash tests can't be made red by breaking the provider: what they check (nothing of an open group survives, every
 completed write does) is SQLite's WAL recovery, which a kill can't get past. They check that the provider keeps to it:

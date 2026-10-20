@@ -86,6 +86,15 @@ public sealed class SqliteDatabase
     public bool LeaderCommit { get; init; }
 
     /// <summary>
+    /// One connection does every read and write, and the file is this process's alone (<c>PRAGMA locking_mode=EXCLUSIVE</c>):
+    /// SQLite keeps the WAL index in the process's memory instead of a shared-memory file, takes no file lock per
+    /// transaction, and keeps one page cache instead of one per reader. Reads still run on the caller's thread, one at a
+    /// time, and wait while a group commits. For a server of one or two cores; <see cref="Readers"/> is ignored. Off by
+    /// default.
+    /// </summary>
+    public bool Exclusive { get; init; }
+
+    /// <summary>
     /// The schema, as numbered steps: step n (from 1) is <c>Migrations[n - 1]</c>. At <see cref="OpenSource"/> each step
     /// past the file's <c>PRAGMA user_version</c> runs in its own transaction with the version moved inside it, so a
     /// crash leaves the file at one version or the next, and the next open finishes. A file at a version the app
@@ -112,7 +121,7 @@ public sealed class SqliteDatabase
         {
             Migrate(writerConn);
             var writer = new SqliteWriter(writerConn, this, System.IO.Path.GetFileName(Path));
-            readers = new SqliteReaders(Path, this, writer.Clock);
+            readers = Exclusive ? new SqliteReaders(writerConn, writer.Clock) : new SqliteReaders(Path, this, writer.Clock);
             writer.Readers = readers;
             var source = new SqliteDataSource(this, readers, writer) { Errors = Errors, OnFailure = OnFailure };
             writer.Start();
@@ -192,8 +201,9 @@ public sealed class SqliteDataSource : DataSource, IDisposable
         {
             Thread.Sleep(sleep);
             long now = Stopwatch.GetTimestamp();
-            foreach (var c in Readers.Connections)
-                if (c.InterruptIfOver(now, limit)) Interlocked.Increment(ref _interrupted);
+            if (!_database.Exclusive) // else the one connection is the writer's
+                foreach (var c in Readers.Connections)
+                    if (c.InterruptIfOver(now, limit)) Interlocked.Increment(ref _interrupted);
             if (Writer.Connection.InterruptIfOver(now, limit)) Interlocked.Increment(ref _interrupted);
         }
     }
@@ -204,6 +214,13 @@ public sealed class SqliteDataSource : DataSource, IDisposable
     {
         if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
         if (_watchdog.IsAlive) _watchdog.Join();
+        if (_database.Exclusive)
+        {
+            // the readers' connection is the writer's: no read may run while the writer closes it
+            Readers.Dispose();
+            Writer.Stop();
+            return;
+        }
         Writer.Stop();
         Readers.Dispose();
     }

@@ -200,17 +200,52 @@ public sealed unsafe class SqliteWriter
 
     void RunGroup(int n)
     {
+        // in exclusive mode the connection is the readers' too: taken for the transaction, and given back before any of
+        // the group's writes completes, whose continuation may read
+        Enter();
+        DataResult? failed;
+        try
+        {
+            failed = Transaction(n);
+        }
+        finally
+        {
+            Exit();
+        }
+        if (failed is { } all)
+        {
+            FailAll(n, all);
+            return;
+        }
+        for (int i = 0; i < n; i++)
+        {
+            if (_group[i] is not { } job) continue;
+            _group[i] = null;
+            if (job.Failed) job.Complete(job.Failure, Inline);
+            else
+            {
+                Interlocked.Increment(ref Counters.Writes);
+                job.Complete(job.HandRows(), Inline);
+            }
+        }
+        AfterGroup();
+    }
+
+    /// <summary>The group's writes in one transaction, run once more if SQLite rolled it back: null once committed (the
+    /// commit clock moved), else the failure of every write that has none of its own. Completes nothing.</summary>
+    DataResult? Transaction(int n)
+    {
         for (int attempt = 0; ; attempt++)
         {
             *_conn.Clock = Sqlite.ClockNow(); // cf_now(): the group's start
             _conn.Started();
+            EndRead();
             int rc = _conn.Once(_beginGroup);
             if (rc != Sqlite3.Ok)
             {
                 _conn.Ended();
                 Interlocked.Increment(ref Counters.FailedGroups);
-                FailAll(n, SqliteRun.Failed(_conn, rc));
-                return;
+                return SqliteRun.Failed(_conn, rc);
             }
             bool rolledBack = false;
             for (int i = 0; i < n && !rolledBack; i++)
@@ -219,8 +254,9 @@ public sealed unsafe class SqliteWriter
                 if (job is null || job.Failed) continue;
                 if (job.Aborted.IsCancellationRequested)
                 {
-                    _group[i] = null;
-                    job.Complete(DataResult.Of(DataStatus.Canceled), Inline);
+                    // completed with the rest, after the transaction
+                    job.Failed = true;
+                    job.Failure = DataResult.Of(DataStatus.Canceled);
                     continue;
                 }
                 bool unit = job.Count > 1;
@@ -259,8 +295,7 @@ public sealed unsafe class SqliteWriter
                     if (_group[i] is { Failed: false } j) j.Restart();
                 if (attempt == 0) continue;
                 Interlocked.Increment(ref Counters.FailedGroups);
-                FailAll(n, SqliteRun.Failed(_conn, Sqlite3.ExtendedErrCode(_conn.Db)));
-                return;
+                return SqliteRun.Failed(_conn, Sqlite3.ExtendedErrCode(_conn.Db));
             }
             rc = _conn.Once(_commit);
             _conn.Ended();
@@ -269,25 +304,29 @@ public sealed unsafe class SqliteWriter
                 var failed = SqliteRun.Failed(_conn, rc);
                 if (Sqlite3.GetAutocommit(_conn.Db) == 0) _ = _conn.Once(_rollback);
                 Interlocked.Increment(ref Counters.FailedGroups);
-                FailAll(n, failed);
-                return;
+                return failed;
             }
             Interlocked.Increment(ref Counters.Commits);
             Volatile.Write(ref Clock.Seq, Clock.Seq + 1); // before any write completes: a read that starts after sees it
-            for (int i = 0; i < n; i++)
-            {
-                if (_group[i] is not { } job) continue;
-                _group[i] = null;
-                if (job.Failed) job.Complete(job.Failure, Inline);
-                else
-                {
-                    Interlocked.Increment(ref Counters.Writes);
-                    job.Complete(job.HandRows(), Inline);
-                }
-            }
-            AfterGroup();
-            return;
+            return null;
         }
+    }
+
+    void Enter()
+    {
+        if (_options.Exclusive) Readers!.Enter();
+    }
+
+    void Exit()
+    {
+        if (_options.Exclusive) Readers!.Exit();
+    }
+
+    /// <summary>Exclusive mode: ends the read transaction the reads keep open on the connection, before a write
+    /// transaction or a checkpoint. Holding the connection (<see cref="Enter"/>).</summary>
+    void EndRead()
+    {
+        if (_options.Exclusive && Sqlite3.GetAutocommit(_conn.Db) == 0) _ = _conn.Once(_commit);
     }
 
     /// <summary>After a group's writes have completed: idle readers let go of the snapshots this commit made old (so none
@@ -297,7 +336,16 @@ public sealed unsafe class SqliteWriter
     {
         Readers?.Sweep();
         if (*_conn.WalFrames < _options.CheckpointFrames) return;
-        _ = Sqlite3.WalCheckpoint(_conn.Db, null, 0, out _, out _); // PASSIVE: never waits on a reader
+        Enter();
+        try
+        {
+            EndRead();
+            _ = Sqlite3.WalCheckpoint(_conn.Db, null, 0, out _, out _); // PASSIVE: never waits on a reader
+        }
+        finally
+        {
+            Exit();
+        }
         Interlocked.Increment(ref Counters.Checkpoints);
         *_conn.WalFrames = 0;
     }
@@ -324,7 +372,16 @@ public sealed unsafe class SqliteWriter
         if (t_writer == this)
         {
             // on the writer's own thread, in a completion: after the group's COMMIT, between transactions
-            _conn.Exec(sql);
+            Enter();
+            try
+            {
+                EndRead();
+                _conn.Exec(sql);
+            }
+            finally
+            {
+                Exit();
+            }
             Volatile.Write(ref Clock.Seq, Clock.Seq + 1);
             return;
         }
@@ -338,13 +395,16 @@ public sealed unsafe class SqliteWriter
                 }
             Thread.Sleep(1);
         }
+        Enter();
         try
         {
+            EndRead();
             _conn.Exec(sql);
             Volatile.Write(ref Clock.Seq, Clock.Seq + 1); // readers see it, as after a commit
         }
         finally
         {
+            Exit();
             lock (_lock) _busy = false;
         }
     }
