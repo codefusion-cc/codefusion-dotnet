@@ -88,7 +88,7 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        target: [http-parser, http-kestrel, http-path, json-body, json-endpoint, pg-row, pg-error, pg-startup, pg-scram-first, pg-scram-final, pg-settings]
+        target: [http-parser, http-kestrel, http-path, json-body, json-endpoint, pg-row, pg-error, pg-startup, pg-scram-first, pg-scram-final, pg-settings, sqlite-json-array, sqlite-saved-row]
     env:
       LIBFUZZER: ${{ github.workspace }}/artifacts/libfuzzer-dotnet
     steps:

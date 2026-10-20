@@ -30,7 +30,7 @@ switch (args)
         if (!File.Exists(sharpfuzz))
             Check(Run("dotnet", ["tool", "install", "SharpFuzz.CommandLine", "--version", SharpFuzzVersion, "--tool-path", tools]));
         // The code under test; not the harness, the test runner or the framework.
-        foreach (string lib in (string[])["CodeFusion.Core", "CodeFusion.Http", "CodeFusion.Data", "CodeFusion.Data.Postgres"])
+        foreach (string lib in (string[])["CodeFusion.Core", "CodeFusion.Http", "CodeFusion.Data", "CodeFusion.Data.Postgres", "CodeFusion.Data.Sqlite"])
             Check(Run(sharpfuzz, [Path.Combine(bin, lib + ".dll")]));
         return 0;
 
