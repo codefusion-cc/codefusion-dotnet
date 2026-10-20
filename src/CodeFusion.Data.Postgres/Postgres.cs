@@ -35,6 +35,55 @@ public readonly struct Postgres : IDataProvider<Postgres, PgStatement, PgCommand
         return new PgStatement(sql, types);
     }
 
+    /// <summary>
+    /// The update's statement, and the one that runs a group commit's run of them as one: its parameters as arrays,
+    /// unnested in order, the last write to each key kept (<c>DISTINCT ON</c> the key, latest first), so the rows
+    /// end as running the updates one by one would leave them.
+    /// </summary>
+    public static PgStatement KeyedUpdate(string sql, string table, string key, int keyParameter, string[] columns, int[] columnParameters,
+        params ReadOnlySpan<DataType> parameters)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(columns);
+        ArgumentNullException.ThrowIfNull(columnParameters);
+        var statement = Statement(sql, parameters);
+        int n = parameters.Length;
+        if (columns.Length == 0 || columns.Length != columnParameters.Length || (uint)keyParameter >= (uint)n) return statement;
+        var arrays = new PgType[n];
+        var elements = new uint[n];
+        for (int i = 0; i < n; i++)
+        {
+            if (parameters[i] == DataType.TextArray) return statement;
+            elements[i] = (uint)TypeOf(parameters[i]);
+            arrays[i] = ArrayOf(parameters[i]);
+        }
+        var b = new System.Text.StringBuilder("UPDATE ").Append(table).Append(" AS t0 SET ");
+        for (int c = 0; c < columns.Length; c++)
+        {
+            if ((uint)columnParameters[c] >= (uint)n) return statement;
+            b.Append(c == 0 ? "" : ", ").Append(columns[c]).Append(" = v.p").Append(columnParameters[c] + 1);
+        }
+        b.Append(" FROM (SELECT DISTINCT ON (p").Append(keyParameter + 1).Append(") * FROM unnest(");
+        for (int i = 0; i < n; i++) b.Append(i == 0 ? "$" : ", $").Append(i + 1);
+        b.Append(") WITH ORDINALITY AS u(");
+        for (int i = 0; i < n; i++) b.Append('p').Append(i + 1).Append(", ");
+        b.Append("o) ORDER BY p").Append(keyParameter + 1).Append(", o DESC) AS v WHERE t0.").Append(key).Append(" = v.p").Append(keyParameter + 1);
+        statement.Batch = new PgStatement(b.ToString(), arrays) { ElementTypes = elements };
+        return statement;
+    }
+
+    static PgType ArrayOf(DataType type) => type switch
+    {
+        DataType.Int64 => (PgType)1016,
+        DataType.Int32 => (PgType)1007,
+        DataType.Boolean => (PgType)1000,
+        DataType.Double => (PgType)1022,
+        DataType.Text => (PgType)1009,
+        DataType.Timestamp => (PgType)1185,
+        _ => throw new ArgumentOutOfRangeException(nameof(type)),
+    };
+
     static PgType TypeOf(DataType type) => type switch
     {
         DataType.Int64 => PgType.Int8,

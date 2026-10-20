@@ -25,7 +25,16 @@ enum Marker
 }
 
 /// <summary>One statement of a command, with the C# condition it is sent under (ThenIf).</summary>
-sealed record Statement(string Name, string Sql, List<Param> Params, Guard? Condition);
+sealed record Statement(string Name, string Sql, List<Param> Params, Guard? Condition)
+{
+    /// <summary>An update of one row by its key, every value set a parameter: a provider may run a group of them as one
+    /// statement.</summary>
+    public KeyedUpdate? Keyed { get; init; }
+}
+
+/// <summary>An update's shape: <c>UPDATE Table SET Columns[i] = $ColumnParameters[i] WHERE Key = $KeyParameter</c>,
+/// the names as the SQL has them, the parameters from 0.</summary>
+sealed record KeyedUpdate(string Table, string Key, int KeyParameter, string[] Columns, int[] ColumnParameters);
 
 /// <summary>An impure argument of an inlined call: the local <see cref="Name"/>, computed from <see cref="Code"/>
 /// where the call is (under <see cref="Under"/>, before statement <see cref="Before"/>, in the order C# makes it,
@@ -715,6 +724,8 @@ sealed partial class Translator
             if (!select)
             {
                 Add(b.ToString(), condition);
+                if (root && condition is null && conds.Count == 1 && Keyed(e, key, set, conds[0]) is { } keyed)
+                    _q.Statements[_q.Statements.Count - 1] = _q.Statements[_q.Statements.Count - 1] with { Keyed = keyed };
                 return;
             }
             Add(ReturningOrCte(b.ToString(), rest[0], e, root), condition);
@@ -758,6 +769,31 @@ sealed partial class Translator
     }
 
     /// <summary>The SET list of <c>a => new Article { Title = ..., ... }</c>, the row's columns unqualified.</summary>
+    /// <summary>The shape of <c>UPDATE e SET set WHERE where</c> when <paramref name="where"/> is the key equal to a
+    /// parameter and every value <paramref name="set"/> gives is a parameter (no text arrays); null otherwise.</summary>
+    static readonly string[] SetSeparator = [", "];
+
+    KeyedUpdate? Keyed(EntityInfo e, ColumnInfo key, string set, string where)
+    {
+        static int Parameter(string sql) =>
+            sql.Length > 1 && sql[0] == '$' && sql.Skip(1).All(char.IsDigit) && int.TryParse(sql.Substring(1), out int n) ? n - 1 : -1;
+        if (Params.Items.Any(p => p.Kind == ParamType.TextArray)) return null;
+        string keySql = D.Quote(key.Name);
+        if (!where.StartsWith(keySql + " = ", StringComparison.Ordinal) || Parameter(where.Substring(keySql.Length + 3)) is not (>= 0 and var keyParameter)) return null;
+        var columns = new List<string>();
+        var parameters = new List<int>();
+        var names = new HashSet<string>(e.Columns.Values.Select(c => D.Quote(c.Name)));
+        foreach (string piece in set.Split(SetSeparator, StringSplitOptions.None))
+        {
+            int eq = piece.IndexOf(" = ", StringComparison.Ordinal);
+            if (eq < 0 || !names.Contains(piece.Substring(0, eq)) || Parameter(piece.Substring(eq + 3)) is not (>= 0 and var p)) return null;
+            columns.Add(piece.Substring(0, eq));
+            parameters.Add(p);
+        }
+        if (parameters.Append(keyParameter).Any(p => p >= Params.Items.Count)) return null;
+        return new KeyedUpdate(TableSql(e), keySql, keyParameter, columns.ToArray(), parameters.ToArray());
+    }
+
     string Set(IAnonymousFunctionOperation set, Env env, Row target, Location at)
     {
         if (Apply(set, env, new RowValue(target)) is not ObjectValue o || !Known.Same(o.Type, target.Entity.Type))

@@ -14,6 +14,8 @@ public sealed class PgCounters
 {
     /// <summary>Groups run, commands in them, the largest group, groups run again after a failure, and commands refused because the queue was full.</summary>
     public long Groups, Grouped, GroupMax, Reruns, Refused;
+    /// <summary>Writer: writes that ran merged with others of their statement into one (keyed updates).</summary>
+    public long Merged;
     /// <summary>Writer: time from taking a group to its last commit, the most of it, and the longest a write waited in the queue.</summary>
     public long Ticks, TicksMax, WaitTicksMax;
 

@@ -329,6 +329,22 @@ public sealed partial class OpsDb : DataContext<Postgres>
 
     public Write Deactivate(int age) => People.Where(p => p.Age > age).Update(p => new Person { Active = false });
 
+    // updates of one row by its key, every value a parameter: the writer may merge a run of each into one statement
+    public Write SetAge(long id, int age) => People.Where(p => p.Id == id).Update(p => new Person { Age = age });
+
+    public Write SetName(long id, Utf8 name) => People.Where(p => p.Id == id).Update(p => new Person { Name = name });
+
+    public Write SetCard(long id, Utf8? nick, double? score, bool active, Timestamp born) =>
+        People.Where(p => p.Id == id).Update(p => new Person { Nick = nick, Score = score, Active = active, Born = born });
+
+    // not one row by its key with parameters only: never merged
+    public Write AgeOneYear(long id) => People.Where(p => p.Id == id).Update(p => new Person { Age = p.Age + 1 });
+
+    public Write SetAgeOfName(Utf8 name, int age) => People.Where(p => p.Name == name).Update(p => new Person { Age = age });
+
+    /// <summary>Keeps the writer busy, so the writes queued meanwhile go as the next group together.</summary>
+    public Write Pause() => Sql($"SELECT pg_sleep(0.15)");
+
     public One<long> DeletePetIf(long id, int legs) => Pets.Where(x => x.Id == id).DeleteIf(x => x.Legs == legs).Select(x => x.OwnerId).One();
 
     public Write DeletePets(long owner) => Pets.Where(x => x.OwnerId == owner).Delete();

@@ -52,10 +52,19 @@ sealed class PgConnection : IDisposable
     struct Step
     {
         public int Slot;
+        /// <summary>A merged statement's: the slots it ran for are <see cref="Slot"/> to this (exclusive); else 0.</summary>
+        public int BatchEnd;
         public int StatementId;
         public bool Parse;
         public bool Last;
     }
+
+    /// <summary>The failure <see cref="ReadReplies"/> last returned was a merged statement's: the slot it named is the
+    /// run's first, not necessarily the write whose values failed.</summary>
+    internal bool FailedInBatch;
+
+    /// <summary>Where each parameter of each write of a merged run starts in its job's buffer: scratch, kept.</summary>
+    int[] _offsets = new int[64];
 
     /// <summary>Takes in the replies waiting while a large batch goes out.</summary>
     readonly Action _takeIn;
@@ -376,6 +385,88 @@ sealed class PgConnection : IDisposable
         }
     }
 
+    /// <summary>
+    /// Adds group slots <paramref name="from"/> to <paramref name="to"/> (exclusive), writes of one statement with a
+    /// <see cref="PgStatement.Batch"/>, as one Bind and Execute of the batch statement: its parameter i is the array of
+    /// every write's parameter i, in order. Each element is the write's own bytes as its Bind holds them (a length,
+    /// then the value), which is how an array's elements go too.
+    /// </summary>
+    internal void AddBatch(PgJob?[] group, int from, int to, PgStatement batch)
+    {
+        if (batch.Id >= _prepared.Length)
+        {
+            Array.Resize(ref _prepared, Math.Max(_prepared.Length * 2, batch.Id + 1));
+            Array.Resize(ref _columns, _prepared.Length);
+        }
+        bool parse = _prepared[batch.Id] == 0;
+        if (parse)
+        {
+            Append(batch.Parse);
+            _prepared[batch.Id] = 1;
+        }
+        int n = to - from, pc = batch.ParamCount, head = 5 + group[from]!.Statements[0].BindHead.Length;
+        if (_offsets.Length < n * pc) _offsets = new int[Math.Max(n * pc, _offsets.Length * 2)];
+        Span<int> sizes = pc <= 32 ? stackalloc int[pc] : new int[pc];
+        Span<bool> nulls = pc <= 32 ? stackalloc bool[pc] : new bool[pc];
+        sizes.Clear();
+        nulls.Clear();
+        for (int j = 0; j < n; j++)
+        {
+            var buf = group[from + j]!.Buf;
+            int at = head;
+            for (int p = 0; p < pc; p++)
+            {
+                _offsets[j * pc + p] = at;
+                int len = BinaryPrimitives.ReadInt32BigEndian(buf.AsSpan(at));
+                if (len < 0) nulls[p] = true;
+                int whole = 4 + Math.Max(len, 0);
+                sizes[p] += whole;
+                at += whole;
+            }
+        }
+        // Bind: its head, each array (its own length, then 1 dimension, the null flag, the element type, the count,
+        // the lower bound, the elements), one result format (binary); then Execute
+        int body = 4 + batch.BindHead.Length + 4;
+        for (int p = 0; p < pc; p++) body += 4 + 20 + sizes[p];
+        int need = 1 + body + 10;
+        if (_send.Length - _sendLen < need) Array.Resize(ref _send, Math.Max(_send.Length * 2, _sendLen + need));
+        var d = _send.AsSpan(_sendLen, need);
+        d[0] = (byte)'B';
+        BinaryPrimitives.WriteInt32BigEndian(d[1..], body);
+        int w = 5;
+        batch.BindHead.CopyTo(d[w..]);
+        w += batch.BindHead.Length;
+        var elements = batch.ElementTypes!;
+        for (int p = 0; p < pc; p++)
+        {
+            BinaryPrimitives.WriteInt32BigEndian(d[w..], 20 + sizes[p]);
+            BinaryPrimitives.WriteInt32BigEndian(d[(w + 4)..], 1);
+            BinaryPrimitives.WriteInt32BigEndian(d[(w + 8)..], nulls[p] ? 1 : 0);
+            BinaryPrimitives.WriteUInt32BigEndian(d[(w + 12)..], elements[p]);
+            BinaryPrimitives.WriteInt32BigEndian(d[(w + 16)..], n);
+            BinaryPrimitives.WriteInt32BigEndian(d[(w + 20)..], 1);
+            w += 24;
+            for (int j = 0; j < n; j++)
+            {
+                var buf = group[from + j]!.Buf;
+                int at = _offsets[j * pc + p];
+                int whole = 4 + Math.Max(BinaryPrimitives.ReadInt32BigEndian(buf.AsSpan(at)), 0);
+                buf.AsSpan(at, whole).CopyTo(d[w..]);
+                w += whole;
+            }
+        }
+        BinaryPrimitives.WriteInt16BigEndian(d[w..], 1);
+        BinaryPrimitives.WriteInt16BigEndian(d[(w + 2)..], 1);
+        w += 4;
+        d[w] = (byte)'E';
+        BinaryPrimitives.WriteInt32BigEndian(d[(w + 1)..], 9);
+        d[w + 5] = 0;
+        BinaryPrimitives.WriteInt32BigEndian(d[(w + 6)..], 0);
+        _sendLen += need;
+        if (_stepCount == _steps.Length) Array.Resize(ref _steps, _stepCount * 2);
+        _steps[_stepCount++] = new Step { Slot = from, BatchEnd = to, StatementId = batch.Id, Parse = parse, Last = true };
+    }
+
     /// <summary>Ends the batch with a Sync and sends it.</summary>
     internal void Flush()
     {
@@ -404,6 +495,7 @@ sealed class PgConnection : IDisposable
     internal int ReadReplies(PgJob?[] group, bool keep, out PgException? error)
     {
         error = null;
+        FailedInBatch = false;
         int failed = -1;
         int step = 0;
         // within a step: 0 expects ParseComplete (if a Parse went), 3 ParameterDescription and 4 RowDescription (its
@@ -424,7 +516,7 @@ sealed class PgConnection : IDisposable
                 switch (type)
                 {
                     case (byte)'D':
-                        if (error is not null || step == _stepCount || phase != 2) throw Protocol("DataRow out of place");
+                        if (error is not null || step == _stepCount || phase != 2 || _steps[step].BatchEnd > 0) throw Protocol("DataRow out of place");
                         if (_steps[step].Last) Row(group[_steps[step].Slot]!, body, keep, _steps[step].StatementId);
                         break;
                     case (byte)'C': // CommandComplete
@@ -433,7 +525,9 @@ sealed class PgConnection : IDisposable
                         goto case (byte)'I';
                     case (byte)'I': // EmptyQueryResponse
                         if (error is not null || step == _stepCount || phase != 2) throw Protocol("CommandComplete out of place");
-                        if (_steps[step].Last) Ended(group, _steps[step].Slot, keep);
+                        if (_steps[step].BatchEnd > 0)
+                            for (int s = _steps[step].Slot; s < _steps[step].BatchEnd; s++) Ended(group, s, keep);
+                        else if (_steps[step].Last) Ended(group, _steps[step].Slot, keep);
                         step++;
                         phase = step < _stepCount && _steps[step].Parse ? 0 : 1;
                         break;
@@ -468,6 +562,7 @@ sealed class PgConnection : IDisposable
                         if (error is not null) throw Protocol("a second ErrorResponse before ReadyForQuery");
                         error = e;
                         failed = step == _stepCount ? CommitFailed : _steps[step].Slot;
+                        FailedInBatch = step < _stepCount && _steps[step].BatchEnd > 0;
                         break;
                     case (byte)'Z':
                         if (body.Length != 1) throw Protocol("malformed ReadyForQuery");

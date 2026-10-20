@@ -51,7 +51,8 @@ public sealed class PgWriter : PgLoops
             bool before = failed == from || TryCommit(conn, group, from, failed, out _) < 0;
             if (!before)
                 for (int i = from; i < failed; i++) Alone(conn, group, i);
-            Alone(conn, group, failed, failed == from ? error : null);
+            // a merged statement's failure names its run's first write, which may not be the one at fault
+            Alone(conn, group, failed, failed == from && !conn.FailedInBatch ? error : null);
             from = failed + 1;
         }
     }
@@ -81,10 +82,25 @@ public sealed class PgWriter : PgLoops
     {
         if (rerun) Interlocked.Increment(ref Counters.Reruns);
         conn.Begin();
-        for (int j = from; j < to; j++)
+        for (int j = from; j < to;)
         {
-            group[j]!.Restart();
-            conn.Add(group[j]!, j);
+            var job = group[j]!;
+            job.Restart();
+            // a run of one keyed update goes as one statement
+            int end = j + 1;
+            if (job.Count == 1 && job.Statements[0].Batch is { } batch)
+            {
+                while (end < to && group[end]!.Count == 1 && ReferenceEquals(group[end]!.Statements[0], job.Statements[0])) group[end++]!.Restart();
+                if (end - j > 1)
+                {
+                    conn.AddBatch(group, j, end, batch);
+                    Interlocked.Add(ref Counters.Merged, end - j);
+                    j = end;
+                    continue;
+                }
+            }
+            conn.Add(job, j);
+            j++;
         }
         conn.Flush();
         int failed = conn.ReadReplies(group, keep: true, out error);

@@ -168,3 +168,5 @@ static CodeFusion.Data.Postgres.Postgres.Write(CodeFusion.Data.DataContext! cont
 static CodeFusion.Data.Postgres.PostgresServices.AddDatabase<TContext>(this CodeFusion.IServiceRegistry! services, CodeFusion.Data.Postgres.PostgresDatabase! database, int readers, int writers) -> CodeFusion.Data.Postgres.PgDataSource!
 virtual CodeFusion.Data.Postgres.PgRowHandler.Invoke(in CodeFusion.Data.Postgres.PgRow row, object? state) -> long
 virtual CodeFusion.Data.Postgres.PgTransport.Started() -> void
+CodeFusion.Data.Postgres.PgCounters.Merged -> long
+static CodeFusion.Data.Postgres.Postgres.KeyedUpdate(string! sql, string! table, string! key, int keyParameter, string![]! columns, int[]! columnParameters, params System.ReadOnlySpan<CodeFusion.Data.DataType> parameters) -> CodeFusion.Data.Postgres.PgStatement!

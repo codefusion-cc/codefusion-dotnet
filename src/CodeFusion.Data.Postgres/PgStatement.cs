@@ -47,6 +47,11 @@ public sealed class PgStatement
     internal readonly byte[] Parse;
     /// <summary>The Bind message's head up to the parameter values: portal, statement name, formats, count.</summary>
     internal readonly byte[] BindHead;
+    /// <summary>For an update of one row by its key (<see cref="Postgres.KeyedUpdate"/>): the statement that runs a
+    /// group's run of them at once, each parameter an array of theirs.</summary>
+    internal PgStatement? Batch;
+    /// <summary>On a <see cref="Batch"/>: each array parameter's element type.</summary>
+    internal uint[]? ElementTypes;
 
     /// <summary>A statement with <paramref name="sql"/> and one parameter of each of <paramref name="parameters"/>, in order.</summary>
     public PgStatement(string sql, params ReadOnlySpan<PgType> parameters)

@@ -9,6 +9,12 @@ batch; a `PgWriter`'s loops commit whatever writes have queued in one transactio
 commits them all. Requests never hold a connection, and a refused or failed command comes back as a status, not an
 exception.
 
+An update of one row by its key whose values are all parameters (`Where(w => w.Id == id).Update(w => new World {
+RandomNumber = n })`) goes further: a group commit's run of them becomes one statement, each parameter an array of
+theirs unnested in order, and the last write to each key is the one kept, as running them one by one would leave the
+rows. A run ends at any other statement, so the group's order holds. If the merged statement fails, the writes are
+run again one by one, and only the one at fault gets the error.
+
 It is also CodeFusion.Data's Postgres provider: a context deriving from `DataContext<Postgres>` has its LINQ
 compiled to Postgres's SQL at build time and run on these loops, registered with
 `services.AddDatabase<ConduitDb>(Postgres.FromUrl(url), readers, writers)`.
