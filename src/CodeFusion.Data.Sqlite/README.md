@@ -94,14 +94,16 @@ instead of reading beside it. On one core, where they take turns anyway, that is
 
 | 1 vCPU, 2 GiB | default | `Exclusive` |
 |---|---|---|
-| point reads, 1 thread | 1.55 to 1.67 M/s | 1.43 to 1.74 M/s |
-| 64 writers, `Normal` | 59 to 74 k/s | 58 to 69 k/s |
-| 16 callers, 9 reads to each write, `Normal` | 49 to 78 k ops/s | 374 to 431 k ops/s |
-| the same, `Full` | 48 to 51 k ops/s | 144 to 179 k ops/s |
+| point reads, 1 thread | 1.51 to 1.71 M/s | 1.46 to 1.70 M/s |
+| 64 writers, `Normal` | 63 to 65 k/s | 64 to 71 k/s |
+| 16 callers, 9 reads to each write, `Normal` | 50 to 77 k ops/s | 388 to 486 k ops/s |
+| the same, `Full` | 74 to 75 k ops/s | 120 to 198 k ops/s |
 
-(100,000 rows, reads and updates by key; a container pinned to one CPU of a Colima VM, linux-arm64; three rounds
-alternating the two, two with `Full`.) On more cores it costs: reads no longer run beside each other, so 4 threads on an 8-core Mac
-read 1.8 to 2.1 M/s where the default reads 6.1 to 6.8 M/s.
+(`benchmarks/CodeFusion.Data.Sqlite.Throughput`: 100,000 rows, reads and updates by key, in a container pinned to one
+CPU of a Colima VM, linux-arm64; three rounds alternating the two, two with `Full`.) Reads and the writer take turns,
+each waiting for at most one of the other's. On more cores it costs: reads no longer run beside each other, so 4
+threads on an 8-core Mac read 1.2 to 1.8 M/s where the default reads 6.4 M/s. The runs, and the ones before them,
+are in [docs/benchmarks](../../docs/benchmarks/README.md).
 
 ## Failures
 
@@ -117,7 +119,8 @@ read 1.8 to 2.1 M/s where the default reads 6.1 to 6.8 M/s.
 ## Zero allocations, measured
 
 CodeFusion.Data's allocation test runs here unchanged: 14,600 reads and writes of the Conduit queries from 4 callers
-allocate 2.9 KB in the whole process, the test's own tasks, and twice as many allocate the same.
+allocate 2.9 KB in the whole process, the test's own tasks, and twice as many allocate the same
+([the run](../../docs/benchmarks/2026-10-21-sqlite-provider-allocation.md)).
 
 ## Limits
 

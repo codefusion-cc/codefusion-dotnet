@@ -794,10 +794,10 @@ Postgres 18 with CODEFUSION_TEST_DB and the four CODEFUSION_TEST_PG_* logins set
 
 ## The SQLite provider (tests/CodeFusion.Data.Sqlite.Tests)
 
-129 tests, nothing to set up. 48 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked
-unchanged: the same Conduit queries, seed and expected replies as on Postgres. 48 are the operator tests ported: each
+132 tests, nothing to set up. 48 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked
+unchanged: the same Conduit queries, seed and expected replies as on Postgres. 50 are the operator tests ported: each
 query's SQL in SQLite's dialect, checked as text, and the same results on the same seed. The rest are the provider's
-own: group commit (9), reads and snapshots (8), migrations (4), the one-connection `Exclusive` mode (7), and crash
+own: group commit (9), reads and snapshots (8), migrations (4), the one-connection `Exclusive` mode (8), and crash
 recovery (4: a child process killed mid-group and after a commit, each with `synchronous` NORMAL and FULL). Every test that stops a source checks that the writer
 caught nothing unexpected and, in Debug builds, that every job it rented is back in the pool (`SqliteChecks`).
 

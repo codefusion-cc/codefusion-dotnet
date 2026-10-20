@@ -25,6 +25,18 @@ is the GC collections and allocation rate of the CodeFusion process during a sus
 
 | Date | File | What was tested | Result |
 |---|---|---|---|
+| 2026-10-20 | [sqlite-prototype-kept-snapshots](2026-10-20-sqlite-prototype-kept-snapshots.md) | SQLite point reads across threads, a read transaction per statement against kept snapshots | 0.93 to 11.58 M reads/s on 8 threads; kept |
+| 2026-10-20 | [sqlite-prototype-vs-microsoft-data-sqlite](2026-10-20-sqlite-prototype-vs-microsoft-data-sqlite.md) | The SQLite prototype against Microsoft.Data.Sqlite and Dapper, Mac | point read 377 ns vs 1,054; 64 writers 3.1 µs vs 16.4; 0 B |
+| 2026-10-20 | [sqlite-prototype-1vcpu](2026-10-20-sqlite-prototype-1vcpu.md) | The same on 1 vCPU / 2 GB | point read 510 ns vs 2,976; 64 writers 3.7 µs vs 27.5 |
+| 2026-10-20 | [sqlite-twelve-statements](2026-10-20-sqlite-twelve-statements.md) | The $12 contest's statements on the provider | 7.0 µs of database per request (9.4 on 1 vCPU) |
+| 2026-10-20 | [sqlite-leader-commit](2026-10-20-sqlite-leader-commit.md) | A lone write committed on its caller's thread | 400 transactions for 400 writes vs 4; not used |
+| 2026-10-20 | [twelve-entry-saturation](2026-10-20-twelve-entry-saturation.md) | The $12 entry against #74 and #82 at saturation, 1 CPU | mix 34,218 vs 57,458 (C#) and 89,297 (Rust) req/s |
+| 2026-10-20 | [twelve-entry-tried-not-kept](2026-10-20-twelve-entry-tried-not-kept.md) | Native AOT, range-scan like counts, leader commit, checkpoint interval | none faster; none kept |
+| 2026-10-21 | [sqlite-provider-allocation](2026-10-21-sqlite-provider-allocation.md) | CodeFusion.Data.Sqlite's allocations per query, whole process | 0 B per extra query (Postgres too) |
+| 2026-10-21 | [sqlite-exclusive-first-try](2026-10-21-sqlite-exclusive-first-try.md) | One connection for reads and writes, a read transaction per read | 1 vCPU mix 317 to 437 k vs 33 to 55 k ops/s; reads slower |
+| 2026-10-21 | [sqlite-exclusive-kept-read](2026-10-21-sqlite-exclusive-kept-read.md) | The same with a read transaction kept between groups | reads back to par; mix 374 to 431 k ops/s |
+| 2026-10-21 | [sqlite-exclusive-turns](2026-10-21-sqlite-exclusive-turns.md) | Reads and the writer taking turns on the one connection | 200 writes beside scans: 21.9 s to 0.3 to 0.4 s |
+| 2026-10-21 | [sqlite-exclusive-after-turns](2026-10-21-sqlite-exclusive-after-turns.md) | Exclusive against readers of their own after turn-taking | 1 vCPU mix 388 to 486 k vs 50 to 77 k ops/s |
 
 ## Template
 

@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/CodeFusion.Benchmarks/CodeFusion.Benchmarks.csproj" />
+    <Project Path="benchmarks/CodeFusion.Data.Sqlite.Throughput/CodeFusion.Data.Sqlite.Throughput.csproj" />
     <Project Path="benchmarks/CodeFusion.Security.Bcrypt.Benchmarks/CodeFusion.Security.Bcrypt.Benchmarks.csproj" />
   </Folder>
   <Folder Name="/src/">
