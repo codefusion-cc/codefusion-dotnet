@@ -163,4 +163,58 @@ public sealed class BatchReadTests : IDisposable
         Assert.Equal(1, p.Value);
         Assert.Equal(DataStatus.Failed, (await kv).Status);
     }
+
+    /// <summary>What a reader sees of a row, every way it can ask for each column.</summary>
+    sealed class EveryWay : IRowReader
+    {
+        public static long Read<TRow>(scoped in TRow row, object? state) where TRow : IDataRow, allows ref struct
+        {
+            var seen = (System.Collections.Generic.List<string>)state!;
+            for (int c = 0; c < row.FieldCount; c++)
+            {
+                string bytes;
+                try
+                {
+                    bytes = System.Text.Encoding.UTF8.GetString(row.GetBytes(c));
+                }
+                catch (InvalidOperationException e)
+                {
+                    bytes = "throws " + e.GetType().Name;
+                }
+                seen.Add(string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                    $"{c}: null {row.IsNull(c)} int {row.GetInt64(c)} double {row.GetDouble(c)} bool {row.GetBoolean(c)} bytes {bytes}"));
+            }
+            return row.GetInt64(0);
+        }
+    }
+
+    static readonly SqliteStatement Mixed = new(
+        "SELECT max(v), 'x' || 12, '12abc', 3.75, -7, NULL, '' FROM kv WHERE k = 'none'");
+
+    /// <summary>A read answers the same whether it runs alone or joins a batch (it keeps its rows till the COMMIT): every
+    /// column, asked for as a number, a double, a flag or text, NULL and the crossovers between text and numbers included.</summary>
+    [Fact(Timeout = 30_000)]
+    public async Task AJoinedReadAnswersExactlyAsItWouldAlone()
+    {
+        var s = Open();
+        var alone = new System.Collections.Generic.List<string>();
+        var a = await Sqlite.Run<EveryWay>(s.Read(Mixed).Hold(), alone, default);
+        Assert.True(a.IsOk, a.ToString());
+        using var loop = new TestLoop(s);
+        var joined = new System.Collections.Generic.List<string>();
+        ValueTask<DataResult> write = default, read = default;
+        bool atOnce = true;
+        await loop.WakeUp(() =>
+        {
+            write = Kv.Write(s, "a", 1);
+            read = Sqlite.Run<EveryWay>(s.Read(Mixed).Hold(), joined, default); // reads kv, which the batch wrote: joins
+            atOnce = read.IsCompleted;
+        });
+        Assert.False(atOnce);
+        var j = await read;
+        Assert.True((await write).IsOk);
+        Assert.True(j.IsOk, j.ToString());
+        Assert.Equal(a.Value, j.Value);
+        Assert.Equal(alone, joined);
+    }
 }

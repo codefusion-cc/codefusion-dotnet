@@ -18,6 +18,10 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
     // parameter tags in Buf, and value tags in Saved
     internal const byte TagNull = 0, TagInt64 = 1, TagDouble = 2, TagText = 3;
 
+    /// <summary>A kept column's size before its text: SQLite's type, its integer, its double, its text's length (-1 when
+    /// SQLite gives no text: NULL).</summary>
+    internal const int SavedColumn = 1 + 8 + 8 + 4;
+
     InlineValueTaskSourceCore<DataResult> _core;
     /// <summary>Its generation and hold, and in Debug its steps: CodeFusion.Data's, as every provider's job.</summary>
     JobLife _life = new("SQLite", queuesUnheld: false);
@@ -213,35 +217,22 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
         SavedLen += 4;
         for (int c = 0; c < n; c++)
         {
-            switch (Sqlite3.ColumnType(stmt, c))
-            {
-                case Sqlite3.TypeNull:
-                    EnsureSaved(1);
-                    Saved[SavedLen++] = TagNull;
-                    break;
-                case Sqlite3.TypeInteger:
-                    EnsureSaved(9);
-                    Saved[SavedLen] = TagInt64;
-                    BinaryPrimitives.WriteInt64LittleEndian(Saved.AsSpan(SavedLen + 1), Sqlite3.ColumnInt64(stmt, c));
-                    SavedLen += 9;
-                    break;
-                case Sqlite3.TypeFloat:
-                    EnsureSaved(9);
-                    Saved[SavedLen] = TagDouble;
-                    BinaryPrimitives.WriteDoubleLittleEndian(Saved.AsSpan(SavedLen + 1), Sqlite3.ColumnDouble(stmt, c));
-                    SavedLen += 9;
-                    break;
-                default:
-                    // text first, then its length, as SQLite asks
-                    byte* p = Sqlite3.ColumnText(stmt, c);
-                    int len = Sqlite3.ColumnBytes(stmt, c);
-                    EnsureSaved(5 + len);
-                    Saved[SavedLen] = TagText;
-                    BinaryPrimitives.WriteInt32LittleEndian(Saved.AsSpan(SavedLen + 1), len);
-                    new ReadOnlySpan<byte>(p, len).CopyTo(Saved.AsSpan(SavedLen + 5));
-                    SavedLen += 5 + len;
-                    break;
-            }
+            // what each of SQLite's column calls returns, in an order none changes the next: the type, the integer, the
+            // double, then the text (which turns a number into text in place). A SavedRow hands back exactly these, so a
+            // row read after the COMMIT reads as it would have live (SqliteRow), conversions and NULLs alike.
+            int type = Sqlite3.ColumnType(stmt, c);
+            long integer = Sqlite3.ColumnInt64(stmt, c);
+            double real = Sqlite3.ColumnDouble(stmt, c);
+            byte* text = Sqlite3.ColumnText(stmt, c);
+            int len = text is null ? -1 : Sqlite3.ColumnBytes(stmt, c);
+            EnsureSaved(SavedColumn + Math.Max(len, 0));
+            var into = Saved.AsSpan(SavedLen);
+            into[0] = (byte)type;
+            BinaryPrimitives.WriteInt64LittleEndian(into[1..], integer);
+            BinaryPrimitives.WriteDoubleLittleEndian(into[9..], real);
+            BinaryPrimitives.WriteInt32LittleEndian(into[17..], len);
+            if (len > 0) new ReadOnlySpan<byte>(text, len).CopyTo(into[SavedColumn..]);
+            SavedLen += SavedColumn + Math.Max(len, 0);
         }
         SavedRows++;
     }
@@ -282,7 +273,7 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
                 for (int c = 0; c < n; c++)
                 {
                     offsets[c] = at;
-                    at += Saved[at] switch { TagNull => 1, TagInt64 or TagDouble => 9, _ => 5 + BinaryPrimitives.ReadInt32LittleEndian(Saved.AsSpan(at + 1)) };
+                    at += SavedColumn + Math.Max(BinaryPrimitives.ReadInt32LittleEndian(Saved.AsSpan(at + 17)), 0);
                 }
                 try
                 {
@@ -362,46 +353,27 @@ internal readonly ref struct SavedRow : IDataRow
 
     public int FieldCount => _at.Length;
 
-    public bool IsNull(int c) => _saved[_at[c]] == SqliteJob.TagNull;
+    // what SQLite's column calls returned for the column, kept by SqliteJob.Save: the same answers SqliteRow gives live
+
+    public bool IsNull(int c) => _saved[_at[c]] == Sqlite3.TypeNull;
 
     public ReadOnlySpan<byte> GetBytes(int c)
     {
         int at = _at[c];
-        return _saved[at] switch
-        {
-            SqliteJob.TagText => _saved.Slice(at + 5, BinaryPrimitives.ReadInt32LittleEndian(_saved[(at + 1)..])),
-            SqliteJob.TagNull => throw new InvalidOperationException($"column {c} is NULL"),
-            _ => throw new InvalidOperationException($"column {c} is a number, not text"),
-        };
+        int len = BinaryPrimitives.ReadInt32LittleEndian(_saved[(at + 17)..]);
+        if (len < 0) NullColumn(c); // as SqliteRow: SQLite gave no text
+        return _saved.Slice(at + SqliteJob.SavedColumn, len);
     }
 
     public ReadOnlySpan<byte> GetJson(int c) => GetBytes(c);
 
-    public long GetInt64(int c)
-    {
-        int at = _at[c];
-        return _saved[at] switch
-        {
-            SqliteJob.TagInt64 => BinaryPrimitives.ReadInt64LittleEndian(_saved[(at + 1)..]),
-            SqliteJob.TagDouble => (long)BinaryPrimitives.ReadDoubleLittleEndian(_saved[(at + 1)..]),
-            SqliteJob.TagNull => throw new InvalidOperationException($"column {c} is NULL"),
-            _ => throw new InvalidOperationException($"column {c} is text, not a number"),
-        };
-    }
+    public long GetInt64(int c) => BinaryPrimitives.ReadInt64LittleEndian(_saved[(_at[c] + 1)..]);
 
     public bool GetBoolean(int c) => GetInt64(c) != 0;
 
-    public double GetDouble(int c)
-    {
-        int at = _at[c];
-        return _saved[at] switch
-        {
-            SqliteJob.TagDouble => BinaryPrimitives.ReadDoubleLittleEndian(_saved[(at + 1)..]),
-            SqliteJob.TagInt64 => BinaryPrimitives.ReadInt64LittleEndian(_saved[(at + 1)..]),
-            SqliteJob.TagNull => throw new InvalidOperationException($"column {c} is NULL"),
-            _ => throw new InvalidOperationException($"column {c} is text, not a number"),
-        };
-    }
+    public double GetDouble(int c) => BinaryPrimitives.ReadDoubleLittleEndian(_saved[(_at[c] + 9)..]);
+
+    static void NullColumn(int c) => throw new InvalidOperationException($"column {c} is NULL");
 
     public Timestamp GetTimestamp(int c) => new(GetInt64(c));
 }
