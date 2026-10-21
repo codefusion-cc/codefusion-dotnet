@@ -8,9 +8,10 @@ using CodeFusion.Http;
 namespace CodeFusion.Fuzz;
 
 /// <summary>
-/// The body binders' exception-free syntax check (JsonSyntax) against Utf8JsonReader with the binders' options: the
-/// same verdict on every input. A check stricter than the reader would answer good bodies as malformed; a looser one
-/// costs a JsonException, so both are findings.
+/// The body binders' reader (JsonCursor) against Utf8JsonReader with the binders' options: the same tokens one by one
+/// (type, start, bytes, escape, and a number's Int64, Int32 and Double readings) up to where either stops, and malformed
+/// exactly where the reader throws or reads nothing. A cursor stricter than the reader would answer good bodies as
+/// malformed; a looser one would bind what isn't JSON.
 /// </summary>
 static class JsonSyntaxTarget
 {
@@ -18,26 +19,38 @@ static class JsonSyntaxTarget
 
     public static void Run(ReadOnlySpan<byte> input)
     {
-        bool reader = ReaderTakes(input);
-        bool ours = JsonSyntax.IsValid(input, 64);
-        if (reader != ours)
-            throw new FuzzFinding($"json-syntax: the reader {(reader ? "takes" : "refuses")} what the check {(ours ? "takes" : "refuses")}", Findings.Show(input));
-    }
-
-    static bool ReaderTakes(ReadOnlySpan<byte> json)
-    {
+        var ours = new System.Collections.Generic.List<string>();
+        var c = new JsonCursor(input, 64);
+        while (c.Read())
+            ours.Add(Token(c.TokenType, c.TokenStart, c.ValueSpan, c.ValueIsEscaped, c.TokenType == JsonTokenType.Number
+                ? Numbers(c.TryGetInt64(out long l), l, c.TryGetInt32(out int i), i, c.TryGetDouble(out double d), d) : ""));
+        var theirs = new System.Collections.Generic.List<string>();
+        bool threw = false;
         try
         {
-            var r = new Utf8JsonReader(json, Options);
-            bool any = false;
-            while (r.Read()) any = true;
-            return any;
+            var r = new Utf8JsonReader(input, Options);
+            while (r.Read())
+                theirs.Add(Token(r.TokenType, r.TokenStartIndex, r.ValueSpan, r.ValueIsEscaped, r.TokenType == JsonTokenType.Number
+                    ? Numbers(r.TryGetInt64(out long l), l, r.TryGetInt32(out int i), i, r.TryGetDouble(out double d), d) : ""));
         }
         catch (JsonException)
         {
-            return false;
+            threw = true;
         }
+        bool reader = !threw && theirs.Count > 0;
+        if (reader == c.Malformed || reader != JsonSyntax.IsValid(input, 64))
+            throw new FuzzFinding($"json-syntax: the reader {(reader ? "takes" : "refuses")} what the cursor {(c.Malformed ? "refuses" : "takes")}", Findings.Show(input));
+        int both = Math.Min(ours.Count, theirs.Count);
+        for (int k = 0; k < both; k++)
+            if (ours[k] != theirs[k]) throw new FuzzFinding("json-syntax: a token differs from the reader's", $"{ours[k]} vs {theirs[k]}: {Findings.Show(input)}");
+        if (reader && ours.Count != theirs.Count) throw new FuzzFinding("json-syntax: a token count differs from the reader's", Findings.Show(input));
     }
+
+    static string Token(JsonTokenType type, long start, ReadOnlySpan<byte> bytes, bool escaped, string number) =>
+        $"{type}@{start}:{Convert.ToHexString(bytes)}{(escaped ? "\\" : "")} {number}";
+
+    static string Numbers(bool i64, long l, bool i32, int i, bool dbl, double d) =>
+        $"{(i64 ? l.ToString(System.Globalization.CultureInfo.InvariantCulture) : "-")} {(i32 ? i.ToString(System.Globalization.CultureInfo.InvariantCulture) : "-")} {(dbl ? BitConverter.DoubleToInt64Bits(d).ToString(System.Globalization.CultureInfo.InvariantCulture) : "-")}";
 }
 
 /// <summary>

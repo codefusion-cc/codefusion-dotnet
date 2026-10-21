@@ -3,6 +3,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -468,6 +469,39 @@ public class SpecOptionsTests
         await using var check = new AppCheck(app);
         Response r = await Send(app, "POST", "/wrapped", null, BodyBytes(body));
         Assert.Equal((status, text), (r.Status, r.Text));
+    }
+
+    // A malformed-body flood must not make the server throw: every body of the table binds without one exception,
+    // first-chance ones included, and answers as over HTTP.
+    [Theory]
+    [MemberData(nameof(Bodies))]
+    public void NoBodyThrowsWhileItIsBound(string name, string? body, string outcome)
+    {
+        byte[] bytes = BodyBytes(body) ?? [];
+        byte[] buffer = [.. "GET / HTTP/1.1\r\n\r\n"u8, .. bytes, (byte)'}'];
+        var source = new BodySource(buffer, 18, bytes.Length, new RequestArena(new BufferPool(4096, 4)), new ErrorReply(422, """{"error":"invalid body"}"""u8),
+            SpecErrors.Malformed, SpecErrors.NoBody);
+        int thrown = 0;
+        int thread = Environment.CurrentManagedThreadId;
+        void Count(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
+        {
+            if (Environment.CurrentManagedThreadId == thread) Interlocked.Increment(ref thrown);
+        }
+        AppDomain.CurrentDomain.FirstChanceException += Count;
+        ErrorReply? reply;
+        try
+        {
+            reply = NewPost.__BindBody(source, out _);
+        }
+        finally
+        {
+            AppDomain.CurrentDomain.FirstChanceException -= Count;
+        }
+        Assert.Equal(0, thrown);
+        (int status, string text) = BodyOutcome(outcome, SpecErrors.NoBody, SpecErrors.Malformed);
+        string expected = outcome == "ok" ? "bound" : $"{status} {text}";
+        Assert.Equal(expected, reply is null ? "bound" : $"{reply.Status} {Encoding.UTF8.GetString(reply.Body)}");
+        Assert.NotNull(name);
     }
 
     [Fact]

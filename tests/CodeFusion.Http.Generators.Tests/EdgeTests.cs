@@ -36,10 +36,10 @@ public class EdgeTests
         Assert.Contains("SequenceEqual(b.PropertyName(name), \"user\"u8)", body, StringComparison.Ordinal);
     }
 
-    // A well-formed body is read once, as before the syntax check existed: the check runs only where binding has
-    // failed without the reader throwing, a root that isn't an object, to tell a malformed rest from another shape.
+    // One pass binds and checks the syntax: the reader reports a malformed body instead of throwing, so the binder
+    // has no try, no catch and no second read, and asks ReadToEnd whether the body was JSON before any field's reply.
     [Fact]
-    public void ABodysSyntaxIsCheckedOnlyWhereBindingFailed()
+    public void ABodyIsBoundAndCheckedInOnePassWithoutExceptions()
     {
         string body = Generated("""
             [JsonEnvelope("user")] public partial struct NewUser { public Utf8 Email; public long Age; }
@@ -48,12 +48,12 @@ public class EdgeTests
                 public static void Map(IEndpointRouteBuilder api) => api.MapPost("/users", static (NewUser u) => Reply.NoContent());
             }
             """, "NewUser.Body.g.cs");
-        string[] lines = body.Split('\n');
-        int check = Array.FindIndex(lines, l => l.Contains("IsWellFormed()", StringComparison.Ordinal));
-        Assert.True(check > 0, body);
-        Assert.Single(lines, l => l.Contains("IsWellFormed()", StringComparison.Ordinal));
-        Assert.Contains("if (!b.ReadRootObject())", lines[check - 1], StringComparison.Ordinal);
-        Assert.DoesNotContain("ReadToEnd(); // JSON of another shape", body, StringComparison.Ordinal);
+        foreach (string gone in new[] { "try", "catch", "JsonException", "IsWellFormed" })
+            Assert.DoesNotContain(gone, body, StringComparison.Ordinal);
+        Assert.Contains("if (!b.ReadRootObject()) return b.ReadToEnd() ? source.InvalidBody : source.MalformedBody ?? source.InvalidBody;", body, StringComparison.Ordinal);
+        int end = body.IndexOf("if (!b.ReadToEnd()) return source.MalformedBody ?? source.InvalidBody;", StringComparison.Ordinal);
+        Assert.True(end > 0, body);
+        Assert.True(end < body.IndexOf("if (!found) return", StringComparison.Ordinal) && end < body.IndexOf("IsRequiredText", StringComparison.Ordinal), body);
     }
 
     [Fact]

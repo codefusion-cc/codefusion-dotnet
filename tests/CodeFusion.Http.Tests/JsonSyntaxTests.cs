@@ -35,9 +35,51 @@ public sealed class JsonSyntaxTests
 
     static void Same(byte[] json)
     {
+        SameTokens(json);
         bool reader = ReaderTakes(json);
         bool ours = JsonSyntax.IsValid(json, 64);
         Assert.True(reader == ours, $"reader {(reader ? "takes" : "refuses")}, the check {(ours ? "takes" : "refuses")}: {Encoding.UTF8.GetString(json)}");
+    }
+
+    /// <summary>One token as both readers give it: its type, start, bytes, escape, and a number's three readings.</summary>
+    internal readonly record struct Token(JsonTokenType Type, long Start, string Bytes, bool Escaped, string Number);
+
+    static string Numbers(bool i64, long l, bool i32, int i, bool dbl, double d) =>
+        $"{(i64 ? l.ToString(System.Globalization.CultureInfo.InvariantCulture) : "-")} {(i32 ? i.ToString(System.Globalization.CultureInfo.InvariantCulture) : "-")} {(dbl ? BitConverter.DoubleToInt64Bits(d).ToString(System.Globalization.CultureInfo.InvariantCulture) : "-")}";
+
+    /// <summary>The cursor gives the reader's tokens one by one, up to where either stops, and stops malformed exactly
+    /// where the reader throws or reads nothing.</summary>
+    static void SameTokens(byte[] json)
+    {
+        var ours = new System.Collections.Generic.List<Token>();
+        var c = new JsonCursor(json, 64);
+        while (c.Read())
+        {
+            string n = c.TokenType != JsonTokenType.Number ? ""
+                : Numbers(c.TryGetInt64(out long l), l, c.TryGetInt32(out int i), i, c.TryGetDouble(out double d), d);
+            ours.Add(new Token(c.TokenType, c.TokenStart, Convert.ToHexString(c.ValueSpan), c.ValueIsEscaped, n));
+        }
+        var theirs = new System.Collections.Generic.List<Token>();
+        bool threw = false;
+        try
+        {
+            var r = new Utf8JsonReader(json, Options);
+            while (r.Read())
+            {
+                string n = r.TokenType != JsonTokenType.Number ? ""
+                    : Numbers(r.TryGetInt64(out long l), l, r.TryGetInt32(out int i), i, r.TryGetDouble(out double d), d);
+                theirs.Add(new Token(r.TokenType, r.TokenStartIndex, Convert.ToHexString(r.ValueSpan), r.ValueIsEscaped, n));
+            }
+        }
+        catch (JsonException)
+        {
+            threw = true;
+        }
+        string show = Encoding.UTF8.GetString(json);
+        Assert.True((!threw && theirs.Count > 0) == !c.Malformed, $"reader {(threw ? "threw" : "read " + theirs.Count)}, the cursor {(c.Malformed ? "malformed" : "fine")}: {show}");
+        int both = Math.Min(ours.Count, theirs.Count);
+        for (int k = 0; k < both; k++) Assert.True(ours[k] == theirs[k], $"token {k} differs: ours {ours[k]}, the reader's {theirs[k]}: {show}");
+        if (!c.Malformed) Assert.Equal(theirs.Count, ours.Count);
     }
 
     [Theory]
@@ -120,7 +162,7 @@ public sealed class JsonSyntaxTests
     static readonly string[] Pieces =
     [
         "{", "}", "[", "]", ",", ":", " ", "\n", "\t", "\"a\"", "\"\\\"\"", "\"\\u00e9\"", "\"\\u12\"", "\"é\"", "1", "-1", "0", "01", "1.5",
-        "2e10", "1.", "-", "true", "false", "null", "tru", "x", "\"", "\\", "/", "\u0001", "\"k\":", "1e", "e5", ".", "+",
+        "2e10", "-0", "-0.0", "9223372036854775807", "9223372036854775808", "-9223372036854775809", "2147483647", "2147483648", "1e400", "-1e-400", "0.1e1", "123456789012345678901234567890", "1.7976931348623157e308", "4.9e-324", "1.", "-", "true", "false", "null", "tru", "x", "\"", "\\", "/", "\u0001", "\"k\":", "1e", "e5", ".", "+",
     ];
 
     static Gen<byte[]> Inputs()

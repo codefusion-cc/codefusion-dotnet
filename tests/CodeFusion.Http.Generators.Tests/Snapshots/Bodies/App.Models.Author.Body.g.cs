@@ -14,24 +14,16 @@ partial struct Author
         global::System.Span<byte> name = stackalloc byte[24];
         global::CodeFusion.Http.BodyValue f0 = default;
         global::CodeFusion.Http.BodyValue f1 = default;
-        try
+        // one pass reads and checks the body: a syntax error stops the reads, and ReadToEnd reports it, never a throw
+        if (!b.ReadRootObject()) return b.ReadToEnd() ? source.InvalidBody : source.MalformedBody ?? source.InvalidBody;
+        while (b.NextProperty())
         {
-            // a root that isn't an object: JSON of another shape, or malformed further on, which the check tells without throwing
-            if (!b.ReadRootObject())
-                return b.IsWellFormed() ? source.InvalidBody : source.MalformedBody ?? source.InvalidBody;
-            while (b.NextProperty())
-            {
-                global::System.ReadOnlySpan<byte> n = b.PropertyName(name);
-                if (global::System.MemoryExtensions.SequenceEqual(n, "name"u8)) f0 = b.ReadText();
-                else if (global::System.MemoryExtensions.SequenceEqual(n, "age"u8)) f1 = b.ReadInt32();
-                else b.SkipValue();
-            }
-            b.ReadToEnd();
+            global::System.ReadOnlySpan<byte> n = b.PropertyName(name);
+            if (global::System.MemoryExtensions.SequenceEqual(n, "name"u8)) f0 = b.ReadText();
+            else if (global::System.MemoryExtensions.SequenceEqual(n, "age"u8)) f1 = b.ReadInt32();
+            else b.SkipValue();
         }
-        catch (global::System.Text.Json.JsonException)
-        {
-            return source.MalformedBody ?? source.InvalidBody;
-        }
+        if (!b.ReadToEnd()) return source.MalformedBody ?? source.InvalidBody;
         if (!f0.IsRequiredText) return source.InvalidBody;
         if (!f1.IsValue) return BadAge;
         value = new() { Name = b.Text(f0), Age = (int)f1.IntegerValue };

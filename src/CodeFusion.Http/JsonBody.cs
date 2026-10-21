@@ -130,17 +130,17 @@ public readonly struct BodyValue
 /// <summary>
 /// Reads a request body over its bytes with <c>JsonDocument</c>'s outcomes, for the generated binders: one leading
 /// UTF-8 BOM is skipped, the reader's depth limit is 64, the last of duplicate keys wins, keys match after
-/// unescaping, and anything after the root value but whitespace makes the body malformed (a
-/// <see cref="JsonException"/>, which the binder turns into its struct's invalid-body reply). A value without escapes
+/// unescaping, and anything after the root value but whitespace makes the body malformed, which <see cref="ReadToEnd"/>
+/// reports without an exception: one pass reads and checks it (<see cref="JsonCursor"/>). A value without escapes
 /// stays where it is in the body; an escaped one is unescaped into a scratch copy of the body in the request's arena,
 /// at its own offset (unescaping never grows a value), so values never overlap.
 /// </summary>
 [EditorBrowsable(EditorBrowsableState.Never)]
 public ref struct JsonBody
 {
-    static readonly JsonReaderOptions Options = new() { MaxDepth = 64 }; // JsonDocument's defaults
+    const int MaxDepth = 64; // JsonDocument's default
 
-    Utf8JsonReader _r;
+    JsonCursor _r;
     readonly byte[] _buffer;
     readonly int _start, _length, _bom;
     readonly IRequestArena _arena;
@@ -156,17 +156,12 @@ public ref struct JsonBody
         _arena = source.Arena;
         ReadOnlySpan<byte> body = _buffer.AsSpan(_start, _length);
         _bom = body.StartsWith(Utf8Bom) ? 3 : 0; // JsonDocument.ParseAsync skips one
-        _r = new Utf8JsonReader(body[_bom..], Options);
+        _r = new JsonCursor(body[_bom..], MaxDepth);
         _scratch = null;
         _scratchStart = 0;
     }
 
     static ReadOnlySpan<byte> Utf8Bom => [0xEF, 0xBB, 0xBF];
-
-    /// <summary>Whether the whole body is JSON the reader takes, checked without throwing: the binder asks only where
-    /// binding failed without the reader throwing (a root that isn't an object), so a good body is read once. Never
-    /// stricter than the reader.</summary>
-    public readonly bool IsWellFormed() => JsonSyntax.IsValid(_buffer.AsSpan(_start + _bom, _length - _bom), Options.MaxDepth);
 
     /// <summary>Reads the root value: true when it is an object.</summary>
     public bool ReadRootObject() => _r.Read() && _r.TokenType == JsonTokenType.StartObject;
@@ -220,10 +215,12 @@ public ref struct JsonBody
         return BodyKind.Invalid;
     }
 
-    /// <summary>Reads to the end of the body: a malformed rest throws <see cref="JsonException"/>, as a full parse would.</summary>
-    public void ReadToEnd()
+    /// <summary>Reads to the end of the body, as a full parse would: true when the whole body was JSON. Every read before
+    /// it may have stopped early at a syntax error, which this reports; nothing throws.</summary>
+    public bool ReadToEnd()
     {
         while (_r.Read()) { }
+        return !_r.Malformed;
     }
 
     /// <summary>A string field: null is missing, a string is its text, anything else is invalid.</summary>
@@ -236,7 +233,7 @@ public ref struct JsonBody
             _r.Skip();
             return BodyValue.Invalid;
         }
-        int start = _bom + (int)_r.TokenStartIndex + 1;
+        int start = _bom + _r.TokenStart + 1;
         ReadOnlySpan<byte> raw = _r.ValueSpan;
         if (!_r.ValueIsEscaped)
             return System.Text.Unicode.Utf8.IsValid(raw) ? new BodyValue(BodyKind.Text, start, raw.Length) : BodyValue.Invalid;
@@ -254,7 +251,7 @@ public ref struct JsonBody
             _r.Skip();
             return BodyValue.Invalid;
         }
-        int start = (int)_r.TokenStartIndex;
+        int start = _r.TokenStart;
         int count = 0;
         long bytes = 0;
         bool ok = true;
@@ -272,7 +269,7 @@ public ref struct JsonBody
             count++;
         }
         if (!ok) return BodyValue.Invalid;
-        int end = (int)_r.TokenStartIndex + 1;
+        int end = _r.TokenStart + 1;
         return new BodyValue(BodyKind.Array, _bom + start, end - start, count: count, number: bytes);
     }
 
@@ -335,7 +332,7 @@ public ref struct JsonBody
         int size = Utf8List.RecordBytes(checked((int)value.Number), value.Count);
         ArenaBytes dest = _arena.Allocate(size);
         Span<byte> d = dest.Span;
-        var r = new Utf8JsonReader(_buffer.AsSpan(_start + value.Start, value.Length), Options);
+        var r = new JsonCursor(_buffer.AsSpan(_start + value.Start, value.Length), MaxDepth);
         r.Read(); // [
         int at = 0;
         // ReadTextArray checked every element: each is a non-empty string that unescapes

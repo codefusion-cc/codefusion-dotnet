@@ -451,11 +451,8 @@ internal static class Emitter
         w.Line($"global::System.Span<byte> name = stackalloc byte[{buffer}];");
         Locals(w, b);
         if (b.Envelope is not null) w.Line("bool found = false;");
-        w.Line("try");
-        w.Open("");
-        w.Line("// a root that isn't an object: JSON of another shape, or malformed further on, which the check tells without throwing");
-        w.Line("if (!b.ReadRootObject())");
-        w.Line($"    return b.IsWellFormed() ? {structural} : source.MalformedBody ?? {structural};");
+        w.Line("// one pass reads and checks the body: a syntax error stops the reads, and ReadToEnd reports it, never a throw");
+        w.Line($"if (!b.ReadRootObject()) return b.ReadToEnd() ? {structural} : source.MalformedBody ?? {structural};");
         if (b.Envelope is not null)
         {
             w.Line("while (b.NextProperty())");
@@ -473,12 +470,7 @@ internal static class Emitter
             w.Close();
         }
         else ReadFields(w, b);
-        w.Line("b.ReadToEnd();");
-        w.Close();
-        w.Line("catch (global::System.Text.Json.JsonException)");
-        w.Open("");
-        w.Line($"return source.MalformedBody ?? {structural};");
-        w.Close();
+        w.Line($"if (!b.ReadToEnd()) return source.MalformedBody ?? {structural};");
         if (b.Envelope is not null) w.Line($"if (!found) return {structural};");
         Validate(w, b, i => b.Fields[i].Error ?? fieldError, nested: false);
         w.Line("return null;");

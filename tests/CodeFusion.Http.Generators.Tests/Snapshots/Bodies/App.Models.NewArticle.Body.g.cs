@@ -28,55 +28,47 @@ partial struct NewArticle
         global::App.Models.Author n10 = default;
         global::CodeFusion.ErrorReply? e10 = null;
         bool found = false;
-        try
+        // one pass reads and checks the body: a syntax error stops the reads, and ReadToEnd reports it, never a throw
+        if (!b.ReadRootObject()) return b.ReadToEnd() ? InvalidBody : source.MalformedBody ?? InvalidBody;
+        while (b.NextProperty())
         {
-            // a root that isn't an object: JSON of another shape, or malformed further on, which the check tells without throwing
-            if (!b.ReadRootObject())
-                return b.IsWellFormed() ? InvalidBody : source.MalformedBody ?? InvalidBody;
+            if (!global::System.MemoryExtensions.SequenceEqual(b.PropertyName(name), "article"u8))
+            {
+                b.SkipValue();
+                continue;
+            }
+            // a later wrapper replaces an earlier one, fields and all
+            f0 = default;
+            f1 = default;
+            f2 = default;
+            f3 = default;
+            f4 = default;
+            f5 = default;
+            f6 = default;
+            f7 = default;
+            f8 = default;
+            f9 = default;
+            f10 = default;
+            found = b.ReadObject();
+            if (!found) continue;
             while (b.NextProperty())
             {
-                if (!global::System.MemoryExtensions.SequenceEqual(b.PropertyName(name), "article"u8))
-                {
-                    b.SkipValue();
-                    continue;
-                }
-                // a later wrapper replaces an earlier one, fields and all
-                f0 = default;
-                f1 = default;
-                f2 = default;
-                f3 = default;
-                f4 = default;
-                f5 = default;
-                f6 = default;
-                f7 = default;
-                f8 = default;
-                f9 = default;
-                f10 = default;
-                found = b.ReadObject();
-                if (!found) continue;
-                while (b.NextProperty())
-                {
-                    global::System.ReadOnlySpan<byte> n = b.PropertyName(name);
-                    if (global::System.MemoryExtensions.SequenceEqual(n, "title"u8)) f0 = b.ReadText();
-                    else if (global::System.MemoryExtensions.SequenceEqual(n, "description"u8)) f1 = b.ReadText();
-                    else if (global::System.MemoryExtensions.SequenceEqual(n, "body"u8)) f2 = b.ReadText();
-                    else if (global::System.MemoryExtensions.SequenceEqual(n, "tagList"u8)) f3 = b.ReadTextArray();
-                    else if (global::System.MemoryExtensions.SequenceEqual(n, "labels"u8)) f4 = b.ReadTextArray();
-                    else if (global::System.MemoryExtensions.SequenceEqual(n, "count"u8)) f5 = b.ReadInt64();
-                    else if (global::System.MemoryExtensions.SequenceEqual(n, "rank"u8)) f6 = b.ReadInt32();
-                    else if (global::System.MemoryExtensions.SequenceEqual(n, "score"u8)) f7 = b.ReadDouble();
-                    else if (global::System.MemoryExtensions.SequenceEqual(n, "draft"u8)) f8 = b.ReadBoolean();
-                    else if (global::System.MemoryExtensions.SequenceEqual(n, "author_info"u8)) f9 = global::App.Models.Author.__ReadNested(ref b, out n9, out e9);
-                    else if (global::System.MemoryExtensions.SequenceEqual(n, "editor"u8)) f10 = global::App.Models.Author.__ReadNested(ref b, out n10, out e10);
-                    else b.SkipValue();
-                }
+                global::System.ReadOnlySpan<byte> n = b.PropertyName(name);
+                if (global::System.MemoryExtensions.SequenceEqual(n, "title"u8)) f0 = b.ReadText();
+                else if (global::System.MemoryExtensions.SequenceEqual(n, "description"u8)) f1 = b.ReadText();
+                else if (global::System.MemoryExtensions.SequenceEqual(n, "body"u8)) f2 = b.ReadText();
+                else if (global::System.MemoryExtensions.SequenceEqual(n, "tagList"u8)) f3 = b.ReadTextArray();
+                else if (global::System.MemoryExtensions.SequenceEqual(n, "labels"u8)) f4 = b.ReadTextArray();
+                else if (global::System.MemoryExtensions.SequenceEqual(n, "count"u8)) f5 = b.ReadInt64();
+                else if (global::System.MemoryExtensions.SequenceEqual(n, "rank"u8)) f6 = b.ReadInt32();
+                else if (global::System.MemoryExtensions.SequenceEqual(n, "score"u8)) f7 = b.ReadDouble();
+                else if (global::System.MemoryExtensions.SequenceEqual(n, "draft"u8)) f8 = b.ReadBoolean();
+                else if (global::System.MemoryExtensions.SequenceEqual(n, "author_info"u8)) f9 = global::App.Models.Author.__ReadNested(ref b, out n9, out e9);
+                else if (global::System.MemoryExtensions.SequenceEqual(n, "editor"u8)) f10 = global::App.Models.Author.__ReadNested(ref b, out n10, out e10);
+                else b.SkipValue();
             }
-            b.ReadToEnd();
         }
-        catch (global::System.Text.Json.JsonException)
-        {
-            return source.MalformedBody ?? InvalidBody;
-        }
+        if (!b.ReadToEnd()) return source.MalformedBody ?? InvalidBody;
         if (!found) return InvalidBody;
         if (!f0.IsRequiredText) return Invalid;
         if (!f1.IsOptionalText(true)) return Invalid;

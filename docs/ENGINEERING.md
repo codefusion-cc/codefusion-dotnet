@@ -889,12 +889,24 @@ What it decided:
   hold them to the same verdict. Broken on purpose (leading zeros taken, the depth limit one off), the property test
   failed.
 - That read a well-formed body twice: binding got 65 to 75% slower
-  ([2026-10-21-body-syntax-check.md](benchmarks/2026-10-21-body-syntax-check.md)). On the coordinator's call the
-  binder binds first again. The check runs only where binding failed without the reader throwing: a root that isn't
-  an object, where it tells `[1,` (malformed) from `[]` (another shape) instead of reading on until the reader throws.
-  A well-formed body costs what it did before the branch (within 2 to 8% on a loaded Mac). A malformed body throws
-  again, 1,192 B and about 4 µs. `AppAllocationTests` allows exactly that for the malformed feed case, and
-  `EdgeTests.ABodysSyntaxIsCheckedOnlyWhereBindingFailed` pins where the generated binder calls the check.
+  ([2026-10-21-body-syntax-check.md](benchmarks/2026-10-21-body-syntax-check.md)). Binding first again gave that
+  back but made a malformed body throw (1,192 B, about 4 µs).
+- Now one reader does both, in one pass: `JsonCursor`, `JsonSyntax`'s state machine read a token at a time, with
+  `Utf8JsonReader`'s tokens (type, start, value bytes, escape flag, `TryGetInt64`, `TryGetInt32`, `TryGetDouble`,
+  `Skip`). It reports a syntax error as `Malformed` instead of throwing. `JsonBody` reads through it, the generated
+  binders have no `try` or `catch`, and `ReadToEnd()` says whether the body was JSON before any field's reply. A
+  malformed body costs no exception and no allocation, and every body binds 7 to 20% faster than before the branch.
+  - Held to the reader token by token: `JsonSyntaxTests` (60 cases, 25,000 generated inputs with numbers at and past
+    the Int32, Int64 and Double limits, 5,000 arbitrary byte arrays, depth 63 to 1,000) and the `json-syntax` fuzz
+    target, replayed at 20 times its mutations.
+  - The differential found two of the cursor's own mistakes before anything ran on it: `Utf8JsonReader.TryGetDouble`
+    returns an infinity for `1e400` rather than false (the binder refuses it with `IsFinite`, as before), and a
+    closing token kept the previous string's escape flag.
+  - `SpecOptionsTests.NoBodyThrowsWhileItIsBound` counts first-chance exceptions while all 42 bodies of the table bind
+    (20 of them threw before). `EdgeTests.ABodyIsBoundAndCheckedInOnePassWithoutExceptions` pins the generated code.
+  - `AppAllocationTests` has the malformed feed case back under 0.5 B, with no allowance.
+- The JWT verifier keeps `Utf8JsonReader` and its `catch`: it parses only a payload the secret signed, so a flood of
+  forged tokens never reaches a parser.
 - An Opus review of the diff found nothing critical or high. Fixed, each test red on the code before:
   `Jwt.Issue` asked the arena for six times a value's length before checking the value (a 1 MB claim took about
   8 MB from the pool, then a 500), and its size sum could overflow: the claims are checked first now, sized by their

@@ -186,7 +186,6 @@ CodeFusion.Http.IEndpointRouteBuilder.MapGroup(string! prefix) -> CodeFusion.Htt
 CodeFusion.Http.IReplySender<T>
 CodeFusion.Http.IReplySender<T>.Send(T reply, CodeFusion.Http.RequestContext! context) -> System.Threading.Tasks.ValueTask
 CodeFusion.Http.JsonBody
-CodeFusion.Http.JsonBody.IsWellFormed() -> bool
 CodeFusion.Http.JsonBody.JsonBody() -> void
 CodeFusion.Http.JsonBody.JsonBody(in CodeFusion.Http.BodySource source) -> void
 CodeFusion.Http.JsonBody.NextProperty() -> bool
@@ -200,7 +199,7 @@ CodeFusion.Http.JsonBody.ReadObject() -> bool
 CodeFusion.Http.JsonBody.ReadRootObject() -> bool
 CodeFusion.Http.JsonBody.ReadText() -> CodeFusion.Http.BodyValue
 CodeFusion.Http.JsonBody.ReadTextArray() -> CodeFusion.Http.BodyValue
-CodeFusion.Http.JsonBody.ReadToEnd() -> void
+CodeFusion.Http.JsonBody.ReadToEnd() -> bool
 CodeFusion.Http.JsonBody.SkipValue() -> void
 CodeFusion.Http.JsonBody.Text(in CodeFusion.Http.BodyValue value) -> CodeFusion.Utf8
 CodeFusion.Http.JsonBody.TextList(in CodeFusion.Http.BodyValue value) -> CodeFusion.Utf8List
