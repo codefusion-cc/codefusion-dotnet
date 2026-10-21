@@ -13,7 +13,7 @@ is the GC collections and allocation rate of the CodeFusion process during a sus
 | Workload | Machine | CodeFusion | Best Rust (entry) | Gap to Rust | Best other .NET (entry) | Allocation | Iteration |
 |---|---|---|---|---|---|---|---|
 | Multicore contest: Conduit on Postgres, users at the 5-minute hold | GCP c4-highcpu-8 | not measured yet | not measured yet | | | | |
-| $12 contest: feed on SQLite, users at the 5-minute hold | GCP c4-highcpu-2 held to 1 vCPU / 2 GB, 65,535 descriptors | 65,250 (cf-tables) | 188,250 (PR #82) | -65% | 65,500 (PR #74) | 470 / 478 MB RSS, about 7.3 KB a connection | 2026-10-21-twelve-scoring.md |
+| $12 contest: feed on SQLite, users at the 5-minute hold | GCP c4-highcpu-2 held to 1 vCPU / 2 GB, 65,535 descriptors | 65,250 (cf-tables) | 188,250 (PR #82) | -65% | 65,500 (PR #74) | not measured (RSS over the warm-up: 6.7 KB a connection, PR #82 0.5 KB) | 2026-10-21-twelve-scoring.md |
 | TechEmpower plaintext (pipelined 16), requests/s | reduced TFB rig: app c4-highcpu-8, Postgres c4-highcpu-8, wrk n2-highcpu-16; TFB 57d92fbec6f8 | 7,506,549 | 8,908,020 (xitca-web) | -16% | 7,297,751 (aspnetcore Platform) | 0 GC, 0 B in a measured minute | perf/techempower: 2026-10-21-tfb-final.md |
 | TechEmpower JSON, requests/s | same | 1,201,705 | 1,263,920 (xitca-web) | -5% | 703,920 (aspnetcore Platform) | 0 GC, 0 B in a measured minute | same |
 | TechEmpower single query, requests/s | same | 706,377 | 628,393 (may-minihttp) | **+12%** | 381,963 (aspnetcore Platform) | 0 GC, at most 0.013 B/request | same |
