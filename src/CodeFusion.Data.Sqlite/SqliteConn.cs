@@ -53,8 +53,15 @@ internal sealed unsafe class SqliteConn : IDisposable
     internal readonly long* Clock;
     /// <summary>The writer's WAL size in frames after its last commit (its WAL hook writes it).</summary>
     internal readonly int* WalFrames;
-    /// <summary>When the running job started (Stopwatch ticks), 0 between jobs: the watchdog interrupts one that runs too long.</summary>
-    long _started;
+    /// <summary>The running job's number, 0 between jobs, <see cref="Claimed"/> while the watchdog interrupts it: the slot
+    /// the watchdog claims a job by, so its interrupt can only land on the job it timed.</summary>
+    long _running;
+    /// <summary>When job <see cref="_running"/> started (Stopwatch ticks).</summary>
+    long _startedAt;
+    long _jobs;
+    /// <summary>The job the watchdog interrupted last.</summary>
+    long _interrupted;
+    const long Claimed = -1;
 
     /// <summary>The cells <see cref="Clock"/> and <see cref="WalFrames"/> point into: GC memory, pinned, never freed while
     /// anything still holds this connection, so a read of them after a close is stale, not of freed memory.</summary>
@@ -258,23 +265,56 @@ internal sealed unsafe class SqliteConn : IDisposable
     /// <summary>cf_now() is the time of each call again, not a group's start (a read on the writer's connection).</summary>
     public void ClearClock() => *Clock = 0;
 
-    /// <summary>A job starts on this connection (for the watchdog).</summary>
-    public void Started() => Volatile.Write(ref _started, Stopwatch.GetTimestamp());
+    /// <summary>A job starts on this connection (for the watchdog): numbered, its start time first.</summary>
+    public void Started()
+    {
+        Volatile.Write(ref _startedAt, Stopwatch.GetTimestamp());
+        Volatile.Write(ref _running, ++_jobs); // only this connection's thread runs jobs
+    }
 
-    /// <summary>The job ended.</summary>
-    public void Ended() => Volatile.Write(ref _started, 0);
+    /// <summary>The job ended: its number is cleared, after the watchdog's claim on it if one is in progress.</summary>
+    public void Ended()
+    {
+        long job = _jobs; // the job this thread started last: never a claim's marker
+        SpinWait wait = default;
+        while (Interlocked.CompareExchange(ref _running, 0, job) != job)
+        {
+            if (Volatile.Read(ref _running) == 0) return; // ended already
+            wait.SpinOnce(); // claimed: the watchdog is interrupting it, and gives it back at once
+        }
+    }
 
-    /// <summary>Interrupts the running job if it started more than <paramref name="limit"/> ticks before <paramref name="now"/>:
-    /// the job it timed, if that is still the one running (its start, a timestamp, is the job's mark). An interrupt that
-    /// finds no statement running does nothing, and every path that ends a job clears its start.</summary>
+    /// <summary>The running job was the one the watchdog interrupted (an SQLITE_INTERRUPT is its timeout, not another's).</summary>
+    public bool InterruptedThis => Volatile.Read(ref _interrupted) == Volatile.Read(ref _running);
+
+    /// <summary>Interrupts the running job if it started more than <paramref name="limit"/> ticks before <paramref name="now"/>,
+    /// and only that job: its number is read once and claimed with a compare-exchange before the interrupt, so a job that
+    /// ended meanwhile is left alone and the next one can't take the interrupt (it waits in <see cref="Ended"/> or hasn't
+    /// a number yet). An interrupt that finds no statement running is cleared by SQLite as the next one starts.</summary>
     public bool InterruptIfOver(long now, long limit)
     {
-        long started = Volatile.Read(ref _started);
-        if (started == 0 || now - started <= limit || _db == 0) return false;
-        if (Volatile.Read(ref _started) != started) return false; // that job ended; another may have begun
-        Sqlite3.InterruptRunning(_db);
+        long job = Volatile.Read(ref _running);
+        if (job <= 0 || now - Volatile.Read(ref _startedAt) <= limit || _db == 0) return false;
+#if DEBUG
+        BeforeInterrupt?.Invoke();
+#endif
+        if (Interlocked.CompareExchange(ref _running, Claimed, job) != job) return false; // that job ended; another may run
+        try
+        {
+            Volatile.Write(ref _interrupted, job);
+            Sqlite3.InterruptRunning(_db);
+        }
+        finally
+        {
+            Volatile.Write(ref _running, job);
+        }
         return true;
     }
+
+#if DEBUG
+    /// <summary>Debug, tests: runs on the watchdog's thread once it decided to interrupt, before it does.</summary>
+    internal static Action? BeforeInterrupt;
+#endif
 
     void Check(int rc)
     {

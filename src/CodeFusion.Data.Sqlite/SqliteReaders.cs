@@ -132,7 +132,8 @@ internal static unsafe class SqliteRun
         {
             Sqlite3.ConstraintUnique or Sqlite3.ConstraintPrimaryKey => DataStatus.UniqueViolation,
             _ when (code & 0xFF) is Sqlite3.Busy or Sqlite3.Locked => DataStatus.Busy,
-            _ when (code & 0xFF) == Sqlite3.Interrupt => DataStatus.StatementTimeout,
+            // the watchdog's, if it claimed this statement; any other interrupt is a plain failure
+            _ when (code & 0xFF) == Sqlite3.Interrupt => conn.InterruptedThis ? DataStatus.StatementTimeout : DataStatus.Failed,
             _ => DataStatus.Failed,
         };
         var error = status == DataStatus.Failed ? SqliteException.From(conn.Db, code) : null;

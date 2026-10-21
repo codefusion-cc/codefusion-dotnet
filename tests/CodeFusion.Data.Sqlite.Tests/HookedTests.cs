@@ -22,6 +22,7 @@ public sealed class HookedTests : IDisposable
         SqliteReaders.AfterExit = null;
         SqliteReaders.StoppedRead = null;
         SqliteJob.SaveFault = null;
+        SqliteConn.BeforeInterrupt = null;
 #endif
         _db.Dispose();
     }
@@ -132,5 +133,45 @@ public sealed class HookedTests : IDisposable
         await DurabilityTests.AnsweredAsStored(s, ("a", a));
         Assert.Equal(1, Kv.Count(s, "after"));
 #endif
+    }
+
+    /// <summary>The watchdog decides to interrupt a statement past its timeout, and is held a moment before it does: the
+    /// statement ends on its own meanwhile, and the next one starts. The interrupt must not land on that one.</summary>
+    [Fact(Timeout = 30_000)]
+    public void TheWatchdogInterruptsOnlyTheStatementItTimed()
+    {
+#if !DEBUG
+        Assert.Skip("needs the Debug hook");
+#else
+        var s = _db.Open(_db.Database(readers: 1, timeout: TimeSpan.FromMilliseconds(200)));
+        // how many steps take 100 ms here
+        Assert.True(Spin(s, 10_000).IsOk); // prepared, warm
+        var clock = Stopwatch.StartNew();
+        Assert.True(Spin(s, 1_000_000).IsOk);
+        long per100ms = Math.Max(1, (long)(1_000_000 * 100 / Math.Max(1, clock.Elapsed.TotalMilliseconds)));
+        int held = 0;
+        SqliteConn.BeforeInterrupt = () =>
+        {
+            if (Interlocked.Exchange(ref held, 1) == 0) Thread.Sleep(300); // the first decision waits: its statement ends
+        };
+        clock.Restart();
+        var slow = Spin(s, per100ms * 4);    // about 400 ms: past the timeout, so the watchdog decides on it
+        long slowMs = clock.ElapsedMilliseconds;
+        var next = Spin(s, per100ms * 3 / 2); // about 150 ms, under the timeout: running as the held interrupt goes out
+        long nextMs = clock.ElapsedMilliseconds - slowMs;
+        SqliteConn.BeforeInterrupt = null;
+        Assert.True(slowMs > 250 && nextMs < 190, $"the statements took {slowMs} and {nextMs} ms");
+        Assert.Equal(1, held);
+        Assert.True(next.IsOk, $"the statement after the one timed was interrupted: {next}");
+        Assert.Equal(DataStatus.Ok, slow.Status);
+        Assert.Equal(0, s.Interrupted);
+#endif
+    }
+
+    static DataResult Spin(SqliteDataSource s, long steps)
+    {
+        var c = s.Read(Kv.Spin);
+        c.Int64(steps);
+        return Kv.Done(Sqlite.Run<Value>(c.Hold(), null, default));
     }
 }
