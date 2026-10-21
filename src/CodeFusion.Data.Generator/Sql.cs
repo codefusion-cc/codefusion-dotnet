@@ -21,16 +21,21 @@ sealed class Dialect
     /// Fails the statement (casting its message to an integer) when the Select after Then can't read the tables as the
     /// write left them: {0} the table written, {1} the columns the insert sets, {2} the tables the Select reads, each a
     /// string literal; {3} whether the write deletes, {4} whether a read is corrected. A rule or a trigger on the table
-    /// written may write more; a delete's foreign keys may cascade into a table read; and a corrected read needs no row
-    /// security and columns that store the value written (no type modifier, a type that holds it as it is).
+    /// written may write more; a delete may cascade, key by key, into a table read, and each table it reaches may have
+    /// rules or triggers of its own; and a corrected read needs no row security and columns that store the value
+    /// written (no type modifier, a type that holds it as it is).
     /// </summary>
     public const string ThenGuardOfPostgres =
-        "(SELECT CASE WHEN c.relhasrules OR EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = c.oid AND NOT g.tgisinternal) " +
-        "OR {3} AND EXISTS (SELECT 1 FROM pg_constraint k WHERE k.contype = 'f' AND k.confrelid = c.oid AND k.confdeltype IN ('c', 'n', 'd') AND k.conrelid = ANY (ARRAY[{2}]::regclass[])) " +
+        "(SELECT CASE WHEN EXISTS (WITH RECURSIVE r(oid) AS (SELECT c.oid UNION SELECT k.conrelid FROM r JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass " +
+        "AND d.refobjid = r.oid AND d.classid = 'pg_constraint'::regclass JOIN pg_constraint k ON k.oid = d.objid " +
+        "WHERE {3} AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd')) " +
+        "SELECT 1 FROM r JOIN pg_class x ON x.oid = r.oid WHERE x.relhasrules OR EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = r.oid AND NOT g.tgisinternal) " +
+        "OR {3} AND EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = ANY (ARRAY[{2}]::regclass[]) AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd'))) " +
         "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname IN ({1}) " +
         "AND (a.atttypmod <> -1 OR a.atttypid NOT IN (16, 17, 20, 21, 23, 25, 701, 1184, 2950)))) " +
         "THEN ('CodeFusion: the Select after Then can''t read ' || c.relname || ' as the write left it (a rule, a trigger, row security, a foreign key that cascades " +
         "into a table it reads, or a column that may store another value than the one written)')::int ELSE 0 END FROM pg_class c WHERE c.oid = {0}::regclass) = 0";
+
     public string InArray = "{0} = ANY({1})", NullSafeEqual = "{0} IS NOT DISTINCT FROM {1}", Now = "now()", Concat = "{0} || {1}";
     public string True = "true", False = "false", BigIntLiteral = "{0}::bigint", LockRows = "FOR UPDATE OF {0}";
     // C#'s conversions between integers and floating point ({1} is the SQL type), the smaller and larger of two

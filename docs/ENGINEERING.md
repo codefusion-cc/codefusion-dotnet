@@ -946,8 +946,9 @@ What the fixes decided:
   navigation is refused at build time; for the rest the statement checks the catalog first
   (`SqlDialectAttribute.ThenGuard`, a scalar subquery the final SELECT's WHERE compares with 0, as
   perf/data-batched-updates' merged updates check their table): a rule or non-internal trigger on the table written,
-  a foreign key that cascades or sets NULL or a default from it into a table the Select reads (the found table and
-  the table written included), and, for a corrected read, row security on it or a column the insert sets with a type
+  or on any table a delete reaches from it key after key (a recursive CTE over the foreign keys that cascade, set
+  NULL or set a default, found through pg_depend's index), such a foreign key into a table the Select reads (the
+  found table and the table written included), and, for a corrected read, row security on it or a column the insert sets with a type
   modifier or a type that may store another value than the one bound. Any of them casts
   `'CodeFusion: the Select after Then can't read <table> as the write left it ...'` to an integer, which fails the
   statement (22P02) before its write commits. The check is a few catalog lookups by index per statement, run only

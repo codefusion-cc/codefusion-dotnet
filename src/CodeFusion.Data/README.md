@@ -70,7 +70,8 @@ is the snapshot's count and one if the snapshot held no favorite of that key (wr
 the snapshot missed). After an insert with `OrIgnore` that needs the table's key, `[Key]` on each of its columns.
 After a delete, the Select may not read a table whose rows lead to the table deleted from (a cascade could have
 changed it). What the model can't see the statement checks first, in the catalog: a rule or trigger on the table
-written, a foreign key the delete cascades along into a table read, and, for a corrected read, row security or a
+written or on any table the delete cascades into, key after key, a foreign key by which the delete reaches a table
+read, and, for a corrected read, row security or a
 column that may store another value than the one written. Any of them fails the statement with a message starting
 `CodeFusion: the Select after Then can't read`, and nothing is written.
 

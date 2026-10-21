@@ -159,7 +159,7 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
     static PgDataSource Source(string schema, System.Collections.Concurrent.ConcurrentQueue<DataResult> failures) =>
         new PostgresDatabase(PgSettings.Parse(TestDb.ConnectionString!).Set("search_path", schema)) { OnFailure = (_, r) => failures.Enqueue(r) }.Open(1, 1);
 
-    static void FailedByTheGuard(Row<Tally> row, System.Collections.Concurrent.ConcurrentQueue<DataResult> failures)
+    static void FailedByTheGuard<T>(Row<T> row, System.Collections.Concurrent.ConcurrentQueue<DataResult> failures) where T : struct
     {
         Assert.Equal(DataStatus.Failed, row.Status);
         Assert.True(failures.TryDequeue(out var f));
@@ -183,6 +183,48 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
             // person_labels references people ON DELETE CASCADE, and the Select reads it through Person.Labels
             FailedByTheGuard(await db.DropMember(9860, U("cr9860")), failures);
             Assert.Equal(1L, await admin.Scalar("SELECT count(*) FROM people WHERE id = 9860"));
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
+    }
+
+    [Fact]
+    public async Task ACascadeTwoTablesAwayFromTheDeleteFailsTheStatement()
+    {
+        TestDb.Require();
+        const string schema = "cfdata_chain";
+        await using var admin = TestDb.Admin();
+        await admin.Execute($"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; SET search_path = {schema}; {OpsFixture.Schema}; {OpsFixture.Seed}; " +
+            "CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN OLD; END $$; " +
+            "INSERT INTO teams VALUES (9870, 'chained'); INSERT INTO chain_a VALUES (1, 'one'), (2, 'two'), (3, 'three'); " +
+            "INSERT INTO chain_b VALUES (1, 1), (2, 2), (3, 3); INSERT INTO chain_c VALUES (1, 1, 9870), (2, 2, 9870), (3, 3, 9870)");
+        await using var db0 = TestDb.Admin(schema);
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<DataResult>();
+        var source = Source(schema, failures);
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            // chain_a cascades into chain_b, chain_b into chain_c, and the Select counts chain_c: the model sees neither key
+            _response.Next();
+            FailedByTheGuard(await db.DropChain(9870, U("one")), failures);
+            Assert.Equal(3L, await db0.Scalar("SELECT count(*) FROM chain_c"));
+            // with chain_b's key into chain_a not cascading, nothing reaches chain_c: the count is the snapshot's and right
+            await db0.Execute("ALTER TABLE chain_c DROP CONSTRAINT chain_c_b_id_fkey; ALTER TABLE chain_c ADD FOREIGN KEY (b_id) REFERENCES chain_b (id)");
+            await db0.Execute("DELETE FROM chain_c WHERE id = 1");
+            _response.Next();
+            Assert.Equal(new Number(9870, 2), (await db.DropChain(9870, U("one"))).Value);
+            // a trigger on chain_b fires on the cascaded delete and may write anywhere
+            await db0.Execute("CREATE TRIGGER t BEFORE DELETE ON chain_b FOR EACH ROW EXECUTE FUNCTION touch()");
+            _response.Next();
+            FailedByTheGuard(await db.DropChain(9870, U("two")), failures);
+            Assert.Equal(1L, await db0.Scalar("SELECT count(*) FROM chain_a WHERE id = 2"));
+            await db0.Execute("DROP TRIGGER t ON chain_b; CREATE RULE r AS ON DELETE TO chain_b DO ALSO NOTIFY chained");
+            _response.Next();
+            FailedByTheGuard(await db.DropChain(9870, U("two")), failures);
+            Assert.Equal(1L, await db0.Scalar("SELECT count(*) FROM chain_a WHERE id = 2"));
         }
         finally
         {

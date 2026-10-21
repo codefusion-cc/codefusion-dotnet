@@ -16,6 +16,9 @@ public sealed class Team
     public long Id { get; init; }
     public Utf8 Name { get; init; }
     public Many<Person> Members { get; init; }
+
+    /// <summary>Rows a delete of chain_a reaches two foreign keys down, which the model has no navigation for.</summary>
+    public Many<ChainC> Chains { get; init; }
 }
 
 public sealed class Person
@@ -60,6 +63,24 @@ public sealed class PersonLabel
     public Person Person { get; init; } = null!;
     [Key] public int LabelId { get; init; }
     public Label Label { get; init; } = null!;
+}
+
+/// <summary>The head of a chain of cascades: chain_b references it, and chain_c chain_b, each ON DELETE CASCADE.</summary>
+[Table("chain_a")]
+public sealed class ChainA
+{
+    public long Id { get; init; }
+    public Utf8 Name { get; init; }
+}
+
+/// <summary>The end of the chain, mapped without the navigation that would lead the model to chain_a.</summary>
+[Table("chain_c")]
+public sealed class ChainC
+{
+    public long Id { get; init; }
+    public long BId { get; init; }
+    public long TeamId { get; init; }
+    public Team Team { get; init; } = null!;
 }
 
 /// <summary>A table whose name needs quotes.</summary>
@@ -182,6 +203,7 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Table<PersonLabel> PersonLabels => Table<PersonLabel>();
     public Table<Gadget> Gadgets => Table<Gadget>();
     public Table<TenantItem> TenantItems => Table<TenantItem>();
+    public Table<ChainA> ChainAs => Table<ChainA>();
 
     // ---------- Where ----------
 
@@ -501,6 +523,14 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Write<Tally> DropMember(long team, Utf8 name) =>
         Teams.Where(t => t.Id == team).Then(t => People.Where(p => p.Name == name).Delete())
             .Select(t => new Tally(t.Id, t.Members.Count(), t.Members.Any(m => m.Labels.Any())));
+
+    /// <summary>A delete two cascades away from the table the Select reads: chain_a to chain_b to chain_c.</summary>
+    public Write<Number> DropChain(long team, Utf8 name) =>
+        Teams.Where(t => t.Id == team).Then(t => ChainAs.Where(a => a.Name == name).Delete()).Select(t => new Number(t.Id, t.Chains.Count()));
+
+    /// <summary>The same delete, giving back the team's own columns only.</summary>
+    public Write<Number> DropChainQuietly(long team, Utf8 name) =>
+        Teams.Where(t => t.Id == team).Then(t => ChainAs.Where(a => a.Name == name).Delete()).Select(t => new Number(t.Id, t.Id));
 
     /// <summary>An insert without OrIgnore: the row written is the one more, whatever its columns.</summary>
     public Write<Tally> AddPetCounted(Utf8 name, long id) =>

@@ -112,7 +112,7 @@ public sealed class PlanTests
     /// before the rows), and the first row found by key: what the compiled one does more after Then.</summary>
     static string Checked(string reference, string compiled)
     {
-        int start = compiled.IndexOf(" WHERE (SELECT CASE WHEN c.relhasrules", StringComparison.Ordinal), end = compiled.LastIndexOf(" ORDER BY ", StringComparison.Ordinal);
+        int start = compiled.IndexOf(" WHERE (SELECT CASE WHEN ", StringComparison.Ordinal), end = compiled.LastIndexOf(" ORDER BY ", StringComparison.Ordinal);
         Assert.True(start > 0 && end > start, compiled);
         return reference + compiled[start..end] + " ORDER BY id LIMIT 1";
     }
