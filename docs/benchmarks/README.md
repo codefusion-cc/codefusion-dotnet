@@ -37,6 +37,7 @@ is the GC collections and allocation rate of the CodeFusion process during a sus
 | 2026-10-21 | [sqlite-exclusive-kept-read](2026-10-21-sqlite-exclusive-kept-read.md) | The same with a read transaction kept between groups | reads back to par; mix 374 to 431 k ops/s |
 | 2026-10-21 | [sqlite-exclusive-turns](2026-10-21-sqlite-exclusive-turns.md) | Reads and the writer taking turns on the one connection | 200 writes beside scans: 21.9 s to 0.3 to 0.4 s |
 | 2026-10-21 | [sqlite-exclusive-after-turns](2026-10-21-sqlite-exclusive-after-turns.md) | Exclusive against readers of their own after turn-taking | 1 vCPU mix 388 to 486 k vs 50 to 77 k ops/s |
+| 2026-10-21 | [twelve-entry-linq-exclusive](2026-10-21-twelve-entry-linq-exclusive.md) | The $12 entry on LINQ, DLLs and Exclusive mode, against the baseline | mix 37,143 to 41,091 vs 32,459 to 34,564 req/s; p99 longer |
 
 ## Template
 
