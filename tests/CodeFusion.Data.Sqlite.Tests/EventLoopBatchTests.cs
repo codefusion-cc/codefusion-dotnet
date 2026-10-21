@@ -162,6 +162,41 @@ public sealed class EventLoopBatchTests : IDisposable
     }
 
     [Fact(Timeout = 30_000)]
+    public async Task AWriteOnNoLoopCommitsAtOnceWithNoBatchEnd()
+    {
+        var s = Open();
+        // a thread no loop runs (EventLoopThread.Current is -1): the Sockets transport, or a handler resumed off its
+        // loop. Nothing ever ends a batch here, and the write still commits, on the writer thread
+        Assert.Equal(-1, EventLoopThread.Current);
+        long commits = s.Writer.Counters.Commits;
+        Assert.True((await Kv.Write(s, "plain", 1)).IsOk);
+        Assert.Equal(commits + 1, s.Writer.Counters.Commits);
+        Assert.Equal(1, Kv.Read(s, "plain").Value);
+        // and the end of a batch on a thread with none open does nothing, however often the server calls it
+        long after = s.Writer.Counters.Commits;
+        for (int i = 0; i < 3; i++) s.EndEventLoopBatch(0);
+        Assert.Equal(after, s.Writer.Counters.Commits);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ABatchEndCalledAgainInTheSameWakeUpCommitsOnlyWhatIsNew()
+    {
+        var s = Open();
+        using var loop = new TestLoop(s);
+        long commits = s.Writer.Counters.Commits;
+        ValueTask<DataResult> first = default, second = default;
+        await loop.WakeUp(() =>
+        {
+            first = Kv.Write(s, "round-1", 1);
+            s.EndEventLoopBatch(0);  // the server's first round
+            s.EndEventLoopBatch(0);  // again, nothing new: no transaction
+            second = Kv.Write(s, "round-2", 2); // a pipelined request's handler, in a later round
+        });
+        Assert.True((await first).IsOk && (await second).IsOk);
+        Assert.Equal(commits + 2, s.Writer.Counters.Commits);
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task ACancelledWriteIsCanceledAndWritesNothing()
     {
         var s = Open();
