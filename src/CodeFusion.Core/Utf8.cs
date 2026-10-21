@@ -38,6 +38,29 @@ public readonly struct Utf8 : IEquatable<Utf8>
     /// <summary>Whether there are no bytes.</summary>
     public bool IsEmpty => _length == 0;
 
+    /// <summary>The <paramref name="length"/> bytes from <paramref name="start"/>: a view of the same buffer, valid as
+    /// long as this text is. Both must lie inside this text, never in the buffer around it. It counts bytes, so a
+    /// slice can cut a character in two.</summary>
+    public Utf8 Slice(int start, int length)
+    {
+        if ((uint)start > (uint)_length || (uint)length > (uint)(_length - start))
+            throw new ArgumentOutOfRangeException(nameof(length), "the slice must lie inside the text");
+        return length == 0 ? default : new Utf8(_buffer!, _start + start, length);
+    }
+
+    /// <summary>The text without JSON's whitespace (space, tab, CR, LF) at either end: a view of the same buffer.
+    /// Other characters, a no-break space among them, are text.</summary>
+    public Utf8 Trim()
+    {
+        ReadOnlySpan<byte> s = Span;
+        int from = 0, to = s.Length;
+        while (from < to && IsWhitespace(s[from])) from++;
+        while (to > from && IsWhitespace(s[to - 1])) to--;
+        return Slice(from, to - from);
+    }
+
+    static bool IsWhitespace(byte b) => b is (byte)' ' or (byte)'\t' or (byte)'\r' or (byte)'\n';
+
     /// <summary>The text's bytes, where a span is wanted.</summary>
     public static implicit operator ReadOnlySpan<byte>(Utf8 text) => text.Span;
 

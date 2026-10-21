@@ -67,6 +67,7 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
     internal int PerConnectionCount => _perConnection.Length;
     internal int MaxRouteValues => _router.MaxParameters;
     internal bool HasJwt => _jwt is not null;
+    internal Jwt? Jwt => _jwt;
 
     internal bool TryGetSingleton(Type type, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out object? service) =>
         _singletons.TryGetValue(type, out service);
@@ -174,12 +175,19 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
         if (e is null) return Errors.NotFound.WriteAsync(c);
         if (e.Auth != AuthMode.None)
         {
-            long viewer = _jwt!.Viewer(x.HasAuthorization, x.Authorization);
-            if (viewer < 0 || viewer == 0 && e.Auth == AuthMode.Required) return Errors.Unauthorized.WriteAsync(c);
+            TokenCheck check = _jwt!.Authenticate(x.HasAuthorization, x.Authorization, c.Arena, c.ClaimRanges, out long viewer, out ArenaBytes payload);
+            // no header is anonymous where that is allowed; a header that isn't a valid token never is
+            if (Refuses(check, x.HasAuthorization, e.Auth)) return Errors.Refused(check).WriteAsync(c);
             c.ViewerId = viewer;
+            c.ClaimPayload = payload;
         }
         return e.Invoke(c);
     }
+
+    /// <summary>Whether an endpoint that reads the header answers 401: anything but a valid token, except that no
+    /// header at all is anonymous where auth is optional.</summary>
+    internal static bool Refuses(TokenCheck check, bool hasAuthorization, AuthMode auth) =>
+        check != TokenCheck.Valid && (hasAuthorization || auth == AuthMode.Required);
 
     RequestContext NewContext(HttpExchange x)
     {
@@ -285,10 +293,16 @@ public sealed class HttpAppBuilder : IServiceRegistry
     /// <summary><see cref="AddJwtAuth(string, TimeSpan)"/>, and with <paramref name="allowShortSecret"/> a secret
     /// shorter than <see cref="Jwt.MinSecretBytes"/> too, for a deployment handed a fixed one: see
     /// <see cref="Jwt.Jwt(string, TimeSpan, bool)"/> for the risk.</summary>
-    public HttpAppBuilder AddJwtAuth(string secret, TimeSpan lifetime, bool allowShortSecret)
+    public HttpAppBuilder AddJwtAuth(string secret, TimeSpan lifetime, bool allowShortSecret) =>
+        AddJwtAuth(secret, Jwt.Options(lifetime, allowShortSecret));
+
+    /// <summary><see cref="AddJwtAuth(string)"/> as <paramref name="options"/> say: the tokens' lifetime, whether a
+    /// short secret is taken (see <see cref="JwtOptions.AllowShortSecret"/> for the risk), and the header's scheme,
+    /// such as <c>Bearer</c>.</summary>
+    public HttpAppBuilder AddJwtAuth(string secret, JwtOptions options)
     {
         if (JwtPrototype is not null) throw new InvalidOperationException("AddJwtAuth was called already");
-        var jwt = new Jwt(secret, lifetime, allowShortSecret);
+        var jwt = new Jwt(secret, options);
         AddPerConnection(jwt.Copy);
         JwtPrototype = jwt;
         return this;
@@ -323,13 +337,42 @@ public sealed class HttpAppErrors
     /// <summary>No route matches the method and path. 404 by default.</summary>
     public ErrorReply NotFound { get; set; } = Make(404, "not found");
 
+    /// <summary>A long or int route value that isn't digits, doesn't fit, or is outside the parameter's [Range], such
+    /// as a post id of 0 or "abc": checked after auth. An endpoint's own <c>.WithInvalidRouteValue(error)</c> wins over it.
+    /// Null, the default, answers with <see cref="NotFound"/>.</summary>
+    public ErrorReply? InvalidRouteValue { get; set; }
+
     /// <summary>A missing or invalid token on an endpoint that needs one, or an invalid one on any endpoint that reads
-    /// it. 401 by default.</summary>
+    /// it, for each reason <see cref="MissingToken"/>, <see cref="InvalidToken"/> and <see cref="InvalidTokenPayload"/>
+    /// leave unset. 401 by default.</summary>
     public ErrorReply Unauthorized { get; set; } = Make(401, "unauthorized");
+
+    /// <summary>No token: no Authorization header on an endpoint that requires one, or, on any endpoint that reads it,
+    /// a header without the scheme (another scheme, the scheme in another case, an empty header). Null, the default,
+    /// answers with <see cref="Unauthorized"/>.</summary>
+    public ErrorReply? MissingToken { get; set; }
+
+    /// <summary>A token that isn't valid: forged, malformed, not HS256, expired or not valid yet. Null, the default,
+    /// answers with <see cref="Unauthorized"/>.</summary>
+    public ErrorReply? InvalidToken { get; set; }
+
+    /// <summary>A genuine token in time whose payload the app can't read: its sub isn't a positive integer string, or
+    /// a claim <see cref="JwtOptions.Claims"/> declares breaks its rule. Null, the default, answers with
+    /// <see cref="InvalidToken"/>, or <see cref="Unauthorized"/> when that is null too.</summary>
+    public ErrorReply? InvalidTokenPayload { get; set; }
 
     /// <summary>A body that isn't the JSON its struct describes, or a field that struct doesn't name its own reply
     /// for. 422 by default.</summary>
     public ErrorReply InvalidBody { get; set; } = Make(422, "invalid body");
+
+    /// <summary>A request body that isn't JSON: cut short, bytes after its value, a bad escape, past depth 64. It wins
+    /// over a body struct's own <c>InvalidBody</c>. Null, the default, answers as before: the struct's own
+    /// <c>static ErrorReply InvalidBody</c>, else <see cref="InvalidBody"/>.</summary>
+    public ErrorReply? MalformedBody { get; set; }
+
+    /// <summary>No request body at all (none sent, or Content-Length: 0) to an endpoint that reads one. Null, the
+    /// default, answers as <see cref="MalformedBody"/> does, and so on down its line.</summary>
+    public ErrorReply? MissingBody { get; set; }
 
     /// <summary>A handler threw. 500 by default.</summary>
     public ErrorReply Internal { get; set; } = Make(500, "internal error");
@@ -350,6 +393,14 @@ public sealed class HttpAppErrors
     /// <summary>What a handler threw, with its request: by default a line on stderr. Null logs nothing.</summary>
     public Action<HttpExchange, Exception>? Log { get; set; } = static (x, e) =>
         HttpServerOptions.Stderr($"error: {Encoding.ASCII.GetString(x.MethodBytes)} {Encoding.UTF8.GetString(x.Path)}", e);
+
+    /// <summary>The 401 for a token that <paramref name="check"/> refused.</summary>
+    internal ErrorReply Refused(TokenCheck check) => check switch
+    {
+        TokenCheck.Missing => MissingToken ?? Unauthorized,
+        TokenCheck.InvalidPayload => InvalidTokenPayload ?? InvalidToken ?? Unauthorized,
+        _ => InvalidToken ?? Unauthorized,
+    };
 
     internal ReadOnlySpan<byte> Rejected(int status) => status switch
     {
