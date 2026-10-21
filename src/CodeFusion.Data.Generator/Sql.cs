@@ -21,18 +21,22 @@ sealed class Dialect
     /// Fails the statement (casting its message to an integer) when the Select after Then can't read the tables as the
     /// write left them: {0} the table written and {2} the tables the Select reads, each a string literal; {1} the columns
     /// the insert sets, rows of a VALUES of each one's name and the type it is bound as; {3} whether the write deletes,
-    /// {4} whether a read is corrected. A rule or a trigger on the table written may write more; a delete may cascade,
-    /// key by key, into a table read, and each table it reaches may have rules or triggers of its own; and a corrected
-    /// read needs no row security and columns that store the value written (no type modifier, the type bound or a
-    /// wider integer or float) and compare it as the correction does (the default collation).
+    /// {4} whether a read is corrected. The walk starts at the table written and its partitions; a delete follows each
+    /// key that cascades, sets NULL or sets a default, and from a row set to NULL or a default the keys acting on its
+    /// update. A rule or trigger on any table walked may write more, and a table reached that the Select reads fails it
+    /// (the table written is read only where a read of it is corrected). A corrected read needs no row security and
+    /// columns that store the value written (no type modifier, the type bound or a wider integer or float) and compare
+    /// it as the correction does (the default collation).
     /// </summary>
     public const string ThenGuardOfPostgres =
-        "(SELECT CASE WHEN EXISTS (WITH RECURSIVE r(oid) AS (SELECT c.oid UNION SELECT k.conrelid FROM r JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass " +
-        "AND d.refobjid = r.oid AND d.classid = 'pg_constraint'::regclass JOIN pg_constraint k ON k.oid = d.objid " +
-        "WHERE {3} AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd')) " +
+        "(SELECT CASE WHEN EXISTS (WITH RECURSIVE r(oid, upd, reached) AS (SELECT c.oid, false, false " +
+        "UNION SELECT n.oid, n.upd, n.reached FROM r CROSS JOIN LATERAL (SELECT i.inhrelid, r.upd, r.reached FROM pg_inherits i WHERE i.inhparent = r.oid " +
+        "UNION ALL SELECT k.conrelid, r.upd OR k.confdeltype <> 'c', true FROM pg_depend d JOIN pg_constraint k ON k.oid = d.objid " +
+        "WHERE {3} AND d.refclassid = 'pg_class'::regclass AND d.refobjid = r.oid AND d.classid = 'pg_constraint'::regclass AND k.contype = 'f' AND k.confrelid = r.oid " +
+        "AND CASE WHEN r.upd THEN k.confupdtype ELSE k.confdeltype END IN ('c', 'n', 'd')) n(oid, upd, reached)) " +
         "SELECT 1 FROM r JOIN pg_class x ON x.oid = r.oid WHERE x.relhasrules " +
         "OR (SELECT true FROM pg_trigger g WHERE g.tgrelid = r.oid AND NOT g.tgisinternal LIMIT 1) " +
-        "OR {3} AND EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = ANY (ARRAY[{2}]::regclass[]) AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd'))) " +
+        "OR r.reached AND (r.oid::regclass = ANY (ARRAY[{2}]::regclass[]) OR pg_partition_root(r.oid) = ANY (ARRAY[{2}]::regclass[]))) " +
         "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM (VALUES {1}) v(n, t) JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = v.n::name " +
         "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid::regtype <> ALL (CASE v.t WHEN 'smallint' THEN '{int2,int4,int8}'::regtype[] " +
         "WHEN 'integer' THEN '{int4,int8}'::regtype[] WHEN 'real' THEN '{float4,float8}'::regtype[] ELSE ARRAY[v.t::regtype] END))) " +

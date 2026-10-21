@@ -146,7 +146,8 @@ sealed partial class Translator
             // the statement checks first that the tables read are as the write left them, which the model can't see all of:
             // the row found too, whatever else the Select reads, which a cascade or a trigger may have changed or deleted
             if (D.ThenGuard.Length == 0) throw new Refused(at, $"Then with a Select in {D.Name}, which can't check its tables' triggers and foreign keys, so it");
-            written.Read(TableSql(written.Table));
+            // the table written is read only where a read of it is corrected: a key of it into itself reaches nothing else
+            if (written.Corrected) written.Read(TableSql(written.Table));
             written.Read(TableSql(e));
             string columns = written.Columns.Count == 0 ? "('', 'text')"
                 : string.Join(", ", written.Columns.Select(c => $"({Sql.String(c.Name)}, {Sql.String(Dialect.BoundType(c.Kind))})"));

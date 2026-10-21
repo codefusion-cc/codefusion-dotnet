@@ -109,12 +109,14 @@ public sealed class ShapeGeneratorTests
         // the attribute leaves it to the generator, which keeps the one copy: what a Postgres statement after Then runs
         Assert.Null(new SqlDialectAttribute("postgres").ThenGuard);
         Assert.Equal(
-            "(SELECT CASE WHEN EXISTS (WITH RECURSIVE r(oid) AS (SELECT c.oid UNION SELECT k.conrelid FROM r JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass " +
-            "AND d.refobjid = r.oid AND d.classid = 'pg_constraint'::regclass JOIN pg_constraint k ON k.oid = d.objid " +
-            "WHERE {3} AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd')) " +
+            "(SELECT CASE WHEN EXISTS (WITH RECURSIVE r(oid, upd, reached) AS (SELECT c.oid, false, false " +
+            "UNION SELECT n.oid, n.upd, n.reached FROM r CROSS JOIN LATERAL (SELECT i.inhrelid, r.upd, r.reached FROM pg_inherits i WHERE i.inhparent = r.oid " +
+            "UNION ALL SELECT k.conrelid, r.upd OR k.confdeltype <> 'c', true FROM pg_depend d JOIN pg_constraint k ON k.oid = d.objid " +
+            "WHERE {3} AND d.refclassid = 'pg_class'::regclass AND d.refobjid = r.oid AND d.classid = 'pg_constraint'::regclass AND k.contype = 'f' AND k.confrelid = r.oid " +
+            "AND CASE WHEN r.upd THEN k.confupdtype ELSE k.confdeltype END IN ('c', 'n', 'd')) n(oid, upd, reached)) " +
             "SELECT 1 FROM r JOIN pg_class x ON x.oid = r.oid WHERE x.relhasrules " +
             "OR (SELECT true FROM pg_trigger g WHERE g.tgrelid = r.oid AND NOT g.tgisinternal LIMIT 1) " +
-            "OR {3} AND EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = ANY (ARRAY[{2}]::regclass[]) AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd'))) " +
+            "OR r.reached AND (r.oid::regclass = ANY (ARRAY[{2}]::regclass[]) OR pg_partition_root(r.oid) = ANY (ARRAY[{2}]::regclass[]))) " +
             "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM (VALUES {1}) v(n, t) JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = v.n::name " +
             "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid::regtype <> ALL (CASE v.t WHEN 'smallint' THEN '{int2,int4,int8}'::regtype[] " +
             "WHEN 'integer' THEN '{int4,int8}'::regtype[] WHEN 'real' THEN '{float4,float8}'::regtype[] ELSE ARRAY[v.t::regtype] END))) " +
@@ -268,7 +270,7 @@ public sealed class ShapeGeneratorTests
             """);
         var r = Run(source);
         Assert.Equal("WITH t AS (SELECT p.id, p.name FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (owner_id, name) SELECT t.id, $2 FROM t) SELECT t.id, t.name FROM t" +
-            Guards.Then("pets", [("owner_id", "bigint"), ("name", "text")], ["pets", "people"], delete: false, corrected: false) + " ORDER BY t.id LIMIT 1", r.Sql("Give"));
+            Guards.Then("pets", [("owner_id", "bigint"), ("name", "text")], ["people"], delete: false, corrected: false) + " ORDER BY t.id LIMIT 1", r.Sql("Give"));
         // a condition holding AND inside a CASE is one condition, and the CASE one term, which needs no parentheses
         Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > 1) DELETE FROM pets x USING t WHERE CASE WHEN x.id > 0 AND x.id < 9 THEN x.owner_id = t.id OR x.id = 2 ELSE false END", r.Sql("TakeCase"));
         Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > $1) DELETE FROM pets x WHERE x.owner_id = ANY(ARRAY(SELECT t.id FROM t))", r.Sql("Take"));

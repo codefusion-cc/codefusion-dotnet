@@ -138,14 +138,16 @@ public sealed class SqlDialectAttribute : Attribute
 
     /// <summary>
     /// A condition of the Select after <c>Query.Then</c> that fails the statement, before its write commits, when the
-    /// Select can't read the tables as the write left them: a rule or trigger on the table written, or on a table a
-    /// delete cascades into, key by key; a foreign key by which such a delete reaches a table the Select reads; row
+    /// Select can't read the tables as the write left them: a rule or trigger on the table written, one of its
+    /// partitions, or a table a delete reaches key after key (along the keys that cascade or set NULL or a default, and
+    /// from a row set to NULL or a default along the keys acting on its update); such a table that the Select reads; row
     /// security on a table whose read is corrected; or a column the insert sets that may store another value than the
-    /// one written (a type modifier such as numeric(5,2), a type other than the one bound but a wider integer
-    /// or float) or compare it in another collation than the default. {0} is the table written and {2} the tables the Select reads, each a string literal;
-    /// {1} the columns the insert sets, rows of a VALUES of each one's name and the type it is bound as
-    /// (<c>('legs', 'integer')</c>); {3} whether the write deletes and {4} whether a read is corrected, each a boolean.
-    /// Null: the generator's check of the Postgres catalog, which reads it by its indexes. Empty: such a Then is refused.
+    /// one written (a type modifier such as numeric(5,2), a type other than the one bound but a wider integer or float)
+    /// or compare it in another collation than the default. {0} is the table written and {2} the tables the Select
+    /// reads, each a string literal; {1} the columns the insert sets, rows of a VALUES of each one's name and the type
+    /// it is bound as (<c>('legs', 'integer')</c>); {3} whether the write deletes and {4} whether a read is corrected,
+    /// each a boolean. Null: the generator's check of the Postgres catalog, which reads it by its indexes. Empty: such a
+    /// Then is refused.
     /// </summary>
     public string? ThenGuard { get; init; }
 

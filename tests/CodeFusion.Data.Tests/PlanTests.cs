@@ -182,14 +182,50 @@ public sealed class PlanTests
         await EnsureSeed();
         var (sql, types, _, _) = Pairs.TryGetValue(name, out var pair) ? pair : FewerPairs[name];
         // the planner may scan a small catalog table whole, as it costs less; with that off, each read has an index that
-        // serves it, a lookup whatever the catalog's size
-        var catalog = Scans(await PlanJson(sql, types.Select(TypeName).ToArray(), "SET enable_seqscan = off")).Where(s => s.StartsWith("pg_", StringComparison.Ordinal)).ToList();
+        // serves it, a lookup whatever the catalog's size: by an index condition, not the whole index read in order
+        var catalog = CatalogReads(await PlanJson(sql, types.Select(TypeName).ToArray(), "SET enable_seqscan = off"));
         string all = string.Join("\n", catalog);
-        Assert.All(catalog, s => Assert.Matches(@"^pg_\w+ pg_\w+_index \| (Index Scan|Index Only Scan|Bitmap Heap Scan)$", s));
-        // the table written, its rules and triggers, the columns an insert sets; after a delete the tables it reaches
+        Assert.All(catalog, s => Assert.Matches(ByIndexCondition, s));
+        // the table written and its partitions, their rules and triggers, the columns an insert sets; after a delete the
+        // tables it reaches
         string[] read = name is "Unfollow" or "Unfavorite"
-            ? ["pg_attribute", "pg_class", "pg_constraint", "pg_depend", "pg_trigger"] : ["pg_attribute", "pg_class", "pg_trigger"];
+            ? ["pg_attribute", "pg_class", "pg_constraint", "pg_depend", "pg_inherits", "pg_trigger"] : ["pg_attribute", "pg_class", "pg_inherits", "pg_trigger"];
         Assert.True(read.SequenceEqual(catalog.Select(s => s[..s.IndexOf(' ', StringComparison.Ordinal)]).Distinct()), all);
+    }
+
+    /// <summary>A catalog read bounded by an index condition.</summary>
+    const string ByIndexCondition = @"^pg_\w+ pg_\w+_index \| (Index Scan|Index Only Scan|Bitmap Heap Scan) \| Index Cond$";
+
+    [Fact]
+    public async Task TheCatalogPinTellsAWholeIndexReadApart()
+    {
+        // the pin itself: pg_class read in its oid index's order is an index scan, of the whole index
+        TestDb.Require();
+        var reads = CatalogReads(await PlanJson("SELECT relname FROM pg_class ORDER BY oid", [], "SET enable_seqscan = off"));
+        Assert.Equal(["pg_class pg_class_oid_index | Index Scan | no condition"], reads);
+        Assert.DoesNotMatch(ByIndexCondition, reads[0]);
+        Assert.Matches(ByIndexCondition, CatalogReads(await PlanJson("SELECT relname FROM pg_class WHERE oid = 1259", [], "SET enable_seqscan = off"))[0]);
+    }
+
+    /// <summary>The catalog reads of a plan, each as its relation, index, kind of scan and whether an index condition
+    /// bounds it (on a bitmap scan, in the index scan below it).</summary>
+    static List<string> CatalogReads(JsonElement node)
+    {
+        var all = new List<string>();
+        void Walk(JsonElement n)
+        {
+            if (n.TryGetProperty("Relation Name", out var rel) && rel.GetString()!.StartsWith("pg_", StringComparison.Ordinal))
+            {
+                var bounded = n.GetProperty("Node Type").GetString() == "Bitmap Heap Scan" && n.TryGetProperty("Plans", out var below) ? below[0] : n;
+                string index = bounded.TryGetProperty("Index Name", out var ix) ? ix.GetString()! : "-";
+                all.Add($"{rel.GetString()} {index} | {n.GetProperty("Node Type").GetString()} | {(bounded.TryGetProperty("Index Cond", out _) ? "Index Cond" : "no condition")}");
+            }
+            if (n.TryGetProperty("Plans", out var plans))
+                foreach (var p in plans.EnumerateArray()) Walk(p);
+        }
+        Walk(node);
+        all.Sort(StringComparer.Ordinal);
+        return all;
     }
 
     /// <summary>A scan's relation and index, without the kind of scan.</summary>

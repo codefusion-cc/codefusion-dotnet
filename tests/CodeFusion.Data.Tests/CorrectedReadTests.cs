@@ -273,6 +273,61 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
         }
     }
 
+    const string NoBToA = "ALTER TABLE chain_b DROP CONSTRAINT chain_b_a_id_fkey";
+    const string NoCToB = "ALTER TABLE chain_c DROP CONSTRAINT chain_c_b_id_fkey";
+    const string PartitionedA = "DROP TABLE chain_a CASCADE; CREATE TABLE chain_a (id bigint PRIMARY KEY, name text NOT NULL) PARTITION BY RANGE (id); " +
+        "CREATE TABLE chain_a_1 PARTITION OF chain_a FOR VALUES FROM (0) TO (100)";
+    const string BSetNull = "ALTER TABLE chain_b ALTER a_id DROP NOT NULL, DROP CONSTRAINT chain_b_a_id_fkey, ADD FOREIGN KEY (a_id) REFERENCES chain_a (id) ON DELETE SET NULL";
+
+    /// <summary>DropChain deletes chain_a's row 1 and counts the team's chain_c rows, after <paramref name="ddl"/>
+    /// changed the keys: the statement fails where the delete may reach chain_c, and runs where it can't.</summary>
+    [Theory]
+    [InlineData("a key of the table written into itself, reaching nothing read", NoBToA + "; ALTER TABLE chain_a ADD parent_id bigint REFERENCES chain_a (id) ON DELETE CASCADE", false)]
+    [InlineData("a cycle, reaching chain_c", "ALTER TABLE chain_a ADD b_ref bigint REFERENCES chain_b (id) ON DELETE CASCADE", true)]
+    [InlineData("a cycle, reaching nothing read", NoCToB + "; ALTER TABLE chain_a ADD b_ref bigint REFERENCES chain_b (id) ON DELETE CASCADE", false)]
+    [InlineData("a self-reference partway, reaching chain_c", "ALTER TABLE chain_b ADD parent_id bigint REFERENCES chain_b (id) ON DELETE CASCADE", true)]
+    [InlineData("a self-reference partway, reaching nothing read", NoCToB + "; ALTER TABLE chain_b ADD parent_id bigint REFERENCES chain_b (id) ON DELETE CASCADE", false)]
+    [InlineData("a key into a partition of the table written", PartitionedA + "; ALTER TABLE chain_b ADD FOREIGN KEY (a_id) REFERENCES chain_a_1 (id) ON DELETE CASCADE", true)]
+    [InlineData("a trigger on one partition of the table written", PartitionedA + "; CREATE TRIGGER t BEFORE DELETE ON chain_a_1 FOR EACH ROW EXECUTE FUNCTION touch()", true)]
+    [InlineData("a SET NULL, then a key acting on the update", BSetNull + ", ADD UNIQUE (a_id); " +
+        "ALTER TABLE chain_c ALTER b_id DROP NOT NULL, DROP CONSTRAINT chain_c_b_id_fkey, ADD FOREIGN KEY (b_id) REFERENCES chain_b (a_id) ON UPDATE CASCADE", true)]
+    [InlineData("a SET NULL, whose rows' delete keys don't act", BSetNull, false)]
+    public async Task TheCheckFollowsEveryKeyTheDeleteActsOn(string what, string ddl, bool fails)
+    {
+        TestDb.Require();
+        const string schema = "cfdata_guard_walk";
+        await using var admin = TestDb.Admin();
+        await admin.Execute($"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; SET search_path = {schema}; {OpsFixture.Schema}; {OpsFixture.Seed}; " +
+            "CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN OLD; END $$; " + ddl + "; " +
+            "INSERT INTO teams VALUES (9890, 'walked'); INSERT INTO chain_a (id, name) VALUES (1, 'one'), (2, 'two'); " +
+            "INSERT INTO chain_b (id, a_id) VALUES (1, 1), (2, 2); INSERT INTO chain_c (id, b_id, team_id) VALUES (1, 1, 9890), (2, 2, 9890)");
+        await using var db0 = TestDb.Admin(schema);
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<DataResult>();
+        var source = Source(schema, failures);
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            _response.Next();
+            var row = await db.DropChain(9890, U("one"));
+            if (fails)
+            {
+                FailedByTheGuard(row, failures);
+                Assert.Equal(2L, await db0.Scalar("SELECT count(*) FROM chain_a"));
+            }
+            else
+            {
+                Assert.True(row.Status == DataStatus.Ok, $"{what}: {(failures.TryPeek(out var f) ? f.Error?.Message : row.Status)}");
+                Assert.Equal(new Number(9890, 2), row.Value);
+                Assert.Equal(1L, await db0.Scalar("SELECT count(*) FROM chain_a"));
+            }
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
+    }
+
     [Fact]
     public async Task ATriggerRowSecurityOrARoundingColumnOnTheTableWrittenFailsTheStatement()
     {
