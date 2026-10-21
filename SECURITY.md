@@ -120,9 +120,11 @@ Fixes go into the latest release only.
     own directory, where a RID-specific, self-contained or AOT publish puts it): it must report the tested build,
     `sqlite3_libversion_number` 3050004 and `sqlite3_sourceid` "2025-07-30 19:33:53 4d8adfb3…", or the provider refuses
     it and says so. An app that ships its own SQLite build on purpose sets the AppContext switch
-    `CodeFusion.Data.Sqlite.OwnSqliteBuild` to true; that build is then accepted if it has what the provider needs:
-    3.44 or newer, not single-threaded (`SQLITE_THREADSAFE=0`), able to say its compile options, and not built without
-    JSON, CTEs, upserts, WAL or subqueries. Each refusal says why.
+    `CodeFusion.Data.Sqlite.OwnSqliteBuild` to true. The switch turns off only the tested-build check (version and
+    source id); what the provider needs is still checked: 3.44 or newer, not single-threaded (`SQLITE_THREADSAFE=0`),
+    able to say its compile options, and not built without JSON, CTEs, upserts, WAL or subqueries. Each refusal says
+    why. Set it only for a build the app chose and tests itself, never to get past a refusal of a library it didn't
+    mean to ship (a newer SourceGear.sqlite3 through a direct reference): pin that reference instead.
   - The one call that differs by platform, `sqlite3_config` on Apple arm64 (a variadic argument on the stack), is
     tested only on a Mac (`BuildCheckTests.MemoryStatisticsAreOff`); CI runs Linux.
 - **Parameters are always bound**, never spliced into SQL text. Identifiers the generator writes are quoted when they
