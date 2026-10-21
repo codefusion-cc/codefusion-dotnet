@@ -223,13 +223,16 @@ public sealed class ShapeGeneratorTests
                 public Write Take(int age) => People.Where(p => p.Age > age).Then(p => Pets.Where(x => x.OwnerId == p.Id).Delete());
                 public Write TakeYounger(int age) => People.Where(p => p.Age > age).Then(p => Pets.Where(x => x.OwnerId == p.Id && x.Id < p.Age).Delete());
                 public Write TakeEither(int age) => People.Where(p => p.Age > age).Then(p => Pets.Where(x => x.Id < 5 || x.OwnerId == p.Id).Delete());
+                public Write TakeCase() => People.Where(p => p.Age > 1).Then(p => Pets.Where(x => x.Id > 0 && x.Id < 9 ? x.OwnerId == p.Id || x.Id == 2 : false).Delete());
                 public Write All() => People.Then(p => Pets.Delete());
                 public Write<Name> InAUnitIsRefused(Utf8 name) =>
                     Insert(People, new Person { Name = name }).Then(People.Where(p => p.Name == name).Then(p => Pets.Delete())).ThenSelect(p => new Name(p.Id, p.Name));
                 public Write<Name> WithoutSelect(Utf8 name) => People.Where(p => p.Name == name).Then(p => Pets.Delete());
             """);
         var r = Run(source);
-        Assert.Equal("WITH t AS (SELECT p.id, p.name FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (owner_id, name) SELECT t.id, $2 FROM t) SELECT t.id, t.name FROM t", r.Sql("Give"));
+        Assert.Equal("WITH t AS (SELECT p.id, p.name FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (owner_id, name) SELECT t.id, $2 FROM t) SELECT t.id, t.name FROM t ORDER BY t.id LIMIT 1", r.Sql("Give"));
+        // a condition holding AND inside a CASE is one condition
+        Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > 1) DELETE FROM pets x USING t WHERE (CASE WHEN x.id > 0 AND x.id < 9 THEN x.owner_id = t.id OR x.id = 2 ELSE false END)", r.Sql("TakeCase"));
         Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > $1) DELETE FROM pets x WHERE x.owner_id = ANY(ARRAY(SELECT t.id FROM t))", r.Sql("Take"));
         // the rows found used otherwise than one key: joined
         Assert.Equal("WITH t AS (SELECT p.id, p.age FROM people p WHERE p.age > $1) DELETE FROM pets x USING t WHERE x.owner_id = t.id AND x.id < t.age", r.Sql("TakeYounger"));
@@ -241,6 +244,69 @@ public sealed class ShapeGeneratorTests
         Assert.Equal(2, errors.Count);
         Assert.Contains(errors, m => m.Contains("Then from the rows a query found inside a unit", System.StringComparison.Ordinal));
         Assert.Contains(errors, m => m.Contains("Then without a Select in a method that returns rows", System.StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("CASE WHEN a AND b THEN c OR d ELSE e END AND f", "CASE WHEN a AND b THEN c OR d ELSE e END|f")]
+    [InlineData("(a AND b) AND 'c AND d' = x AND \"e AND f\" = 1", "(a AND b)|'c AND d' = x|\"e AND f\" = 1")]
+    [InlineData("CASE WHEN a THEN CASE WHEN b AND c THEN d END END AND e", "CASE WHEN a THEN CASE WHEN b AND c THEN d END END|e")]
+    [InlineData("x.weekend AND x.ends_at = 1", "x.weekend|x.ends_at = 1")]
+    public void ConditionsSplitOnlyAtTheirTopLevel(string sql, string parts)
+    {
+        Assert.Equal(parts, string.Join("|", CodeFusion.Data.Generator.Sql.Conjuncts(sql)));
+        Assert.False(CodeFusion.Data.Generator.Sql.EqualsColumnOf("CASE WHEN a = 1 THEN x.c ELSE x.d END = t.id", "t", out _, out _));
+    }
+
+    [Fact]
+    public void AReadADeleteMayCascadeIntoIsRefused()
+    {
+        string source = """
+            public sealed class Person { public long Id { get; init; } public Utf8 Name { get; init; } }
+            public sealed class Label { public int Id { get; init; } public Utf8 Name { get; init; } public Many<PersonLabel> Labelings { get; init; } }
+            public sealed class PersonLabel
+            {
+                [System.ComponentModel.DataAnnotations.Key] public long PersonId { get; init; }
+                public Person Person { get; init; } = null!;
+                [System.ComponentModel.DataAnnotations.Key] public int LabelId { get; init; }
+                public Label Label { get; init; } = null!;
+            }
+            public readonly record struct Name(long Id, Utf8 Text);
+            public sealed partial class Db : DataContext<Postgres>
+            {
+                public Table<Person> People => Table<Person>();
+                public Table<Label> Labels => Table<Label>();
+                public Write<Name> DropPerson(int label, Utf8 person) =>
+                    Labels.Where(l => l.Id == label).Then(l => People.Where(p => p.Name == person).Delete()).Select(l => new Name(l.Labelings.Count(), l.Name));
+            }
+            """;
+        var d = Single(Run(source), "CFDATA001");
+        Assert.Equal("l.Labelings.Count()", At(d, source));
+        Assert.Contains("a read of person_labels after a delete of people, which may cascade into it (PersonLabel.Person leads to people)", Message(d), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ADialectWithoutAnArrayOfAQueryJoinsTheRowsFound()
+    {
+        string source = Entities + """
+            [SqlDialect("mid", AnyOfQuery = "")]
+            public readonly struct Mid : IDataProvider<Mid, PgStatement, PgCommand>
+            {
+                public static PgStatement Statement(string sql, params ReadOnlySpan<DataType> parameters) => throw null!;
+                public static PgCommand Read(DataContext context, PgStatement statement) => throw null!;
+                public static PgCommand Write(DataContext context, PgStatement statement) => throw null!;
+                public static System.Threading.Tasks.ValueTask<DataResult> Run<TReader>(in PendingCommand command, object? state, System.Threading.CancellationToken aborted) where TReader : IRowReader => throw null!;
+                public static void Discard(in PendingCommand command) => throw null!;
+            }
+            public sealed partial class Db : DataContext<Mid>
+            {
+                public Table<Person> People => Table<Person>();
+                public Table<Pet> Pets => Table<Pet>();
+                public Write Take(int age) => People.Where(p => p.Age > age).Then(p => Pets.Where(x => x.OwnerId == p.Id).Delete());
+            }
+            """;
+        var r = Run(source);
+        Assert.Empty(r.Generator);
+        Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > $1) DELETE FROM pets x USING t WHERE x.owner_id = t.id", r.Sql("Take"));
     }
 
     // ---------- a page of each row's children ----------

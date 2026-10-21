@@ -47,8 +47,9 @@ Select: `Insert(Tags, names.AsRows().Distinct().OrderBy(n => n).Select(n => new 
 `INSERT INTO tags (name) SELECT DISTINCT n.v FROM unnest($1) n(v) ORDER BY n.v ON CONFLICT DO NOTHING`, alone or in
 an insert's unit (`ThenIf`).
 
-`Then` after a query's Where writes from each row found, in one statement (one round trip, all or nothing), and its
-Select gives the rows back as found; a missing row is a 404 and writes nothing:
+`Then` after a query's Where writes from each row found, in one statement, so one round trip, and the write and its
+reply commit or fail together. Its Select gives back the row found of the smallest key (`ORDER BY` the key `LIMIT 1`;
+every row found is written from); a missing row is a 404 and writes nothing:
 
 ```csharp
 public Write<ProfileView> Follow(long viewer, Utf8 username) =>
@@ -58,7 +59,7 @@ public Write<ProfileView> Follow(long viewer, Utf8 username) =>
 // WITH t AS (SELECT u.id, u.username, u.bio, u.image FROM users u WHERE u.username = $1),
 //   w AS (INSERT INTO follows (follower_id, followee_id) SELECT $2, t.id FROM t
 //     ON CONFLICT (follower_id, followee_id) DO NOTHING)
-// SELECT t.username, t.bio, t.image, ($2 <> 0) FROM t
+// SELECT t.username, t.bio, t.image, ($2 <> 0) FROM t WHERE <check of follows> ORDER BY t.id LIMIT 1
 ```
 
 The write is an insert of `new T { ... }` or a delete (`Follows.Where(f => f.FolloweeId == u.Id).Delete()`, the
@@ -67,6 +68,11 @@ Select reads the table written only through `Count` and `Any` of a navigation, w
 write: `ProfileView.Of(u, viewer)` after the follow is followed, and an article's `Favorites.Count()` after a favorite
 is the snapshot's count and one if the snapshot held no favorite of that key (written now, or by a concurrent request
 the snapshot missed). After an insert with `OrIgnore` that needs the table's key, `[Key]` on each of its columns.
+After a delete, the Select may not read a table whose rows lead to the table deleted from (a cascade could have
+changed it). What the model can't see the statement checks first, in the catalog: a rule or trigger on the table
+written, a foreign key the delete cascades along into a table read, and, for a corrected read, row security or a
+column that may store another value than the one written. Any of them fails the statement with a message starting
+`CodeFusion: the Select after Then can't read`, and nothing is written.
 
 A page of each row's children is `SelectMany` of a navigation, the child itself as its result, before one OrderBy of
 the child's key and the page. Each source row's children come from a lateral join that takes, in the page's order,

@@ -237,6 +237,8 @@ CodeFusion.Data.RowState.Json.get -> System.Text.Json.Utf8JsonWriter!
 CodeFusion.Data.RowState.Seen.get -> int
 CodeFusion.Data.RowState.Seen.set -> void
 CodeFusion.Data.SqlDialectAttribute
+CodeFusion.Data.SqlDialectAttribute.AnyOfQuery.get -> string!
+CodeFusion.Data.SqlDialectAttribute.AnyOfQuery.init -> void
 CodeFusion.Data.SqlDialectAttribute.BigIntLiteral.get -> string!
 CodeFusion.Data.SqlDialectAttribute.BigIntLiteral.init -> void
 CodeFusion.Data.SqlDialectAttribute.Booleans.get -> string!
@@ -287,6 +289,8 @@ CodeFusion.Data.SqlDialectAttribute.Returning.init -> void
 CodeFusion.Data.SqlDialectAttribute.SelectsConditions.get -> bool
 CodeFusion.Data.SqlDialectAttribute.SelectsConditions.init -> void
 CodeFusion.Data.SqlDialectAttribute.SqlDialectAttribute(string! name) -> void
+CodeFusion.Data.SqlDialectAttribute.ThenGuard.get -> string!
+CodeFusion.Data.SqlDialectAttribute.ThenGuard.init -> void
 CodeFusion.Data.SqlDialectAttribute.Trim.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Trim.init -> void
 CodeFusion.Data.SqlDialectAttribute.TrimEnd.get -> string!

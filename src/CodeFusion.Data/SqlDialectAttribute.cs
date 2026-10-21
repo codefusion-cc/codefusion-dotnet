@@ -131,6 +131,28 @@ public sealed class SqlDialectAttribute : Attribute
     /// <summary>A bigint literal for a count's cap; {0} is the number: <c>{0}::bigint</c>.</summary>
     public string BigIntLiteral { get; init; } = "{0}::bigint";
 
+    /// <summary>A column one of a query's values, for a delete in <c>Query.Then</c> tied to the rows found by one column;
+    /// {0} is the column, {1} the query: <c>{0} = ANY(ARRAY({1}))</c>, an index condition. Empty: the delete joins the
+    /// rows found instead (<c>DELETE ... USING</c>).</summary>
+    public string AnyOfQuery { get; init; } = "{0} = ANY(ARRAY({1}))";
+
+    /// <summary>
+    /// A condition of the Select after <c>Query.Then</c> that fails the statement, before its write commits, when the
+    /// Select can't read the tables as the write left them: a rule or trigger on the table written, a foreign key a
+    /// delete cascades into a table the Select reads, row security on a table whose read is corrected, or a column the
+    /// insert sets that may store another value than the one written (a type modifier such as numeric(5,2), a type
+    /// other than the one bound). {0} is the table written, {1} the columns the insert sets, {2} the tables the Select
+    /// reads, each a string literal; {3} whether the write deletes, {4} whether a read is corrected, each a boolean.
+    /// The Postgres check reads the catalog by its indexes. Empty: such a Then is refused.
+    /// </summary>
+    public string ThenGuard { get; init; } =
+        "(SELECT CASE WHEN c.relhasrules OR EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = c.oid AND NOT g.tgisinternal) " +
+        "OR {3} AND EXISTS (SELECT 1 FROM pg_constraint k WHERE k.contype = 'f' AND k.confrelid = c.oid AND k.confdeltype IN ('c', 'n', 'd') AND k.conrelid = ANY (ARRAY[{2}]::regclass[])) " +
+        "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname IN ({1}) " +
+        "AND (a.atttypmod <> -1 OR a.atttypid NOT IN (16, 17, 20, 21, 23, 25, 701, 1184, 2950)))) " +
+        "THEN ('CodeFusion: the Select after Then can''t read ' || c.relname || ' as the write left it (a rule, a trigger, row security, a foreign key that cascades " +
+        "into a table it reads, or a column that may store another value than the one written)')::int ELSE 0 END FROM pg_class c WHERE c.oid = {0}::regclass) = 0";
+
     /// <summary>Whether a subquery in FROM may refer to the rows before it (<c>CROSS JOIN LATERAL</c>). False (SQLite): a
     /// page of the newest rows per group (<c>SelectMany</c> before <c>Page</c>) is refused.</summary>
     public bool Lateral { get; init; } = true;

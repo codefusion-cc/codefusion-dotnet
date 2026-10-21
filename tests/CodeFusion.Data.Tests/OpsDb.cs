@@ -454,6 +454,10 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Write<Number> TakePets(Utf8 name, int legs) =>
         People.Where(p => p.Name == name).Then(p => Pets.Where(x => x.OwnerId == p.Id && x.Legs == legs).Delete()).Select(p => new Number(p.Id, p.Age));
 
+    /// <summary>A pet for each person of an age, and the one of the smallest key given back.</summary>
+    public Write<Name> GivePetsOfAge(int age) =>
+        People.Where(p => p.Age == age).Then(p => Insert(Pets, new Pet { Id = p.Id + 60000, OwnerId = p.Id, Name = p.Name, Legs = 1 }).OrIgnore()).Select(p => Name.Of(p));
+
     /// <summary>The pets with more legs or of the person found: none when no one is found.</summary>
     public Write TakeLegsOrOwn(Utf8 name, int legs) => People.Where(p => p.Name == name).Then(p => Pets.Where(x => x.Legs > legs || x.OwnerId == p.Id).Delete());
 
@@ -482,6 +486,21 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Write<Tally> TakeLabelsAbove(Utf8 name, int above, int probe) =>
         People.Where(p => p.Name == name).Then(p => PersonLabels.Where(l => l.PersonId == p.Id && l.LabelId > above).Delete())
             .Select(p => new Tally(p.Id, p.Labelings.Count(), p.Labelings.Any(l => l.LabelId == probe)));
+
+    /// <summary>An Any whose condition reads a nullable column, after a plain insert: false, not NULL, when it is NULL.</summary>
+    public Write<Tally> AddPetLikeNick(Utf8 name, long id, Utf8 pet) =>
+        People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { Id = id, OwnerId = p.Id, Name = pet, Legs = 4 }))
+            .Select(p => new Tally(p.Id, p.Pets.Count(), p.Pets.Any(x => x.Name == p.Nick)));
+
+    public Write<Tally> AddPetNotLikeNick(Utf8 name, long id, Utf8 pet) =>
+        People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { Id = id, OwnerId = p.Id, Name = pet, Legs = 4 }))
+            .Select(p => new Tally(p.Id, p.Pets.Count(), !p.Pets.Any(x => x.Name == p.Nick)));
+
+    /// <summary>A delete whose Select reads, through a join table, rows the delete may cascade into: the model can't see
+    /// the join table's foreign key, so the statement checks it and fails.</summary>
+    public Write<Tally> DropMember(long team, Utf8 name) =>
+        Teams.Where(t => t.Id == team).Then(t => People.Where(p => p.Name == name).Delete())
+            .Select(t => new Tally(t.Id, t.Members.Count(), t.Members.Any(m => m.Labels.Any())));
 
     /// <summary>An insert without OrIgnore: the row written is the one more, whatever its columns.</summary>
     public Write<Tally> AddPetCounted(Utf8 name, long id) =>

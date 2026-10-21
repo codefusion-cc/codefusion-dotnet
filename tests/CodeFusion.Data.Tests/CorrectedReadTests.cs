@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Threading.Tasks;
+using CodeFusion.Data.Postgres;
 using Ops.Data;
 using Xunit;
 using Q = Ops.Data.OpsDb.QuerySql;
@@ -49,9 +50,10 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
     [Fact]
     public async Task ACountAfterAnInsertCountsTheRowOnceWhetherItWasThereOrNot()
     {
-        Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.name = $1), w AS (INSERT INTO person_labels (person_id, label_id) SELECT t.id, $2 FROM t " +
+        Assert.Equal(Q.GiveLabel, "WITH t AS (SELECT p.id FROM people p WHERE p.name = $1), w AS (INSERT INTO person_labels (person_id, label_id) SELECT t.id, $2 FROM t " +
             "ON CONFLICT (person_id, label_id) DO NOTHING) SELECT t.id, ((SELECT count(*) FROM person_labels pl WHERE pl.person_id = t.id) + " +
-            "CASE WHEN NOT EXISTS (SELECT 1 FROM person_labels pl2 WHERE pl2.person_id = t.id AND pl2.label_id = $2) THEN 1 ELSE 0 END), true FROM t", Q.GiveLabel);
+            "CASE WHEN NOT EXISTS (SELECT 1 FROM person_labels pl2 WHERE pl2.person_id = t.id AND pl2.label_id = $2) THEN 1 ELSE 0 END), true FROM t" +
+            Guards.Then("person_labels", ["person_id", "label_id"], ["person_labels", "people"], delete: false, corrected: true) + " ORDER BY t.id LIMIT 1");
         string name = await Person(9801, 1);
         var db = Db();
         Assert.Equal(new Tally(9801, 2, true), await Tally(db.GiveLabel(U(name), 2)));
@@ -65,7 +67,7 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
     public async Task ACountOfOtherRowsCountsTheRowWrittenOnlyWhenItIsOne()
     {
         Assert.Contains("CASE WHEN $2 = $3 AND NOT EXISTS", Q.GiveLabelCountOther, StringComparison.Ordinal);
-        Assert.Contains("($2 = $3 OR EXISTS (SELECT 1 FROM person_labels", Q.GiveLabelCountOther, StringComparison.Ordinal);
+        Assert.Contains("(COALESCE($2 = $3, false) OR EXISTS (SELECT 1 FROM person_labels", Q.GiveLabelCountOther, StringComparison.Ordinal);
         string name = await Person(9802, 1);
         var db = Db();
         Assert.Equal(new Tally(9802, 0, false), await Tally(db.GiveLabelCountOther(U(name), 2, 3)));
@@ -77,9 +79,10 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
     [Fact]
     public async Task ACountAfterADeleteLeavesTheRowsDeletedOut()
     {
-        Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.name = $1), w AS (DELETE FROM person_labels l WHERE l.person_id = ANY(ARRAY(SELECT t.id FROM t)) " +
+        Assert.Equal(Q.TakeLabel, "WITH t AS (SELECT p.id FROM people p WHERE p.name = $1), w AS (DELETE FROM person_labels l WHERE l.person_id = ANY(ARRAY(SELECT t.id FROM t)) " +
             "AND l.label_id = $2) SELECT t.id, ((SELECT count(*) FROM person_labels pl WHERE pl.person_id = t.id) - " +
-            "CASE WHEN EXISTS (SELECT 1 FROM person_labels pl WHERE pl.person_id = t.id AND pl.label_id = $2) THEN 1 ELSE 0 END), false FROM t", Q.TakeLabel);
+            "CASE WHEN EXISTS (SELECT 1 FROM person_labels pl WHERE pl.person_id = t.id AND pl.label_id = $2) THEN 1 ELSE 0 END), false FROM t" +
+            Guards.Then("person_labels", [], ["person_labels", "people"], delete: true, corrected: true) + " ORDER BY t.id LIMIT 1");
         string name = await Person(9803, 1, 2, 3);
         var db = Db();
         Assert.Equal(new Tally(9803, 2, false), await Tally(db.TakeLabel(U(name), 2)));
@@ -140,6 +143,136 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
         finally
         {
             LoopChecks.Stop(source);
+        }
+    }
+
+    [Fact]
+    public async Task AnAnyAgainstANullColumnIsFalseAsInCSharp()
+    {
+        var db = Db();
+        // no nick: C#'s "x" == null is false, and !false true; SQL's = is NULL there
+        Assert.Equal(new Tally(9840, 1, false), await Tally(db.AddPetLikeNick(U(await Person(9840)), 8401, U("x"))));
+        Assert.Equal(new Tally(9841, 1, true), await Tally(db.AddPetNotLikeNick(U(await Person(9841)), 8402, U("x"))));
+    }
+
+    /// <summary>A source on <paramref name="schema"/> whose failures are kept.</summary>
+    static PgDataSource Source(string schema, System.Collections.Concurrent.ConcurrentQueue<DataResult> failures) =>
+        new PostgresDatabase(PgSettings.Parse(TestDb.ConnectionString!).Set("search_path", schema)) { OnFailure = (_, r) => failures.Enqueue(r) }.Open(1, 1);
+
+    static void FailedByTheGuard(Row<Tally> row, System.Collections.Concurrent.ConcurrentQueue<DataResult> failures)
+    {
+        Assert.Equal(DataStatus.Failed, row.Status);
+        Assert.True(failures.TryDequeue(out var f));
+        Assert.Equal("22P02", f.NativeCode);
+        Assert.Contains("CodeFusion: the Select after Then can't read", f.Error!.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AReadADeleteMayHaveCascadedIntoFailsTheStatementAndNothingIsWritten()
+    {
+        TestDb.Require();
+        await using var admin = TestDb.Admin("cfdata_ops_w");
+        await admin.Execute("INSERT INTO teams VALUES (9860, 'cascading'); INSERT INTO people (id, name, age, active, born, team_id) VALUES (9860, 'cr9860', 90, true, now(), 9860)");
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<DataResult>();
+        var source = Source("cfdata_ops_w", failures);
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            _response.Next();
+            // person_labels references people ON DELETE CASCADE, and the Select reads it through Person.Labels
+            FailedByTheGuard(await db.DropMember(9860, U("cr9860")), failures);
+            Assert.Equal(1L, await admin.Scalar("SELECT count(*) FROM people WHERE id = 9860"));
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
+    }
+
+    [Fact]
+    public async Task ATriggerRowSecurityOrARoundingColumnOnTheTableWrittenFailsTheStatement()
+    {
+        TestDb.Require();
+        const string schema = "cfdata_guard";
+        await using var admin = TestDb.Admin();
+        await admin.Execute($"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; SET search_path = {schema}; {OpsFixture.Schema}; {OpsFixture.Seed}; " +
+            "CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$");
+        await using var db0 = TestDb.Admin(schema);
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<DataResult>();
+        var source = Source(schema, failures);
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            async Task<Row<Tally>> Give(int label)
+            {
+                _response.Next();
+                return await db.GiveLabel(U("cid"), label);
+            }
+            // as it is: the label written and counted
+            Assert.Equal(new Tally(3, 2, true), (await Give(1)).Value);
+            // a trigger could write another row, or change this one: the statement fails, and writes nothing
+            await db0.Execute("CREATE TRIGGER t BEFORE INSERT ON person_labels FOR EACH ROW EXECUTE FUNCTION touch()");
+            FailedByTheGuard(await Give(2), failures);
+            Assert.Equal(0L, await db0.Scalar("SELECT count(*) FROM person_labels WHERE person_id = 3 AND label_id = 2"));
+            await db0.Execute("DROP TRIGGER t ON person_labels");
+            Assert.Equal(new Tally(3, 3, true), (await Give(2)).Value);
+            // row security could hide the row written from the count
+            await db0.Execute("ALTER TABLE person_labels ENABLE ROW LEVEL SECURITY");
+            FailedByTheGuard(await Give(1), failures);
+            await db0.Execute("ALTER TABLE person_labels DISABLE ROW LEVEL SECURITY");
+            // a column whose type may store another value than the one written (varchar(n) drops spaces past n)
+            await db0.Execute("ALTER TABLE pets ALTER COLUMN name TYPE varchar(20)");
+            _response.Next();
+            FailedByTheGuard(await db.AddPetCounted(U("ann"), 8701), failures);
+            Assert.Equal(0L, await db0.Scalar("SELECT count(*) FROM pets WHERE id = 8701"));
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
+    }
+
+    /// <summary>Waits until a backend of this database waits for a lock: the statement under test is blocked.</summary>
+    static async Task Blocked(Npgsql.NpgsqlDataSource admin)
+    {
+        for (int i = 0; i < 200; i++)
+        {
+            if ((long)(await admin.Scalar("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%person_labels%'"))! > 0) return;
+            await Task.Delay(25);
+        }
+        throw new TimeoutException("the statement never waited for the lock");
+    }
+
+    [Fact]
+    public async Task AWriteTheSnapshotMissedIsCountedOnce()
+    {
+        string name = await Person(9850, 1);
+        var db = Db();
+        await using var admin = TestDb.Admin("cfdata_ops_w");
+        // another transaction writes the label first and commits only once the statement waits for it: the statement's
+        // snapshot holds no such row, and its insert skips the row the other committed
+        await using (var other = await admin.OpenConnectionAsync())
+        {
+            await using var tx = await other.BeginTransactionAsync();
+            await using (var cmd = new Npgsql.NpgsqlCommand("INSERT INTO person_labels VALUES (9850, 2)", other, tx)) await cmd.ExecuteNonQueryAsync();
+            _response.Next();
+            var pending = Task.Run(async () => (await db.GiveLabel(U(name), 2)).Value);
+            await Blocked(admin);
+            await tx.CommitAsync();
+            Assert.Equal(new Tally(9850, 2, true), await pending);
+        }
+        // and a delete another transaction made first: the snapshot holds the row, the delete finds it gone
+        await using (var other = await admin.OpenConnectionAsync())
+        {
+            await using var tx = await other.BeginTransactionAsync();
+            await using (var cmd = new Npgsql.NpgsqlCommand("DELETE FROM person_labels WHERE person_id = 9850 AND label_id = 2", other, tx)) await cmd.ExecuteNonQueryAsync();
+            _response.Next();
+            var pending = Task.Run(async () => (await db.TakeLabel(U(name), 2)).Value);
+            await Blocked(admin);
+            await tx.CommitAsync();
+            Assert.Equal(new Tally(9850, 1, false), await pending);
         }
     }
 }

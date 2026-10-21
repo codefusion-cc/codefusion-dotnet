@@ -41,7 +41,7 @@ public sealed class FoundWriteTests(OpsFixture fixture)
     public async Task AnInsertFromTheRowFoundAndTheRowGivenBack()
     {
         Assert.Equal("WITH t AS (SELECT p.id, p.name FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (id, owner_id, name, legs) SELECT $2, t.id, $3, 4 FROM t " +
-            "ON CONFLICT DO NOTHING) SELECT t.id, t.name FROM t", Q.GivePet);
+            "ON CONFLICT DO NOTHING) SELECT t.id, t.name FROM t ORDER BY t.id LIMIT 1", Q.GivePet);
         var db = Db();
         Assert.Equal("""{"id":1,"text":"ann"}""", await Json(db.GivePet(U("ann"), 8001, U("fido"))));
         Assert.Equal(1L, await Scalar("SELECT owner_id FROM pets WHERE id = 8001 AND name = 'fido'"));
@@ -62,8 +62,9 @@ public sealed class FoundWriteTests(OpsFixture fixture)
     [Fact]
     public async Task AConflictWritesNothingAndTheSelectJoinsAsAnyOther()
     {
-        Assert.Equal("WITH t AS (SELECT p.id, p.name, p.team_id FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (id, owner_id, name, legs) SELECT $2, t.id, t.name, 3 FROM t) " +
-            "SELECT t.name, t2.name FROM t LEFT JOIN teams t2 ON t2.id = t.team_id", Q.GivePetStrict);
+        Assert.Equal(Q.GivePetStrict, "WITH t AS (SELECT p.id, p.name, p.team_id FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (id, owner_id, name, legs) SELECT $2, t.id, t.name, 3 FROM t) " +
+            "SELECT t.name, t2.name FROM t LEFT JOIN teams t2 ON t2.id = t.team_id" +
+            Guards.Then("pets", ["id", "owner_id", "name", "legs"], ["teams", "pets", "people"], delete: false, corrected: false) + " ORDER BY t.id LIMIT 1");
         var db = Db();
         Assert.Equal("""{"name":"ben","team":"blue"}""", await Json(db.GivePetStrict(U("ben"), 8003)));
         Assert.Equal("""{"name":"cid","team":null}""", await Json(db.GivePetStrict(U("cid"), 8004)));
@@ -76,7 +77,7 @@ public sealed class FoundWriteTests(OpsFixture fixture)
     public async Task ADeleteOfAnotherTablesRowsJoinedToTheRowFound()
     {
         Assert.Equal("WITH t AS (SELECT p.id, p.age FROM people p WHERE p.name = $1), w AS (DELETE FROM pets x WHERE x.owner_id = ANY(ARRAY(SELECT t.id FROM t)) AND x.legs = $2) " +
-            "SELECT t.id, t.age FROM t", Q.TakePets);
+            "SELECT t.id, t.age FROM t ORDER BY t.id LIMIT 1", Q.TakePets);
         await using var admin = TestDb.Admin("cfdata_ops_w");
         await admin.Execute("INSERT INTO pets VALUES (8010, 4, 'two', 2), (8011, 4, 'four', 4), (8012, 4, 'two too', 2)");
         var db = Db();
@@ -87,6 +88,18 @@ public sealed class FoundWriteTests(OpsFixture fixture)
         await Json(db.TakePets(U("nobody"), 4));
         Assert.Equal(404, _response.Status);
         Assert.Equal(1L, await Scalar("SELECT count(*) FROM pets WHERE id = 8011"));
+    }
+
+    [Fact]
+    public async Task OfSeveralRowsFoundEachIsWrittenFromAndTheOneOfTheSmallestKeyIsTheReply()
+    {
+        Assert.EndsWith("FROM t ORDER BY t.id LIMIT 1", Q.GivePetsOfAge, StringComparison.Ordinal);
+        await using var admin = TestDb.Admin("cfdata_ops_w");
+        // the larger key first in the heap, so a scan meets it first
+        await admin.Execute("INSERT INTO people (id, name, age, active, born) VALUES (9712, 'a9712', 9771, true, now()); " +
+            "INSERT INTO people (id, name, age, active, born) VALUES (9711, 'a9711', 9771, true, now())");
+        Assert.Equal("""{"id":9711,"text":"a9711"}""", await Json(Db().GivePetsOfAge(9771)));
+        Assert.Equal(2L, await Scalar("SELECT count(*) FROM pets WHERE id IN (69711, 69712)"));
     }
 
     [Fact]

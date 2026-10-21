@@ -13,6 +13,24 @@ sealed class Dialect
     public string JsonArray = "array_to_json(ARRAY({0}))", JsonAggregate = "array_to_json(array_agg({0}{1}))";
     public string LastInsertedKey = "currval(pg_get_serial_sequence('{0}', '{1}'))", NextKey = "nextval(pg_get_serial_sequence('{0}', '{1}'))";
     public string ListRows = "unnest({0}) {1}(v)";
+    // Query.Then: a column one of a query's values, and the check of the table written the statement makes first
+    public string AnyOfQuery = "{0} = ANY(ARRAY({1}))";
+    public string ThenGuard = ThenGuardOfPostgres;
+
+    /// <summary>
+    /// Fails the statement (casting its message to an integer) when the Select after Then can't read the tables as the
+    /// write left them: {0} the table written, {1} the columns the insert sets, {2} the tables the Select reads, each a
+    /// string literal; {3} whether the write deletes, {4} whether a read is corrected. A rule or a trigger on the table
+    /// written may write more; a delete's foreign keys may cascade into a table read; and a corrected read needs no row
+    /// security and columns that store the value written (no type modifier, a type that holds it as it is).
+    /// </summary>
+    public const string ThenGuardOfPostgres =
+        "(SELECT CASE WHEN c.relhasrules OR EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = c.oid AND NOT g.tgisinternal) " +
+        "OR {3} AND EXISTS (SELECT 1 FROM pg_constraint k WHERE k.contype = 'f' AND k.confrelid = c.oid AND k.confdeltype IN ('c', 'n', 'd') AND k.conrelid = ANY (ARRAY[{2}]::regclass[])) " +
+        "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname IN ({1}) " +
+        "AND (a.atttypmod <> -1 OR a.atttypid NOT IN (16, 17, 20, 21, 23, 25, 701, 1184, 2950)))) " +
+        "THEN ('CodeFusion: the Select after Then can''t read ' || c.relname || ' as the write left it (a rule, a trigger, row security, a foreign key that cascades " +
+        "into a table it reads, or a column that may store another value than the one written)')::int ELSE 0 END FROM pg_class c WHERE c.oid = {0}::regclass) = 0";
     public string InArray = "{0} = ANY({1})", NullSafeEqual = "{0} IS NOT DISTINCT FROM {1}", Now = "now()", Concat = "{0} || {1}";
     public string True = "true", False = "false", BigIntLiteral = "{0}::bigint", LockRows = "FOR UPDATE OF {0}";
     // C#'s conversions between integers and floating point ({1} is the SQL type), the smaller and larger of two
@@ -49,6 +67,8 @@ sealed class Dialect
                 case "NextKey": d.NextKey = (string)v!; break;
                 case "InArray": d.InArray = (string)v!; break;
                 case "ListRows": d.ListRows = (string)v!; break;
+                case "AnyOfQuery": d.AnyOfQuery = (string)v!; break;
+                case "ThenGuard": d.ThenGuard = (string)v!; break;
                 case "NullSafeEqual": d.NullSafeEqual = (string)v!; break;
                 case "Now": d.Now = (string)v!; break;
                 case "Concat": d.Concat = (string)v!; break;
@@ -243,25 +263,57 @@ static class Sql
     }
 
 
+    /// <summary>
+    /// Where <paramref name="op"/> (" AND ", " = ") stands at the top level of <paramref name="sql"/>: outside
+    /// parentheses, string literals, quoted names, and CASE ... END (whose WHEN and THEN hold conditions of their own).
+    /// </summary>
+    static List<int> TopLevelAt(string sql, string op)
+    {
+        var at = new List<int>();
+        int depth = 0;
+        for (int i = 0; i < sql.Length; i++)
+        {
+            char c = sql[i];
+            if (c is '\'' or '"')
+            {
+                // a doubled quote is one in the text
+                int end = i + 1;
+                for (; end < sql.Length; end++)
+                {
+                    if (sql[end] != c) continue;
+                    if (end + 1 < sql.Length && sql[end + 1] == c) end++;
+                    else break;
+                }
+                i = end;
+            }
+            else if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (Word(sql, i, "CASE")) depth++;
+            else if (Word(sql, i, "END")) depth--;
+            else if (depth == 0 && string.CompareOrdinal(sql, i, op, 0, op.Length) == 0)
+            {
+                at.Add(i);
+                i += op.Length - 1;
+            }
+        }
+        return at;
+    }
+
+    /// <summary>Whether the keyword <paramref name="word"/> stands at <paramref name="i"/>, as a word of its own.</summary>
+    static bool Word(string sql, int i, string word) =>
+        string.Compare(sql, i, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) == 0
+        && (i == 0 || !(char.IsLetterOrDigit(sql[i - 1]) || sql[i - 1] is '_' or '.' or '$'))
+        && (i + word.Length >= sql.Length || !(char.IsLetterOrDigit(sql[i + word.Length]) || sql[i + word.Length] is '_' or '.'));
+
     /// <summary>The conditions <paramref name="sql"/> ANDs together at its top level, each as it is written.</summary>
     public static List<string> Conjuncts(string sql)
     {
         var parts = new List<string>();
-        int depth = 0, start = 0;
-        bool quoted = false;
-        for (int i = 0; i < sql.Length; i++)
+        int start = 0;
+        foreach (int i in TopLevelAt(sql, " AND "))
         {
-            char c = sql[i];
-            if (c == '\'') quoted = !quoted;
-            else if (quoted) continue;
-            else if (c == '(') depth++;
-            else if (c == ')') depth--;
-            else if (depth == 0 && string.CompareOrdinal(sql, i, " AND ", 0, 5) == 0)
-            {
-                parts.Add(sql.Substring(start, i - start));
-                start = i + 5;
-                i += 4;
-            }
+            parts.Add(sql.Substring(start, i - start));
+            start = i + 5;
         }
         parts.Add(sql.Substring(start));
         return parts;
@@ -272,22 +324,9 @@ static class Sql
     public static bool EqualsColumnOf(string condition, string alias, out string other, out string column)
     {
         other = column = "";
-        int at = -1, depth = 0;
-        bool quoted = false;
-        for (int i = 0; i < condition.Length; i++)
-        {
-            char c = condition[i];
-            if (c == '\'') quoted = !quoted;
-            else if (quoted) continue;
-            else if (c == '(') depth++;
-            else if (c == ')') depth--;
-            else if (depth == 0 && string.CompareOrdinal(condition, i, " = ", 0, 3) == 0)
-            {
-                if (at >= 0) return false;
-                at = i;
-            }
-        }
-        if (at < 0) return false;
+        var equals = TopLevelAt(condition, " = ");
+        if (equals.Count != 1) return false;
+        int at = equals[0];
         string left = condition.Substring(0, at), right = condition.Substring(at + 3);
         // each side one term: in a OR x.c = t.id the other side is "a OR x.c", which no column is
         if (!Atomic(left) || !Atomic(right)) return false;
