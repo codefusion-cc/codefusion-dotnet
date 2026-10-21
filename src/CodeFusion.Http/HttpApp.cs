@@ -173,7 +173,7 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
         {
             TokenCheck check = _jwt!.Authenticate(x.HasAuthorization, x.Authorization, c.Arena, c.ClaimRanges, out long viewer, out ArenaBytes payload);
             // no header is anonymous where that is allowed; a header that isn't a valid token never is
-            if (check != TokenCheck.Valid && (x.HasAuthorization || e.Auth == AuthMode.Required)) return Errors.Unauthorized.WriteAsync(c);
+            if (check != TokenCheck.Valid && (x.HasAuthorization || e.Auth == AuthMode.Required)) return Errors.Refused(check).WriteAsync(c);
             c.ViewerId = viewer;
             c.ClaimPayload = payload;
         }
@@ -320,8 +320,23 @@ public sealed class HttpAppErrors
     public ErrorReply NotFound { get; set; } = Make(404, "not found");
 
     /// <summary>A missing or invalid token on an endpoint that needs one, or an invalid one on any endpoint that reads
-    /// it. 401 by default.</summary>
+    /// it, for each reason <see cref="MissingToken"/>, <see cref="InvalidToken"/> and <see cref="InvalidTokenPayload"/>
+    /// leave unset. 401 by default.</summary>
     public ErrorReply Unauthorized { get; set; } = Make(401, "unauthorized");
+
+    /// <summary>A request with no token, on an endpoint that needs one: no Authorization header, or one without the
+    /// scheme (another scheme, the scheme in another case, an empty header). Null, the default, answers with
+    /// <see cref="Unauthorized"/>.</summary>
+    public ErrorReply? MissingToken { get; set; }
+
+    /// <summary>A token that isn't valid: forged, malformed, not HS256, expired or not valid yet. Null, the default,
+    /// answers with <see cref="Unauthorized"/>.</summary>
+    public ErrorReply? InvalidToken { get; set; }
+
+    /// <summary>A genuine token in time whose payload the app can't read: its sub isn't a positive integer string, or
+    /// a claim <see cref="JwtOptions.Claims"/> declares breaks its rule. Null, the default, answers with
+    /// <see cref="InvalidToken"/>, or <see cref="Unauthorized"/> when that is null too.</summary>
+    public ErrorReply? InvalidTokenPayload { get; set; }
 
     /// <summary>A body that isn't the JSON its struct describes, or a field that struct doesn't name its own reply
     /// for. 422 by default.</summary>
@@ -346,6 +361,14 @@ public sealed class HttpAppErrors
     /// <summary>What a handler threw, with its request: by default a line on stderr. Null logs nothing.</summary>
     public Action<HttpExchange, Exception>? Log { get; set; } = static (x, e) =>
         HttpServerOptions.Stderr($"error: {Encoding.ASCII.GetString(x.MethodBytes)} {Encoding.UTF8.GetString(x.Path)}", e);
+
+    /// <summary>The 401 for a token that <paramref name="check"/> refused.</summary>
+    internal ErrorReply Refused(TokenCheck check) => check switch
+    {
+        TokenCheck.Missing => MissingToken ?? Unauthorized,
+        TokenCheck.InvalidPayload => InvalidTokenPayload ?? InvalidToken ?? Unauthorized,
+        _ => InvalidToken ?? Unauthorized,
+    };
 
     internal ReadOnlySpan<byte> Rejected(int status) => status switch
     {

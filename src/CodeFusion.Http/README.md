@@ -95,6 +95,18 @@ and anything no route matches is a 404 with
 `builder.Errors.NotFound`'s body. The app's other bodies (401, 422, 500 and the server's own 400, 413, 414, 431) are on
 `builder.Errors` too.
 
+A 401 has one body, `Errors.Unauthorized`, unless the app gives a reason its own. Each reason left null answers as
+before:
+
+```csharp
+builder.Errors.MissingToken = Errors.MissingToken;          // no header, or not "Bearer <token>"
+builder.Errors.InvalidToken = Errors.InvalidToken;          // forged, malformed, not HS256, expired
+builder.Errors.InvalidTokenPayload = Errors.InvalidPayload; // genuine, but sub or a declared claim breaks its rule
+```
+
+`InvalidTokenPayload` falls back to `InvalidToken`, then to `Unauthorized`. A header that is present but carries no
+valid token is a 401 on an `AuthOptional` endpoint too; only a request with no header at all is anonymous.
+
 A body or `[FromQuery]` struct is bound through its public fields and its public properties with a public setter,
 and nothing else, so a request can't set a member the struct keeps to itself. A number's `[Range]` holds in the body
 as in the query, in each of the attribute's forms, exclusive ends included.

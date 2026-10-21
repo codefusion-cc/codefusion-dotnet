@@ -138,6 +138,148 @@ public class SpecOptionsTests
         Assert.Equal((200, """{"found":false,"username":""}"""), (r.Status, r.Text));
     }
 
+    // ---- a 401 for each reason ----
+
+    static readonly ErrorReply Missing = new(401, """{"error":"missing bearer token"}"""u8);
+    static readonly ErrorReply Invalid = new(401, """{"error":"invalid or expired token"}"""u8);
+    static readonly ErrorReply Payload = new(401, """{"error":"invalid token payload"}"""u8);
+
+    /// <summary>A token signed with the test secret: sub, username (JSON as given), exp seconds from now.</summary>
+    internal static string FeedToken(string username = "\"jake\"", string sub = "\"42\"", long expIn = 60)
+    {
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        return JwtClaimTests.Signed($$"""{"sub":{{sub}},"username":{{username}},"iat":{{now}},"exp":{{now + expIn}}}""");
+    }
+
+    static string Forged()
+    {
+        string t = FeedToken();
+        return t[..^2] + (t[^2] == 'A' ? 'B' : 'A') + t[^1];
+    }
+
+    /// <summary>Each header, and what a required and an optional endpoint answer it with.</summary>
+    public static TheoryData<string, string?, string, string> Refusals() => new()
+    {
+        { "no header", null, "missing", "anonymous" },
+        { "an empty header", "", "missing", "missing" },
+        { "only spaces", "   ", "missing", "missing" },
+        { "another scheme", "Token {t}", "missing", "missing" },
+        { "the scheme in lower case", "bearer {t}", "missing", "missing" },
+        { "the scheme alone", "Bearer", "missing", "missing" },
+        { "two spaces", "Bearer  {t}", "invalid", "invalid" },
+        { "not a JWT", "Bearer abc", "invalid", "invalid" },
+        { "forged", "Bearer {forged}", "invalid", "invalid" },
+        { "expired", "Bearer {expired}", "invalid", "invalid" },
+        { "sub 0", "Bearer {sub0}", "payload", "payload" },
+        { "sub a number", "Bearer {subNumber}", "payload", "payload" },
+        { "no username", "Bearer {noName}", "payload", "payload" },
+        { "username a number", "Bearer {nameNumber}", "payload", "payload" },
+        { "expired with a bad payload", "Bearer {expiredBad}", "invalid", "invalid" },
+        { "valid", "Bearer {t}", "ok", "ok" },
+    };
+
+    static string? Header(string? template) => template?
+        .Replace("{t}", FeedToken(), StringComparison.Ordinal)
+        .Replace("{forged}", Forged(), StringComparison.Ordinal)
+        .Replace("{expired}", FeedToken(expIn: -1), StringComparison.Ordinal)
+        .Replace("{sub0}", FeedToken(sub: "\"0\""), StringComparison.Ordinal)
+        .Replace("{subNumber}", FeedToken(sub: "42"), StringComparison.Ordinal)
+        .Replace("{noName}", Unclaimed(), StringComparison.Ordinal)
+        .Replace("{nameNumber}", FeedToken(username: "5"), StringComparison.Ordinal)
+        .Replace("{expiredBad}", FeedToken(username: "5", sub: "\"0\"", expIn: 0), StringComparison.Ordinal);
+
+    static HttpApp RefusingApp(Action<HttpAppErrors> errors)
+    {
+        HttpAppBuilder b = Builder(Feed());
+        errors(b.Errors);
+        HttpApp app = b.Build();
+        app.MapGet("/required", static (Viewer v) => Reply.Ok(new Named(v.Id, v.Claim("username"u8)))).AuthRequired();
+        app.MapGet("/optional", static (Viewer v) => Reply.Ok(new Named(v.Id, v.Claim("username"u8)))).AuthOptional();
+        app.Start();
+        return app;
+    }
+
+    static (int, string) Expected(string outcome, ErrorReply missing, ErrorReply invalid, ErrorReply payload) => outcome switch
+    {
+        "ok" => (200, """{"id":42,"username":"jake"}"""),
+        "anonymous" => (200, """{"id":0,"username":""}"""),
+        "missing" => (401, Encoding.UTF8.GetString(missing.Body)),
+        "invalid" => (401, Encoding.UTF8.GetString(invalid.Body)),
+        _ => (401, Encoding.UTF8.GetString(payload.Body)),
+    };
+
+    [Theory]
+    [MemberData(nameof(Refusals))]
+    public async Task EachRefusalHasItsOwnBody(string name, string? header, string required, string optional)
+    {
+        await using HttpApp app = RefusingApp(e =>
+        {
+            e.MissingToken = Missing;
+            e.InvalidToken = Invalid;
+            e.InvalidTokenPayload = Payload;
+        });
+        await using var check = new AppCheck(app);
+        string? h = Header(header);
+        Response r = await Send(app, "GET", "/required", h);
+        Assert.Equal(Expected(required, Missing, Invalid, Payload), (r.Status, r.Text));
+        Response o = await Send(app, "GET", "/optional", h);
+        Assert.Equal(Expected(optional, Missing, Invalid, Payload), (o.Status, o.Text));
+        Assert.NotNull(name);
+    }
+
+    [Theory]
+    [MemberData(nameof(Refusals))]
+    public async Task UnsetReasonsAnswerWithUnauthorizedAsBefore(string name, string? header, string required, string optional)
+    {
+        var unauthorized = new ErrorReply(401, """{"errors":{"body":["unauthorized"]}}"""u8);
+        await using HttpApp app = RefusingApp(e => e.Unauthorized = unauthorized);
+        await using var check = new AppCheck(app);
+        string? h = Header(header);
+        Response r = await Send(app, "GET", "/required", h);
+        Assert.Equal(Expected(required, unauthorized, unauthorized, unauthorized), (r.Status, r.Text));
+        Response o = await Send(app, "GET", "/optional", h);
+        Assert.Equal(Expected(optional, unauthorized, unauthorized, unauthorized), (o.Status, o.Text));
+        Assert.NotNull(name);
+    }
+
+    [Fact]
+    public async Task AnUnsetPayloadReasonAnswersAsAnInvalidToken()
+    {
+        await using HttpApp app = RefusingApp(e => e.InvalidToken = Invalid);
+        await using var check = new AppCheck(app);
+        Response payload = await Send(app, "GET", "/required", "Bearer " + FeedToken(sub: "\"0\""));
+        Assert.Equal((401, """{"error":"invalid or expired token"}"""), (payload.Status, payload.Text));
+        Response missing = await Send(app, "GET", "/required");
+        Assert.Equal((401, """{"error":"unauthorized"}"""), (missing.Status, missing.Text));
+        Assert.Null(app.Errors.MissingToken);
+        Assert.Null(app.Errors.InvalidTokenPayload);
+    }
+
+    /// <summary>The whole response but its Date: what a default app sent for every refusal before reasons existed.</summary>
+    static string Raw(Response r) =>
+        $"{r.StatusLine}|{r.Header("Content-Type")}|{r.Header("Content-Length")}|{r.Header("Connection")}|{r.Header("Retry-After")}|{r.Text}";
+
+    [Fact]
+    public async Task TheDefault401IsTheSameBytesForEveryReason()
+    {
+        HttpAppBuilder b = Builder();
+        b.AddJwtAuth(JwtTests.Secret);
+        await using HttpApp app = b.Build();
+        await using var check = new AppCheck(app);
+        app.MapGet("/required", static (Viewer v) => Reply.NoContent()).AuthRequired();
+        app.Start();
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        string[] headers =
+        [
+            "", "Bearer " + Token(b.JwtPrototype!), "Token abc", "Token " + JwtClaimTests.Signed($$"""{"sub":"42","exp":{{now - 1}}}"""),
+            "Token " + JwtClaimTests.Signed($$"""{"sub":"0","exp":{{now + 60}}}"""),
+        ];
+        const string Expected = """HTTP/1.1 401 Unauthorized|application/json|24|||{"error":"unauthorized"}""";
+        Assert.Equal(Expected, Raw(await Send(app, "GET", "/required")));
+        foreach (string h in headers) Assert.Equal(Expected, Raw(await Send(app, "GET", "/required", h)));
+        Assert.Equal(204, (await Send(app, "GET", "/required", "Token " + Token(b.JwtPrototype!))).Status);
+    }
+
     [Fact]
     public void AViewerMadeByHandHasNoClaims()
     {

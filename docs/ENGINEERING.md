@@ -846,6 +846,7 @@ Each test was red first: on a stub of the API that compiled but didn't do it.
 |---|---|---|---|
 | the scheme was `Token ` only | `JwtOptions.Scheme`, and `AddJwtAuth(secret, JwtOptions)` and `Jwt(secret, JwtOptions)` beside the old overloads | `JwtSchemeTests` (exact case, one space, no tab, a Cyrillic look-alike, any RFC 9110 token, invalid schemes refused at startup), `SpecOptionsTests.ABearerAppReadsBearerHeadersOnly`, `TheDefaultAppStillReadsToken` | 17 of 34: `Bearer` refused, `Token` still read |
 | no claim but `sub` reached a handler | `JwtClaim` (`Required`, `MinBytes`, `MaxBytes`) on `JwtOptions.Claims`; `Viewer.Claim`, `Viewer.TryGetClaim`; `Jwt.Issue(userId, params ReadOnlySpan<Utf8> claims)`, `Issue(userId, now, claims, dest)`, `MaxIssuedBytesWith` | `JwtClaimTests` (escapes, surrogate pairs and lone surrogates, raw invalid UTF-8, null, wrong types, lengths at 0, 1, max and max+1 once unescaped, a 2,900-byte claim, repeats, escaped names of 64 bytes, every bad `sub`, forged and expired tokens leaving the arena untouched, issue and read back, a property test of 3,000 payloads against a `JsonDocument` reading of the rules), `SpecOptionsTests.AHandlerReadsTheTokensClaimAsItWasIssued`, `AnOptionalClaimThatIsAbsentReadsAsNone` | 56 of 71 on a stub that read no claim |
+| one 401 body for every reason | `HttpAppErrors.MissingToken`, `InvalidToken`, `InvalidTokenPayload`, null by default | `SpecOptionsTests.EachRefusalHasItsOwnBody` (16 headers against a required and an optional endpoint: none, empty, spaces, another scheme, its case, the scheme alone, two spaces, not a JWT, forged, expired, bad sub, no claim, a claim of the wrong type, expired with a bad payload, valid), `UnsetReasonsAnswerWithUnauthorizedAsBefore`, `AnUnsetPayloadReasonAnswersAsAnInvalidToken`, `TheDefault401IsTheSameBytesForEveryReason` | 16 of 39 on properties that dispatch didn't read |
 
 What it decided:
 
@@ -864,6 +865,9 @@ What it decided:
 - `JsonBody.TryTextEquals` unescaped into a fixed 96-byte buffer, enough for the names it had (at most 16 bytes). A
   declared name may be 64 bytes, so it now takes what the raw name needs, at most six bytes for each byte compared
   (`ALongDeclaredNameMatchesThroughEscapes`).
+- The reasons are nullable properties next to `Unauthorized`, not a new reply type: an app that set only
+  `Unauthorized` (Conduit's `{"errors":{"body":[...]}}`) keeps it for every reason. A header without the scheme is
+  the missing reason, as the feed spec says, even on an optional endpoint, where it stays a 401 as before.
 
 ## Fuzzing (tests/CodeFusion.Fuzz)
 

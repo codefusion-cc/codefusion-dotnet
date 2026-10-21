@@ -62,6 +62,11 @@ Fixes go into the latest release only.
   which bounds a claim. Values are unescaped into the request's arena and are valid only while the request is
   handled, like any `Utf8` of it. Declared names can't be `sub`, `iat`, `exp` or `nbf`, and are compared after
   unescaping, case included.
+- **401 reasons.** An app may answer a missing token, an invalid one and an invalid payload with different bodies
+  (`HttpAppErrors.MissingToken`, `InvalidToken`, `InvalidTokenPayload`); by default all three are the one
+  `Unauthorized` body. The payload reason is reachable only with a token the secret signed, so it tells a client
+  nothing it couldn't learn from its own token. Forged, malformed and expired tokens share the invalid reason, and a
+  bad payload in an expired token is reported as expired.
 - **A short secret** is refused unless the app passes `allowShortSecret: true` (`AddJwtAuth(secret, lifetime, true)`
   or the `Jwt` constructor), for a deployment handed a fixed one, such as the Conduit contest's 26 bytes. An empty
   one is refused even then. The tokens are standard HMAC-SHA256 (a key shorter than the 64-byte block is padded with

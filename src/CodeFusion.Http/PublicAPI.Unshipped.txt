@@ -82,8 +82,14 @@ CodeFusion.Http.HttpAppErrors.Internal.get -> CodeFusion.ErrorReply!
 CodeFusion.Http.HttpAppErrors.Internal.set -> void
 CodeFusion.Http.HttpAppErrors.InvalidBody.get -> CodeFusion.ErrorReply!
 CodeFusion.Http.HttpAppErrors.InvalidBody.set -> void
+CodeFusion.Http.HttpAppErrors.InvalidToken.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.HttpAppErrors.InvalidToken.set -> void
+CodeFusion.Http.HttpAppErrors.InvalidTokenPayload.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.HttpAppErrors.InvalidTokenPayload.set -> void
 CodeFusion.Http.HttpAppErrors.Log.get -> System.Action<CodeFusion.Http.HttpExchange!, System.Exception!>?
 CodeFusion.Http.HttpAppErrors.Log.set -> void
+CodeFusion.Http.HttpAppErrors.MissingToken.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.HttpAppErrors.MissingToken.set -> void
 CodeFusion.Http.HttpAppErrors.NotFound.get -> CodeFusion.ErrorReply!
 CodeFusion.Http.HttpAppErrors.NotFound.set -> void
 CodeFusion.Http.HttpAppErrors.Unauthorized.get -> CodeFusion.ErrorReply!
