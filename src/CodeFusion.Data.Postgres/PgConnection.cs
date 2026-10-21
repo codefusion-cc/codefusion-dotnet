@@ -24,7 +24,7 @@ sealed class PgConnection : IDisposable
     /// <summary>Receive buffers grown past this for a huge row go back to the normal size afterwards.</summary>
     const int MaxKeptReceive = 8 << 20;
 
-    /// <summary>Returned by <see cref="ReadReplies"/> when every statement succeeded and the commit failed.</summary>
+    /// <summary>Returned by <see cref="ReadReplies(PgJob?[], bool, out PgException?)"/> when every statement succeeded and the commit failed.</summary>
     internal const int CommitFailed = -2;
 
     readonly PgTransport _t;
@@ -67,9 +67,16 @@ sealed class PgConnection : IDisposable
         public int StatementId;
         public bool Parse;
         public bool Last;
+        /// <summary>A statement's Parse and Describe sent ahead of its job's first Bind, with no Bind of its own.</summary>
+        public bool ParseOnly;
+        /// <summary>A transaction control statement of the writer's own (BEGIN, SAVEPOINT...): unnamed, no Describe, no
+        /// job's rows, no job ended.</summary>
+        public bool Control;
+        /// <summary>A merged statement's table check, run before it: no job ended.</summary>
+        public bool Guard;
     }
 
-    /// <summary>The failure <see cref="ReadReplies"/> last returned was a merged statement's: the slot it named is the
+    /// <summary>The failure <see cref="ReadReplies(PgJob?[], bool, out PgException?)"/> last returned was a merged statement's: the slot it named is the
     /// run's first, not necessarily the write whose values failed.</summary>
     internal bool FailedInBatch;
 
@@ -384,7 +391,8 @@ sealed class PgConnection : IDisposable
         {
             var job = group[j]!;
             for (int i = 0; i < job.Count; i++)
-                if (Pending(job.Statements[i]) || job.Statements[i].Batch is { } batch && Pending(batch)) return true;
+                if (Pending(job.Statements[i]) || job.Statements[i].Batch is { } batch && (Pending(batch) || batch.Check is { } check && Pending(check)))
+                    return true;
         }
         return false;
     }
@@ -393,6 +401,9 @@ sealed class PgConnection : IDisposable
     /// then its Bind and Execute.</summary>
     internal void Add(PgJob job, int slot)
     {
+        // Every Parse the job needs goes before its first Bind: should one of its statements fail, Postgres skips what
+        // follows up to the Sync, and a Parse skipped there would leave a later batch binding a statement that doesn't
+        // exist (each write in its own batch, as the writer's fallback sends them)
         for (int i = 0; i < job.Count; i++)
         {
             var s = job.Statements[i];
@@ -401,18 +412,66 @@ sealed class PgConnection : IDisposable
                 Array.Resize(ref _prepared, Math.Max(_prepared.Length * 2, s.Id + 1));
                 Array.Resize(ref _columns, _prepared.Length);
             }
-            bool parse = _prepared[s.Id] == 0;
-            if (parse)
-            {
-                Append(s.Parse);
-                _prepared[s.Id] = 1;
-            }
+            if (_prepared[s.Id] != 0) continue;
+            Append(s.Parse);
+            _prepared[s.Id] = 1;
+            AddStep(new Step { Slot = slot, StatementId = s.Id, Parse = true, ParseOnly = true });
+        }
+        for (int i = 0; i < job.Count; i++)
+        {
             int start = job.Start(i);
             Append(job.Buf.AsSpan(start, job.Ends[i] - start));
-            if (_buildCount == _build.Length) Array.Resize(ref _build, _buildCount * 2);
-            _build[_buildCount++] = new Step { Slot = slot, StatementId = s.Id, Parse = parse, Last = i == job.Count - 1 };
+            AddStep(new Step { Slot = slot, StatementId = job.Statements[i].Id, Last = i == job.Count - 1 });
         }
     }
+
+    void AddStep(Step step)
+    {
+        if (_buildCount == _build.Length) Array.Resize(ref _build, _buildCount * 2);
+        _build[_buildCount++] = step;
+    }
+
+    /// <summary>Adds a transaction control statement of the writer's own (<see cref="Controls"/>), in group slot
+    /// <paramref name="slot"/>'s place.</summary>
+    internal void AddControl(byte[] messages, int slot)
+    {
+        Append(messages);
+        AddStep(new Step { Slot = slot, Parse = true, Control = true });
+    }
+
+    /// <summary>Transaction control statements, each as its Parse (unnamed, no Describe), Bind and Execute.</summary>
+    internal static class Controls
+    {
+        public static readonly byte[] Begin = Of("BEGIN"), Savepoint = Of("SAVEPOINT cf"), Release = Of("RELEASE SAVEPOINT cf"),
+            RollbackTo = Of("ROLLBACK TO SAVEPOINT cf"), Commit = Of("COMMIT"), Rollback = Of("ROLLBACK");
+
+        static byte[] Of(string sql)
+        {
+            int sqlLen = Encoding.UTF8.GetByteCount(sql);
+            var b = new byte[(1 + 4 + 1 + sqlLen + 1 + 2) + (1 + 4 + 1 + 1 + 2 + 2 + 2) + (1 + 4 + 1 + 4)];
+            int p = 0;
+            b[p++] = (byte)'P';
+            BinaryPrimitives.WriteInt32BigEndian(b.AsSpan(p), 4 + 1 + sqlLen + 1 + 2);
+            p += 4;
+            b[p++] = 0; // the unnamed statement
+            p += Encoding.UTF8.GetBytes(sql, b.AsSpan(p));
+            b[p++] = 0;
+            p += 2; // no parameter types
+            b[p++] = (byte)'B';
+            BinaryPrimitives.WriteInt32BigEndian(b.AsSpan(p), 4 + 1 + 1 + 2 + 2 + 2);
+            p += 4;
+            p += 2; // the unnamed portal and statement
+            p += 6; // no parameter formats, no parameters, no result formats
+            b[p++] = (byte)'E';
+            BinaryPrimitives.WriteInt32BigEndian(b.AsSpan(p), 9);
+            p += 4;
+            p += 5; // the unnamed portal, all rows
+            return b;
+        }
+    }
+
+    /// <summary>Each write's error in the writer's savepoint round (<c>PgWriter.EachInASavepoint</c>), by group slot.</summary>
+    internal readonly PgException?[] Errors = new PgException?[PgWriter.MaxGroup];
 
     /// <summary>The keys of the run of keyed updates being merged, so the run ends before a key comes twice.</summary>
     internal readonly HashSet<long> RunKeys = [];
@@ -441,6 +500,7 @@ sealed class PgConnection : IDisposable
     /// </summary>
     internal void AddBatch(PgJob?[] group, int from, int to, PgStatement batch)
     {
+        if (batch.Check is { } check) AddGuard(check, from, to);
         if (batch.Id >= _prepared.Length)
         {
             Array.Resize(ref _prepared, Math.Max(_prepared.Length * 2, batch.Id + 1));
@@ -515,6 +575,40 @@ sealed class PgConnection : IDisposable
         _build[_buildCount++] = new Step { Slot = from, BatchEnd = to, StatementId = batch.Id, Parse = parse, Last = true };
     }
 
+    /// <summary>The merged statement's table check, as a statement of its own run before it in the same transaction:
+    /// should it refuse, Postgres skips the merged update, whatever the plans.</summary>
+    void AddGuard(PgStatement check, int from, int to)
+    {
+        if (check.Id >= _prepared.Length)
+        {
+            Array.Resize(ref _prepared, Math.Max(_prepared.Length * 2, check.Id + 1));
+            Array.Resize(ref _columns, _prepared.Length);
+        }
+        bool parse = _prepared[check.Id] == 0;
+        if (parse)
+        {
+            Append(check.Parse);
+            _prepared[check.Id] = 1;
+        }
+        int body = 4 + check.BindHead.Length + 4;
+        int need = 1 + body + 10;
+        if (_send.Length - _sendLen < need) Array.Resize(ref _send, Math.Max(_send.Length * 2, _sendLen + need));
+        var d = _send.AsSpan(_sendLen, need);
+        d[0] = (byte)'B';
+        BinaryPrimitives.WriteInt32BigEndian(d[1..], body);
+        check.BindHead.CopyTo(d[5..]);
+        int w = 5 + check.BindHead.Length;
+        BinaryPrimitives.WriteInt16BigEndian(d[w..], 1);
+        BinaryPrimitives.WriteInt16BigEndian(d[(w + 2)..], 1);
+        w += 4;
+        d[w] = (byte)'E';
+        BinaryPrimitives.WriteInt32BigEndian(d[(w + 1)..], 9);
+        d[w + 5] = 0;
+        BinaryPrimitives.WriteInt32BigEndian(d[(w + 6)..], 0);
+        _sendLen += need;
+        AddStep(new Step { Slot = from, BatchEnd = to, StatementId = check.Id, Parse = parse, Guard = true });
+    }
+
     /// <summary>Ends the batch with a Sync and sends it.</summary>
     internal void Flush()
     {
@@ -576,7 +670,11 @@ sealed class PgConnection : IDisposable
     /// everything after it. A FATAL error, a broken stream or a protocol violation throws
     /// <see cref="PgConnectionException"/>: the connection is done.
     /// </summary>
-    internal int ReadReplies(PgJob?[] group, bool keep, out PgException? error)
+    internal int ReadReplies(PgJob?[] group, bool keep, out PgException? error) => ReadReplies(group, keep, inTransaction: false, out error);
+
+    /// <summary>As <see cref="ReadReplies(PgJob?[], bool, out PgException?)"/>; <paramref name="inTransaction"/>: the
+    /// batch is part of a transaction the writer opened itself (BEGIN), so its Sync leaves the server in it.</summary>
+    internal int ReadReplies(PgJob?[] group, bool keep, bool inTransaction, out PgException? error)
     {
         if (_sentCount == 0) throw new InvalidOperationException("no batch to read the replies of");
         // the oldest batch sent: its steps are read now, its slot free for the next Flush
@@ -610,12 +708,20 @@ sealed class PgConnection : IDisposable
                         if (_steps[step].Last) Row(group[_steps[step].Slot]!, body, keep, _steps[step].StatementId);
                         break;
                     case (byte)'C': // CommandComplete
+                        if (step < _stepCount && _steps[step].Control)
+                        {
+                            if (error is not null || phase != 2) throw Protocol("CommandComplete out of place");
+                            step++;
+                            phase = step < _stepCount && _steps[step].Parse ? 0 : 1;
+                            break;
+                        }
                         if (keep && ControlsTransaction(body)) throw OwnTransaction(body);
                         if (DropsStatements(body, group, step)) throw DroppedStatements(body);
                         goto case (byte)'I';
                     case (byte)'I': // EmptyQueryResponse
                         if (error is not null || step == _stepCount || phase != 2) throw Protocol("CommandComplete out of place");
-                        if (_steps[step].BatchEnd > 0)
+                        if (_steps[step].Guard) { }
+                        else if (_steps[step].BatchEnd > 0)
                             for (int s = _steps[step].Slot; s < _steps[step].BatchEnd; s++) Ended(group, s, keep);
                         else if (_steps[step].Last) Ended(group, _steps[step].Slot, keep);
                         step++;
@@ -623,6 +729,11 @@ sealed class PgConnection : IDisposable
                         break;
                     case (byte)'1': // ParseComplete
                         if (error is not null || step == _stepCount || phase != 0 || body.Length != 0) throw Protocol("ParseComplete out of place");
+                        if (_steps[step].Control)
+                        {
+                            phase = 1; // no Describe
+                            break;
+                        }
                         _prepared[_steps[step].StatementId] = 2;
                         _columns[_steps[step].StatementId] = null;
                         phase = 3;
@@ -636,11 +747,13 @@ sealed class PgConnection : IDisposable
                         if (error is not null || step == _stepCount || phase != 4) throw Protocol("RowDescription out of place");
                         _columns[_steps[step].StatementId] = ColumnTypes(body);
                         phase = 1;
+                        if (_steps[step].ParseOnly) NextStep(ref step, ref phase);
                         break;
                     case (byte)'n': // NoData: a statement without rows
                         if (error is not null || step == _stepCount || phase != 4 || body.Length != 0) throw Protocol("NoData out of place");
                         _columns[_steps[step].StatementId] = [];
                         phase = 1;
+                        if (_steps[step].ParseOnly) NextStep(ref step, ref phase);
                         break;
                     case (byte)'2': // BindComplete
                         if (error is not null || step == _stepCount || phase != 1 || body.Length != 0) throw Protocol("BindComplete out of place");
@@ -651,7 +764,8 @@ sealed class PgConnection : IDisposable
                         if (e.IsFatal) throw new PgConnectionException("Postgres ended the connection: " + e.Message, e);
                         if (error is not null) throw Protocol("a second ErrorResponse before ReadyForQuery");
                         error = e;
-                        failed = step == _stepCount ? CommitFailed : _steps[step].Slot;
+                        // a control statement's failure is the transaction's, as a commit's is
+                        failed = step == _stepCount || _steps[step].Control ? CommitFailed : _steps[step].Slot;
                         FailedInBatch = step < _stepCount && _steps[step].BatchEnd > 0;
                         break;
                     case (byte)'Z':
@@ -660,7 +774,7 @@ sealed class PgConnection : IDisposable
                         // The batch ran in the implicit transaction its Sync ends, so the server is idle again unless a
                         // statement opened a transaction of its own: then nothing of the group committed and the session
                         // is in a state no later group expects
-                        if (body[0] != (byte)'I')
+                        if (inTransaction ? body[0] is not ((byte)'T' or (byte)'E') : body[0] != (byte)'I')
                             throw new PgConnectionException($"a statement left a transaction open (ReadyForQuery '{(char)body[0]}'): nothing of its group committed");
                         Answer(group);
                         return failed;
@@ -684,7 +798,7 @@ sealed class PgConnection : IDisposable
         {
             // a Parse the server skipped or refused left no statement behind: parse it again next time
             for (int i = 0; i < _stepCount; i++)
-                if (_steps[i].Parse && _prepared[_steps[i].StatementId] == 1) _prepared[_steps[i].StatementId] = 0;
+                if (_steps[i].Parse && !_steps[i].Control && _prepared[_steps[i].StatementId] == 1) _prepared[_steps[i].StatementId] = 0;
             if (_rpos == _rend)
             {
                 _rpos = _rend = 0;
@@ -715,6 +829,12 @@ sealed class PgConnection : IDisposable
     /// myplan) leaves the connection be; SQL the client can't read that from counts as dropping one of its own. A
     /// DEALLOCATE that a function or a DO block runs completes with that statement's tag, and isn't seen.
     /// </summary>
+    void NextStep(ref int step, ref int phase)
+    {
+        step++;
+        phase = step < _stepCount && _steps[step].Parse ? 0 : 1;
+    }
+
     bool DropsStatements(ReadOnlySpan<byte> tag, PgJob?[] group, int step)
     {
         if (tag.Length > 0 && tag[^1] == 0) tag = tag[..^1];
@@ -901,7 +1021,7 @@ sealed class PgConnection : IDisposable
     }
 
     /// <summary>
-    /// Debug: where <see cref="ReadReplies"/> is agrees with the batch sent. <paramref name="step"/> runs from 0 to
+    /// Debug: where <see cref="ReadReplies(PgJob?[], bool, out PgException?)"/> is agrees with the batch sent. <paramref name="step"/> runs from 0 to
     /// the step count; within a step, phase 0 (ParseComplete due) only where a Parse went, then 1 (BindComplete due),
     /// then 2 (rows); past the last step only ReadyForQuery is due (phase 1). A failure has its error and the slot it
     /// blames. A statement parsed in this batch is pending (1) until its ParseComplete, parsed (2) after. Each step not
@@ -920,7 +1040,7 @@ sealed class PgConnection : IDisposable
             ref readonly Step st = ref _steps[i];
             if ((uint)st.Slot >= (uint)group.Length) Broken($"step {i} in slot {st.Slot} of {group.Length}");
             if (i >= step && group[st.Slot] is null) Broken($"step {i} not ended has no job");
-            if (st.Parse)
+            if (st.Parse && !st.Control)
             {
                 int want = i > step || (i == step && phase == 0) ? 1 : 2;
                 if (_prepared[st.StatementId] != want) Broken($"statement {st.StatementId} at step {i} is {_prepared[st.StatementId]}, not {want}");

@@ -900,18 +900,26 @@ outcome is what running the writes one by one gives:
   - one that runs alone;
   - one over a provider that doesn't declare `KeyedUpdate`.
   All of these are decided by the generator at build time.
-- **The merged statement checks its table first.** The check is the outer query of a data-modifying WITH, so it runs
-  whatever the plan, and before the update writes anything. A table with a trigger or a rule, or a unique or exclusion
-  index on a column the update sets, fails the statement with "CodeFusion: no merged updates on <table>". From then
-  on that statement isn't merged. (A trigger would fire once per run, not once per write; a unique index judges the
-  rows against each other at once, not one write after another.) Postgres refuses a rule in a WITH itself (0A000),
-  which is treated the same way. The check reads the catalog on every merged run, so a trigger added later is seen
-  at once.
-- **A failed merged run goes once more one by one**: the group's writes from there, in one round trip, each with its
-  own Sync. So each runs in its own transaction, an error skips none of the others, and each gets its own outcome. A
-  row locked elsewhere costs one more lock timeout, not one per write. A deadlock or serialization failure there runs
-  its write again alone. Savepoints can't do this in one round trip: after an error Postgres skips everything up to
-  the Sync, and the transaction stays aborted.
+- **The table is checked first, by a statement of its own** run before the merged update in the same transaction,
+  so a refusal skips the update whatever the plans. A table with a trigger or a rule, partitions or inheritance
+  children (whose own triggers and indexes the check wouldn't see), or a unique or exclusion index on a column the
+  update sets fails the check with "CodeFusion: no merged updates on <table>". (A trigger would fire once per run,
+  not once per write; a unique index judges the rows against each other at once, not one write after another.)
+  Postgres refuses a rule in a WITH itself (0A000), which is treated the same way. The check reads the catalog
+  (index lookups) on every merged run, so a trigger added later is seen at once.
+- **A refused statement goes unmerged for a while** (`PgWriter.UnmergedFor`, five minutes), then is tried merged
+  again, so a trigger dropped later doesn't cost merging until a restart. So does one whose merged run failed with no
+  write at fault in the fallback (a permission on the catalog, a statement_timeout only the merged statement runs
+  into). `PgCounters.Unmerged` counts each time.
+- **A failed merged run goes once more unmerged, in one transaction and one round trip**, each write in a savepoint of
+  its own: `ROLLBACK TO SAVEPOINT cf` (which undoes the write before only if it failed: after a write that ran, the
+  savepoint is set again), the write, `RELEASE SAVEPOINT cf`, `SAVEPOINT cf`, and a Sync, so an error skips nothing of
+  the writes after it. Then `ROLLBACK TO SAVEPOINT cf` (the last write, if it failed) and `COMMIT`. Each write gets
+  its own outcome and they commit together: one commit and one more round trip, where one transaction per write cost
+  a commit each. A row locked elsewhere costs one more lock timeout, not one per write. A deadlock or serialization
+  failure there rolls the transaction back: the writes before it run as a group, it runs alone, then the rest, so the
+  order holds. Every Parse a write needs goes before its first Bind, so a write's own failure can't skip a Parse that
+  a later write in the round binds.
 
 Each test was red on the code before its fix:
 
@@ -925,9 +933,16 @@ Each test was red on the code before its fix:
 | a refused table tried merged again every group | the trigger, rule and unique tests' second groups | merged again |
 | `KeyedUpdate` called on a provider that doesn't declare it: CS0117 | `MinimalProviderTests.QueriesOverAProviderThatDeclaresOnlyWhatItMustCompile` | CS0117 |
 | a merged statement's pending Parse not seen | `PgMergedParseTests.AGroupBindingAMergedStatementWhoseParseIsUnansweredWaitsForIt` | false |
+| (re-review N1) a write's failure skipped a Parse a later write in the fallback binds | `AWriteAfterAFailedMultiStatementWriteInTheFallbackStillRuns` (a fresh connection) | 26000 for the valid write |
+| (N2) one commit per write after a merged failure | `AFaultyWriteInAMergedRunCostsAFewCommitsNotOnePerWrite` (`PgCounters.Commits`: 2) | 220 commits on the server for 100 writes (before the counter) |
+| (N4) a write retried after 40001 came after later writes | `AWriteRetriedAfterASerializationFailureStillComesBeforeTheWritesQueuedAfterIt` | the row ended 5, not 9 |
+| (N5) a partitioned table merged | `APartitionedTableIsNeverMerged` | [Ok, Ok] for a write in-order refuses |
+| (N7) unmerged until a restart, and invisible | `AStatementThatStoppedMergingIsTriedMergedAgainLater`, the trigger test's `Unmerged` | 0 merged after the trigger went; 0 counted |
 
 Not red: `RunsAloneTests.AKeyedUpdateMarkedRunsAloneRunsAloneAndIsNeverMerged`. An alone loop runs one command at a
-time, so nothing could merge there before either; the generator now also leaves the statement unmerged. Also not
+time, so nothing could merge there before either; `MinimalProviderTests.AKeyedUpdateThatRunsAloneIsNeverMadeAKeyedUpdateStatement`
+checks the generator leaves it unmerged. Nor the guard as a statement of its own (N6): the WITH form's outer query
+ran first in every Postgres tried, so no test tells them apart. Also not
 red on demand: CHECK and NOT NULL blame, two faulty writes, the FOR UPDATE lock and the missing key. Their tests
 pass on both the old fallback and the new one; each fails when the fallback blames the run's first write.
 

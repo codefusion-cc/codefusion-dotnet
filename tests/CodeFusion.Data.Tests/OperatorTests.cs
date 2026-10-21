@@ -31,6 +31,11 @@ public sealed class OpsFixture : IAsyncLifetime
         CREATE TRIGGER audited_statement AFTER UPDATE ON audited FOR EACH STATEMENT EXECUTE FUNCTION audit_statement();
         CREATE TABLE ruled (id bigint PRIMARY KEY, n int NOT NULL);
         CREATE RULE ruled_log AS ON UPDATE TO ruled DO ALSO INSERT INTO audit_log (kind, id, n) VALUES ('rule', NEW.id, NEW.n);
+        CREATE SEQUENCE once_seq;
+        CREATE FUNCTION fail_once() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN IF nextval('once_seq') = 1 THEN RAISE EXCEPTION 'a serialization failure, once' USING ERRCODE = '40001'; END IF; RETURN true; END $$;
+        CREATE TABLE parted (id bigint NOT NULL, name text NOT NULL, PRIMARY KEY (id)) PARTITION BY RANGE (id);
+        CREATE TABLE parted_1 PARTITION OF parted FOR VALUES FROM (0) TO (1000);
+        CREATE UNIQUE INDEX parted_1_name ON parted_1 (name);
         """;
 
     /// <summary>

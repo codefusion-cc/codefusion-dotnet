@@ -16,6 +16,12 @@ public sealed class PgCounters
     public long Groups, Grouped, GroupMax, Reruns, Refused;
     /// <summary>Writer: writes that ran merged with others of their statement into one (keyed updates).</summary>
     public long Merged;
+    /// <summary>Writer: transactions committed (a group commit, a write alone, a fallback's savepoint round).</summary>
+    public long Commits;
+    /// <summary>Writer: times a keyed update's statement stopped merging for a while (<see cref="PgWriter.UnmergedFor"/>):
+    /// its table refused merged updates (a trigger, a rule, a unique index on a column it sets, partitions), or a merged
+    /// run failed with no write at fault.</summary>
+    public long Unmerged;
     /// <summary>Reader: groups sent while an earlier one on the same connection was still being answered.</summary>
     public long Pipelined;
     /// <summary>Commands whose statements run alone (<see cref="PgStatement.RunsAlone"/>), on the loops' own connections

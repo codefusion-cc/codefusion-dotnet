@@ -54,6 +54,11 @@ public sealed class PgStatement
     internal uint[]? ElementTypes;
     /// <summary>On a <see cref="Batch"/>: which parameter is the key (an int or a bigint).</summary>
     internal int KeyParameter;
+    /// <summary>On a <see cref="Batch"/>: the check of its table, run before it (see <see cref="Postgres.KeyedUpdate"/>).</summary>
+    internal PgStatement? Check;
+    /// <summary>A keyed update's statement: not merged until then (a <see cref="System.Diagnostics.Stopwatch"/>
+    /// timestamp), after its table refused merging or a merged run failed with no write at fault.</summary>
+    internal long UnmergedUntil;
 
     /// <summary>
     /// Commands of this statement run alone: on a connection of their own, each in a transaction of its own, never in

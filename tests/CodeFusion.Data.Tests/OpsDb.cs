@@ -90,6 +90,14 @@ public sealed class Ruled
     public int N { get; init; }
 }
 
+/// <summary>A partitioned table whose one partition has a unique index of its own.</summary>
+[Table("parted")]
+public sealed class Parted
+{
+    public long Id { get; init; }
+    public Utf8 Name { get; init; }
+}
+
 /// <summary>A table of another schema, whose name the search path's schema has too.</summary>
 [Table("items", Schema = "cfdata_ops_tenant")]
 public sealed class TenantItem
@@ -195,6 +203,7 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Table<Counter> Counters => Table<Counter>();
     public Table<Audited> Audits => Table<Audited>();
     public Table<Ruled> Ruled => Table<Ruled>();
+    public Table<Parted> Parts => Table<Parted>();
 
     // ---------- Where ----------
 
@@ -383,6 +392,11 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Write SetAudited(long id, int n) => Audits.Where(a => a.Id == id).Update(a => new Audited { N = n });
 
     public Write SetRuled(long id, int n) => Ruled.Where(r => r.Id == id).Update(r => new Ruled { N = n });
+
+    public Write SetPartedName(long id, Utf8 name) => Parts.Where(x => x.Id == id).Update(x => new Parted { Name = name });
+
+    /// <summary>Fails with a serialization failure (40001) the first time once_seq is used after its restart.</summary>
+    public Write SetCountFailingOnce(long id, int n) => Sql($"UPDATE counters SET n = {n} WHERE id = {id} AND fail_once()");
 
     // not one row by its key with parameters only: never merged
     public Write MoveCounter(long id, long to) => Counters.Where(c => c.Id == id).Update(c => new Counter { Id = to });

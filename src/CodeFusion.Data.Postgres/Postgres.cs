@@ -40,12 +40,13 @@ public readonly struct Postgres : IDataProvider<Postgres, PgStatement, PgCommand
     /// The update's statement, and the one that runs a group commit's run of them as one: its parameters as arrays,
     /// unnested, one row each. A run never holds two writes to one key (the writer starts another run there), so each
     /// write updates its row once and is checked as running the updates one by one would. Only an integer key is
-    /// merged, whose values are equal exactly when their bytes are. That holds only while each row's update sees nothing
-    /// of the others', so the merged statement first checks the table: a trigger or rule (which would see one
-    /// statement, or the rows in another order) or a unique or exclusion index on a column it sets (which would judge
-    /// the rows against each other at once, not one write after another) makes it fail with "CodeFusion: no merged
-    /// updates on" and the table, before it writes anything, and its statement runs unmerged from then on. An update
-    /// that sets its own key isn't merged: the rows it finds would depend on the writes before it.
+    /// merged, whose values are equal exactly when their bytes are. That holds only while each row's update sees
+    /// nothing of the others', so a check of the table runs first, as a statement of its own in the same transaction:
+    /// a trigger or rule (which would see one statement, or the rows in another order), partitions or inheritance
+    /// children (whose own triggers and indexes it doesn't see), or a unique or exclusion index on a column the update
+    /// sets (which would judge the rows against each other at once, not one write after another) make it fail with
+    /// "CodeFusion: no merged updates on" and the table, and the update never runs. An update that sets its own key
+    /// isn't merged: the rows it finds would depend on the writes before it.
     /// </summary>
     public static PgStatement KeyedUpdate(string sql, string table, string key, int keyParameter, string[] columns, int[] columnParameters,
         params ReadOnlySpan<DataType> parameters)
@@ -67,7 +68,7 @@ public readonly struct Postgres : IDataProvider<Postgres, PgStatement, PgCommand
             elements[i] = (uint)TypeOf(parameters[i]);
             arrays[i] = ArrayOf(parameters[i]);
         }
-        var b = new System.Text.StringBuilder("WITH w AS (UPDATE ").Append(table).Append(" AS t0 SET ");
+        var b = new System.Text.StringBuilder("UPDATE ").Append(table).Append(" AS t0 SET ");
         for (int c = 0; c < columns.Length; c++)
         {
             if ((uint)columnParameters[c] >= (uint)n) return statement;
@@ -78,16 +79,16 @@ public readonly struct Postgres : IDataProvider<Postgres, PgStatement, PgCommand
         b.Append(") AS v(");
         for (int i = 0; i < n; i++) b.Append(i == 0 ? "p" : ", p").Append(i + 1);
         b.Append(") WHERE t0.").Append(key).Append(" = v.p").Append(keyParameter + 1);
-        // The check is the outer query, so it runs whatever the update's plan; the update, a data-modifying WITH,
-        // runs after it, always and once
-        b.Append(") SELECT 1 FROM pg_class c WHERE c.oid = '").Append(table.Replace("'", "''", StringComparison.Ordinal)).Append("'::regclass AND CASE WHEN c.relhasrules")
+        // The table's check: a statement of its own, run first in the same transaction, so a refusal skips the update
+        var g = new System.Text.StringBuilder("SELECT 1 FROM pg_class c WHERE c.oid = '").Append(table.Replace("'", "''", StringComparison.Ordinal))
+            .Append("'::regclass AND CASE WHEN c.relhasrules OR c.relkind = 'p' OR c.relhassubclass")
             .Append(" OR EXISTS (SELECT 1 FROM pg_trigger tr WHERE tr.tgrelid = c.oid AND NOT tr.tgisinternal)")
             .Append(" OR EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND (i.indisunique OR i.indisexclusion)")
             .Append(" AND (i.indexprs IS NOT NULL OR i.indpred IS NOT NULL OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid")
             .Append(" AND a.attnum = ANY (i.indkey) AND a.attname IN (");
-        for (int c = 0; c < columns.Length; c++) b.Append(c == 0 ? "'" : ", '").Append(Unquoted(columns[c]).Replace("'", "''", StringComparison.Ordinal)).Append('\'');
-        b.Append(")))) THEN ('").Append(NotMergedMarker).Append(" ' || c.relname)::int ELSE 0 END = 1");
-        statement.Batch = new PgStatement(b.ToString(), arrays) { ElementTypes = elements, KeyParameter = keyParameter };
+        for (int c = 0; c < columns.Length; c++) g.Append(c == 0 ? "'" : ", '").Append(Unquoted(columns[c]).Replace("'", "''", StringComparison.Ordinal)).Append('\'');
+        g.Append(")))) THEN ('").Append(NotMergedMarker).Append(" ' || c.relname)::int ELSE 0 END = 1");
+        statement.Batch = new PgStatement(b.ToString(), arrays) { ElementTypes = elements, KeyParameter = keyParameter, Check = new PgStatement(g.ToString()) };
         return statement;
     }
 

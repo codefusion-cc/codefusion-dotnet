@@ -31,7 +31,9 @@ public sealed class KeyedUpdateTests(OpsFixture fixture) : IAsyncLifetime
             "SELECT i, 'keyed-' || i, NULL, 1, NULL, true, '2000-01-01T00:00:00Z' FROM generate_series(500, 799) AS g(i); " +
             "DELETE FROM counters; INSERT INTO counters (id, n) SELECT i, 0 FROM generate_series(700, 719) AS g(i); " +
             "DELETE FROM audited; INSERT INTO audited SELECT i, 0 FROM generate_series(1, 5) AS g(i); " +
-            "DELETE FROM ruled; INSERT INTO ruled SELECT i, 0 FROM generate_series(1, 5) AS g(i); TRUNCATE audit_log");
+            "DELETE FROM ruled; INSERT INTO ruled SELECT i, 0 FROM generate_series(1, 5) AS g(i); TRUNCATE audit_log; " +
+            "DELETE FROM counters WHERE id BETWEEN 800 AND 899; INSERT INTO counters (id, n) SELECT i, 0 FROM generate_series(800, 899) AS g(i); " +
+            "DELETE FROM parted; INSERT INTO parted VALUES (1, 'part-1'), (2, 'part-2'); ALTER SEQUENCE once_seq RESTART");
     }
 
     public ValueTask DisposeAsync() => default;
@@ -256,7 +258,8 @@ public sealed class KeyedUpdateTests(OpsFixture fixture) : IAsyncLifetime
             // the merged attempt waits out the lock once, the writes one by one once more: not again for the write
             // alone, nor once per write before it
             Assert.Equal(1, counters.Reruns - reruns);
-            Assert.True(took < TimeSpan.FromMilliseconds(150 + 2 * 300 + 250), $"{took.TotalMilliseconds:F0} ms");
+            // two lock timeouts (600 ms) and the pause: the old fallback took about 3 s; slack for a busy runner
+            Assert.True(took < TimeSpan.FromMilliseconds(1500), $"{took.TotalMilliseconds:F0} ms");
             for (long id = 551; id < 560; id++) Assert.Equal(40, await Age(id));
             await tx.RollbackAsync();
             Assert.Equal(1, await Age(560));
@@ -267,11 +270,117 @@ public sealed class KeyedUpdateTests(OpsFixture fixture) : IAsyncLifetime
         }
     }
 
+    /// <summary>A writer of its own, on a new connection: nothing is parsed there yet.</summary>
+    static PgDataSource FreshSource(TimeSpan? lockTimeout = null)
+    {
+        TestDb.Require();
+        var settings = PgSettings.Parse(TestDb.ConnectionString!).Set("search_path", "cfdata_ops_w");
+        return new PostgresDatabase(settings) { WriterLockTimeout = lockTimeout ?? TimeSpan.FromSeconds(2) }.Open(1, 1);
+    }
+
+    static readonly PgRowHandler NoRows = static (in PgRow r, object? _) => 0;
+
+    [Fact]
+    public async Task AWriteAfterAFailedMultiStatementWriteInTheFallbackStillRuns()
+    {
+        var source = FreshSource();
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            // statements this connection never parsed: the second's Parse goes out with the first write that uses it
+            var insert = new PgStatement("INSERT INTO counters (id, n) VALUES ($1, 0)", PgType.Int8);
+            var touch = new PgStatement("UPDATE counters SET note = 'touched' WHERE id = $1", PgType.Int8);
+            var pause = Run(db.Pause());
+            await Task.Delay(30);
+            var bad = Run(db.SetCount(702, -1));
+            var good = Run(db.SetCount(703, 1));
+            var both = source.Writer.Command(insert).Int8(700).Then(touch).Int8(704).Run(NoRows, null).AsTask(); // 700 exists
+            var after = source.Writer.Command(touch).Int8(705).Run(NoRows, null).AsTask();
+            Assert.True((await pause).IsOk);
+            Assert.Equal((DataStatus.Failed, "23514"), ((await bad).Status, (await bad).NativeCode));
+            Assert.Equal(DataStatus.Ok, (await good).Status);
+            Assert.Equal(PgErrorCodes.UniqueViolation, (await both).SqlState);
+            var last = await after;
+            Assert.True(last.Status == PgStatus.Ok, $"{last.Status} {last.SqlState} {last.Exception?.Message}");
+            Assert.Equal("touched", await Scalar("SELECT note FROM counters WHERE id = 705"));
+            Assert.Equal("", await Scalar("SELECT note FROM counters WHERE id = 704"));
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
+    }
+
+    [Fact]
+    public async Task AFaultyWriteInAMergedRunCostsAFewCommitsNotOnePerWrite()
+    {
+        var counters = fixture.Writes.Writer.Counters;
+        long merged = Merged, commits = counters.Commits;
+        var results = await Group(Enumerable.Range(0, 100).Select(i => (Func<OpsDb, Write>)(db => db.SetCount(800 + i, i == 60 ? -1 : 1000 + i))).ToArray());
+        Assert.True(Merged - merged >= 100, "the run wasn't merged first");
+        for (int i = 0; i < 100; i++) Assert.Equal(i == 60 ? DataStatus.Failed : DataStatus.Ok, results[i].Status);
+        Assert.Equal(0, await Count(860));
+        Assert.Equal(1099, await Count(899));
+        // the pause's group and the group's one transaction: one commit per write would be a hundred
+        Assert.Equal(2, counters.Commits - commits);
+    }
+
+    [Fact]
+    public async Task AWriteRetriedAfterASerializationFailureStillComesBeforeTheWritesQueuedAfterIt()
+    {
+        // the merged run fails (a CHECK), so the group goes again unmerged; there the next write fails once with
+        // 40001 and must run again before the last one, which writes the same row
+        var results = await Group(db => db.SetCount(706, -1), db => db.SetCount(707, 1), db => db.SetCountFailingOnce(708, 5), db => db.SetCount(708, 9));
+        Assert.Equal([DataStatus.Failed, DataStatus.Ok, DataStatus.Ok, DataStatus.Ok], results.Select(r => r.Status));
+        Assert.Equal(9, await Count(708));
+    }
+
+    [Fact]
+    public async Task AStatementThatStoppedMergingIsTriedMergedAgainLater()
+    {
+        var ttl = PgWriter.UnmergedFor;
+        PgWriter.UnmergedFor = TimeSpan.FromMilliseconds(300);
+        await using var admin = TestDb.Admin("cfdata_ops_w");
+        try
+        {
+            await admin.Execute("CREATE TRIGGER counters_audit BEFORE UPDATE ON counters FOR EACH ROW EXECUTE FUNCTION audit_row()");
+            long unmerged = fixture.Writes.Writer.Counters.Unmerged;
+            var results = await Group(db => db.SetCount(712, 1), db => db.SetCount(713, 2));
+            Assert.All(results, r => Assert.True(r.IsOk));
+            Assert.Equal(1, fixture.Writes.Writer.Counters.Unmerged - unmerged);
+            await admin.Execute("DROP TRIGGER counters_audit ON counters");
+            await Task.Delay(400);
+            long merged = Merged;
+            results = await Group(db => db.SetCount(714, 3), db => db.SetCount(715, 4));
+            Assert.All(results, r => Assert.True(r.IsOk));
+            Assert.Equal(2, Merged - merged);
+            Assert.Equal((3, 4), (await Count(714), await Count(715)));
+        }
+        finally
+        {
+            await admin.Execute("DROP TRIGGER IF EXISTS counters_audit ON counters");
+            PgWriter.UnmergedFor = ttl;
+        }
+    }
+
+    [Fact]
+    public async Task APartitionedTableIsNeverMerged()
+    {
+        // a unique index on one partition only: merged, the outcome would depend on the order Postgres updates rows
+        var results = await Group(db => db.SetPartedName(2, U("part-1")), db => db.SetPartedName(1, U("free-1")));
+        Assert.Equal([DataStatus.UniqueViolation, DataStatus.Ok], results.Select(r => r.Status));
+        long before = Merged;
+        results = await Group(db => db.SetPartedName(1, U("again-1")), db => db.SetPartedName(2, U("again-2")));
+        Assert.All(results, r => Assert.Equal(DataStatus.Ok, r.Status));
+        Assert.Equal(0, Merged - before);
+    }
+
     [Fact]
     public async Task AnUpdateOfItsOwnKeyIsNeverMergedAndLaterWritesFindTheMovedRow()
     {
         long before = Merged;
-        // in order: 715 becomes 716 (free: 716 moved first), then the row now at 716... is the one the second finds
+        // in order: row 715 moves to 716 (deleted first, so free), then the second write finds it at 716 and moves it on
         await using (var admin = TestDb.Admin("cfdata_ops_w")) await admin.Execute("DELETE FROM counters WHERE id IN (716, 717)");
         var results = await Group(db => db.MoveCounter(715, 716), db => db.MoveCounter(716, 717));
         Assert.All(results, r => Assert.True(r.IsOk));
@@ -315,9 +424,11 @@ public sealed class KeyedUpdateTests(OpsFixture fixture) : IAsyncLifetime
     [Fact]
     public async Task ATableWithTriggersSeesEveryWriteAsItsOwnStatementInOrder()
     {
+        long unmerged = fixture.Writes.Writer.Counters.Unmerged;
         var results = await Group(db => db.SetAudited(3, 1), db => db.SetAudited(1, 2), db => db.SetAudited(3, 3));
         Assert.All(results, r => Assert.True(r.IsOk));
         Assert.Equal("row:3=1 statement row:1=2 statement row:3=3 statement", await Log());
+        Assert.Equal(1, fixture.Writes.Writer.Counters.Unmerged - unmerged); // counted, so an app can see it
         // and from then on it isn't tried merged at all
         long before = Merged;
         results = await Group(db => db.SetAudited(2, 4), db => db.SetAudited(4, 5));
@@ -369,15 +480,16 @@ public sealed class KeyedUpdateTests(OpsFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
-    public void TheMergedStatementUnnestsTheParametersAndKeepsTheLastPerKey()
+    public void TheMergedStatementUnnestsTheParametersAndItsTableIsCheckedFirst()
     {
         var s = PgProvider.KeyedUpdate("UPDATE people SET age = $1 WHERE id = $2", "people", "id", 1, ["age"], [0], DataType.Int32, DataType.Int64);
-        Assert.Equal("WITH w AS (UPDATE people AS t0 SET age = v.p1 FROM unnest($1, $2) AS v(p1, p2) WHERE t0.id = v.p2) " +
-            "SELECT 1 FROM pg_class c WHERE c.oid = 'people'::regclass AND CASE WHEN c.relhasrules OR EXISTS (SELECT 1 FROM pg_trigger tr WHERE tr.tgrelid = c.oid AND NOT tr.tgisinternal) " +
+        Assert.Equal("UPDATE people AS t0 SET age = v.p1 FROM unnest($1, $2) AS v(p1, p2) WHERE t0.id = v.p2", s.Batch!.Sql);
+        Assert.Equal("SELECT 1 FROM pg_class c WHERE c.oid = 'people'::regclass AND CASE WHEN c.relhasrules OR c.relkind = 'p' OR c.relhassubclass " +
+            "OR EXISTS (SELECT 1 FROM pg_trigger tr WHERE tr.tgrelid = c.oid AND NOT tr.tgisinternal) " +
             "OR EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND (i.indisunique OR i.indisexclusion) AND (i.indexprs IS NOT NULL OR i.indpred IS NOT NULL " +
             "OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum = ANY (i.indkey) AND a.attname IN ('age')))) " +
-            "THEN ('CodeFusion: no merged updates on ' || c.relname)::int ELSE 0 END = 1", s.Batch!.Sql);
-        Assert.Contains("a.attname IN ('Odd \"name', 'it''s')", PgProvider.KeyedUpdate("x", "\"T\"", "id", 2, ["\"Odd \"\"name\"", "\"it's\""], [0, 1], DataType.Int32, DataType.Int32, DataType.Int64).Batch!.Sql);
+            "THEN ('CodeFusion: no merged updates on ' || c.relname)::int ELSE 0 END = 1", s.Batch.Check!.Sql);
+        Assert.Contains("a.attname IN ('Odd \"name', 'it''s')", PgProvider.KeyedUpdate("x", "\"T\"", "id", 2, ["\"Odd \"\"name\"", "\"it's\""], [0, 1], DataType.Int32, DataType.Int32, DataType.Int64).Batch!.Check!.Sql);
         Assert.Equal([23u, 20u], s.Batch.ElementTypes!);
         Assert.Equal("UPDATE people SET age = $1 WHERE id = $2", s.Sql);
         // shapes it can't run as one: no batch, the plain statement
