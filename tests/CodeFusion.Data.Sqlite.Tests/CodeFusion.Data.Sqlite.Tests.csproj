@@ -28,6 +28,7 @@
     <Compile Include="../Shared/Conduit/ConduitQueries.cs" Link="Conduit/ConduitQueries.cs" />
     <!-- The operator tests' schema and LINQ queries, shared with the Postgres tests. -->
     <Compile Include="../Shared/Ops/OpsQueries.cs" Link="Ops/OpsQueries.cs" />
+    <Compile Include="../Shared/Ops/ConditionalWriteTests.cs" Link="Ops/ConditionalWriteTests.cs" />
     <!-- The execution tests and their oracle, as they are: the same cases and expected replies as on Postgres. -->
     <Compile Include="../CodeFusion.Data.Tests/ExecutionTests.cs" Link="Shared/ExecutionTests.cs" />
     <Compile Include="../CodeFusion.Data.Tests/SeedModel.cs" Link="Shared/SeedModel.cs" />

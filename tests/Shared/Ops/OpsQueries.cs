@@ -356,6 +356,10 @@ public sealed partial class OpsDb
 
     public Write DeactivateTeam(long team) => People.Where(p => p.TeamId == team).UpdateIf(p => p.Active, p => new Person { Active = false });
 
+    // a SET that changes what the condition reads: a written row must not come back refused too
+    public Write<Name> DeactivateTeamReturning(long team) =>
+        People.Where(p => p.TeamId == team).UpdateIf(p => p.Active, p => new Person { Active = false }).Select(p => Name.Of(p));
+
     public One<long> DeleteAPetIf(long owner, int legs) => Pets.Where(x => x.OwnerId == owner).DeleteIf(x => x.Legs == legs).Select(x => x.Id).One();
 
     public Write<Name> NickTeamIfActive(long team, Utf8 nick) =>

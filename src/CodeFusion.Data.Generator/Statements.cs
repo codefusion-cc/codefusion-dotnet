@@ -751,6 +751,12 @@ sealed partial class Translator
         var key = KeyOf(e, at);
         var target = Target(e);
         bool conditional = w.Name == "UpdateIf";
+        if (conditional && !D.WritableCtes)
+        {
+            // the SET is rendered in the write's own statement, after the refused rows'
+            ConditionalApart(e, wheres, w, select ? rest[0] : null, () => Set(w.Lambda(1), w.Env, target, at), condition, root, at);
+            return;
+        }
         string set = Set(w.Lambda(conditional ? 1 : 0), w.Env, target, at);
         if (!conditional)
         {
@@ -763,11 +769,6 @@ sealed partial class Translator
                 return;
             }
             Add(ReturningOrCte(b.ToString(), rest[0], e, root), condition);
-            return;
-        }
-        if (!D.WritableCtes)
-        {
-            ConditionalApart(e, wheres, w, select ? rest[0] : null, set, condition, root, at);
             return;
         }
         // UpdateIf: find the rows, locked, update each whose condition holds; each row comes back as updated, or
@@ -808,49 +809,64 @@ sealed partial class Translator
     }
 
     /// <summary>
-    /// UpdateIf and DeleteIf where a CTE can't write (SQLite): the write of the rows found whose condition holds,
-    /// returning them (navigations as lookups by the written row's foreign keys) with their key; then, when the method
-    /// reads rows, the rows found and refused with a NULL key, as Postgres's one statement gives them back, written rows
-    /// first. An update's refused rows are NULL throughout; a delete's are the rows as found. The provider hands the
-    /// reader every row of both statements, in order. No row lock: the writer's transaction is the only one, so the
-    /// condition sees the rows as the write does.
+    /// UpdateIf and DeleteIf where a CTE can't write (SQLite): when the method reads rows, first the rows found whose
+    /// condition doesn't hold, refused, with a NULL key (an update's NULL throughout, a delete's as found), read before
+    /// the write so a SET that changes what the condition reads doesn't make a written row look refused too; then the
+    /// write of the rows found whose condition holds, returning them (navigations as lookups by the written row's foreign
+    /// keys) with their key, smallest first. The provider hands the reader every row of both statements, in order, and
+    /// the reader takes the first written one, else a refused one. No row lock: the writer's transaction is the only one,
+    /// so the condition sees the rows as the write does.
     /// </summary>
-    void ConditionalApart(EntityInfo e, List<Step> wheres, Step w, Step? select, string? set, Guard? condition, bool root, Location at)
+    void ConditionalApart(EntityInfo e, List<Step> wheres, Step w, Step? select, Func<string>? set, Guard? condition, bool root, Location at)
     {
         var key = KeyOf(e, at);
         string k = D.Quote(key.Name);
+        ITypeSymbol? type = null;
+        int shown = 0;
+        if (select is not null)
+        {
+            type = root ? _q.Row! : select.Lambda(0).Symbol.ReturnType;
+            var refused = Find(e, wheres, w, out var refusedRow);
+            string cond = Condition(Apply(w.Lambda(0), w.Env, new RowValue(refusedRow)), at);
+            refused.Where.Add($"NOT COALESCE({Sql.Group(cond)}, {D.False})");
+            var asFound = new List<string>();
+            if (set is null)
+            {
+                Leaves(Apply(select.Lambda(0), select.Env, new RowValue(refusedRow)), type, at, asFound);
+                foreach (var c in asFound) refused.Columns.Add((c, null));
+            }
+            else
+            {
+                // only how many columns the write returns: counted in a statement of its own, so the refused rows,
+                // NULL throughout, join nothing and take no parameter of the select's
+                var (keptParams, keptAliases) = (Params, Aliases);
+                StartStatement();
+                Leaves(Apply(select.Lambda(0), select.Env, new RowValue(Target(e))), type, at, asFound);
+                (Params, Aliases) = (keptParams, keptAliases);
+                foreach (var _ in asFound) refused.Columns.Add(("NULL", null));
+            }
+            shown = asFound.Count;
+            refused.Columns.Add(("NULL", null));
+            refused.OrderBy.Add((Column(refusedRow, key, at), false));
+            Add(refused.Render(D), condition);
+            StartStatement();
+        }
+        // the SET first, as in every update: its parameters come before the condition's
+        string? sets = set?.Invoke();
         var find = Find(e, wheres, w, out var findRow);
         find.Where.Add(Condition(Apply(w.Lambda(0), w.Env, new RowValue(findRow)), at));
         find.Columns.Add((Column(findRow, key, at), null));
-        string write = (set is null ? $"DELETE FROM {TableSql(e)}" : $"UPDATE {TableSql(e)} SET {set}") + $" WHERE {k} IN ({find.Render(D)})";
+        string write = (sets is null ? $"DELETE FROM {TableSql(e)}" : $"UPDATE {TableSql(e)} SET {sets}") + $" WHERE {k} IN ({find.Render(D)})";
         if (select is null)
         {
             Add(write, condition);
             return;
         }
-        var type = root ? _q.Row! : select.Lambda(0).Symbol.ReturnType;
         var target = Target(e);
         var cols = new List<string>();
-        Leaves(Apply(select.Lambda(0), select.Env, new RowValue(target)), type, at, cols);
-        int shown = cols.Count;
+        Leaves(Apply(select.Lambda(0), select.Env, new RowValue(target)), type!, at, cols);
         cols.Add(Column(target, key, at));
         Add(write + Returning(cols), condition);
-
-        StartStatement();
-        var refused = Find(e, wheres, w, out var refusedRow);
-        string cond = Condition(Apply(w.Lambda(0), w.Env, new RowValue(refusedRow)), at);
-        refused.Where.Add($"NOT COALESCE({Sql.Group(cond)}, {D.False})");
-        if (set is null)
-        {
-            var asFound = new List<string>();
-            Leaves(Apply(select.Lambda(0), select.Env, new RowValue(refusedRow)), type, at, asFound);
-            foreach (var c in asFound) refused.Columns.Add((c, null));
-        }
-        else
-            for (int i = 0; i < shown; i++) refused.Columns.Add(("NULL", null));
-        refused.Columns.Add(("NULL", null));
-        refused.OrderBy.Add((Column(refusedRow, key, at), false));
-        Add(refused.Render(D), condition);
         if (root)
         {
             _q.Marker = Marker.Written;

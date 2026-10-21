@@ -450,10 +450,11 @@ public sealed class OperatorTests(OpsFixture fixture)
         await Json(db.Rename(999, U("x")));
         Assert.Equal(404, _response.Status);
 
-        // the write with its rows, then the rows found but refused: one writer, so nothing changes them in between
+        // the rows found but refused, read before the write, then the write with its rows: one writer, so nothing
+        // changes them in between
+        Assert.Equal("SELECT NULL, NULL, NULL FROM people p WHERE p.id = ?1 AND NOT COALESCE(p.active, false) ORDER BY p.id", Q.RenameIfActive);
         Assert.Equal("UPDATE people SET name = ?1 WHERE id IN (SELECT p.id FROM people p WHERE p.id = ?2 AND p.active) RETURNING name, (SELECT t.name FROM teams t WHERE t.id = people.team_id), id",
-            Q.RenameIfActive);
-        Assert.Equal("SELECT NULL, NULL, NULL FROM people p WHERE p.id = ?1 AND NOT COALESCE(p.active, false) ORDER BY p.id", Q.RenameIfActive_2);
+            Q.RenameIfActive_2);
         Assert.Equal("""{"name":"u201b","team":"blue"}""", await Json(db.RenameIfActive(10201, U("u201b"))));
         Assert.Equal("""{"name":"u203b","team":null}""", await Json(db.RenameIfActive(10203, U("u203b"))));
         await Json(db.RenameIfActive(10202, U("refused")));
@@ -473,8 +474,8 @@ public sealed class OperatorTests(OpsFixture fixture)
     {
         var db = Db(write: true);
         await Json(db.AddPet(60, 3, U("goldie")));
-        Assert.Equal("DELETE FROM pets WHERE id IN (SELECT x.id FROM pets x WHERE x.id = ?1 AND x.legs = ?2) RETURNING owner_id, id", Q.DeletePetIf);
-        Assert.Equal("SELECT x.owner_id, NULL FROM pets x WHERE x.id = ?1 AND NOT COALESCE((x.legs = ?2), false) ORDER BY x.id", Q.DeletePetIf_2);
+        Assert.Equal("SELECT x.owner_id, NULL FROM pets x WHERE x.id = ?1 AND NOT COALESCE((x.legs = ?2), false) ORDER BY x.id", Q.DeletePetIf);
+        Assert.Equal("DELETE FROM pets WHERE id IN (SELECT x.id FROM pets x WHERE x.id = ?1 AND x.legs = ?2) RETURNING owner_id, id", Q.DeletePetIf_2);
         _response.Next();
         var kept = await db.DeletePetIf(60, 2);
         Assert.False(kept.Found);
@@ -687,40 +688,14 @@ public sealed class OperatorTests(OpsFixture fixture)
     }
 
     [Fact]
-    public async Task AConditionalWriteOfSeveralRowsWritesEachWhoseConditionHolds()
+    public async Task AConditionalWritesStatementsGiveEachRowFoundOnce()
     {
-        var db = Db(write: true);
-        await Execute("INSERT INTO teams VALUES (3, 'green'); INSERT INTO people (id, name, age, active, born, team_id) VALUES " +
-            "(20311, 'dt311', 50, true, 0, 3), (20312, 'dt312', 50, true, 0, 3), (20313, 'dt313', 50, false, 0, 3), (20321, 'dp321', 50, true, 0, NULL); " +
-            "INSERT INTO pets VALUES (3211, 20321, 'a', 4), (3212, 20321, 'b', 4), (3213, 20321, 'c', 2)");
-        await Json(db.DeactivateTeam(3));
-        Assert.Equal(204, _response.Status);
-        Assert.Equal("0", Scalar("SELECT count(*) FROM people WHERE team_id = 3 AND active"));
-        await Json(db.DeletePetsIf(20321, 4));
-        Assert.Equal(204, _response.Status);
-        Assert.Equal("3213", Column("SELECT id FROM pets WHERE owner_id = 20321 ORDER BY id"));
-    }
-
-    [Fact]
-    public async Task AConditionalWriteOfSeveralRowsGivesBackTheFirstWrittenOrRefusedWhenNoneWas()
-    {
-        var db = Db(write: true);
-        await Execute("INSERT INTO teams VALUES (4, 'gray'); INSERT INTO people (id, name, age, active, born, team_id) VALUES " +
-            "(30391, 'gt391', 50, false, 0, 4), (30393, 'gt393', 50, true, 0, 4), (30392, 'gt392', 50, true, 0, 4), (30381, 'po381', 50, true, 0, NULL); " +
-            "INSERT INTO pets VALUES (3811, 30381, 'two', 2), (3813, 30381, 'four', 4), (3812, 30381, 'four', 4)");
-        _response.Next();
-        var deleted = await db.DeleteAPetIf(30381, 4);
-        Assert.False(deleted.Refused);
-        Assert.Equal(3812, deleted.Value);
-        Assert.Equal("3811", Column("SELECT id FROM pets WHERE owner_id = 30381 ORDER BY id"));
-        _response.Next();
-        var refused = await db.DeleteAPetIf(30381, 4);
-        Assert.True(refused.Refused);
-        Assert.Equal("""{"id":30392,"text":"gt392"}""", await Json(db.NickTeamIfActive(4, U("n"))));
-        Assert.Equal(200, _response.Status);
-        Assert.Equal("2", Scalar("SELECT count(*) FROM people WHERE team_id = 4 AND nick = 'n'"));
-        await Json(db.NickTeamIfActive(2, U("n")));
-        Assert.Equal(403, _response.Status);
+        // the generated statements in their order, the team bound: rows found and refused, then rows written, each once,
+        // though the SET makes the written rows fail the condition afterwards
+        await Execute("INSERT INTO teams VALUES (75, 'plum'); INSERT INTO people (id, name, age, active, born, team_id) VALUES " +
+            "(7551, 'cw7551', 50, false, 0, 75), (7553, 'cw7553', 50, true, 0, 75), (7552, 'cw7552', 50, true, 0, 75)");
+        var rows = await Written((Q.DeactivateTeamReturning + "; " + Q.DeactivateTeamReturning_2).Replace("?1", "75", StringComparison.Ordinal));
+        Assert.Equal(["-:", "7552:7552", "7553:7553"], rows.Select(r => $"{r[0] ?? "-"}:{r[^1]}"));
     }
 
     [Fact]
@@ -866,14 +841,18 @@ public sealed class OperatorTests(OpsFixture fixture)
         }
     }
 
-    async Task Execute(string sql)
+    Task Execute(string sql) => Execute(fixture, sql);
+
+    internal static async Task Execute(OpsFixture fixture, string sql)
     {
         var r = await Sqlite.Run<Value>(fixture.Writes.Write(Statement(sql)).Hold(), null, default);
         Assert.True(r.IsOk, r.ToString());
     }
 
+    List<string?[]> Rows(string sql) => Rows(fixture, sql);
+
     /// <summary>The rows of <paramref name="sql"/> on the write file, every column as text.</summary>
-    List<string?[]> Rows(string sql)
+    internal static List<string?[]> Rows(OpsFixture fixture, string sql)
     {
         var rows = new List<string?[]>();
         var r = Kv.Done(Sqlite.Run<Dump>(fixture.Writes.Read(Statement(sql)).Hold(), rows, default));
@@ -881,7 +860,35 @@ public sealed class OperatorTests(OpsFixture fixture)
         return rows;
     }
 
+    /// <summary>The rows <paramref name="sql"/>'s statements give back as a write, in order, every column as text.</summary>
+    async Task<List<string?[]>> Written(string sql)
+    {
+        var rows = new List<string?[]>();
+        var r = await Sqlite.Run<Dump>(fixture.Writes.Write(Statement(sql)).Hold(), rows, default);
+        Assert.True(r.IsOk, r.ToString());
+        Assert.Equal(rows.Count, r.Rows);
+        return rows;
+    }
+
     string? Scalar(string sql) => Assert.Single(Rows(sql))[0];
 
     string Column(string sql) => string.Join(",", Rows(sql).Select(r => r[0]));
+}
+
+/// <summary>The shared conditional-write tests on SQLite.</summary>
+[Collection(nameof(OpsTests))]
+public sealed class SqliteConditionalWriteTests(OpsFixture fixture) : ConditionalWriteTests
+{
+    protected override OpsDb Writes()
+    {
+        var db = fixture.Writes.CreateContext<OpsDb>();
+        db.Bind(Response);
+        return db;
+    }
+
+    protected override Task Execute(string sql) => OperatorTests.Execute(fixture, sql);
+
+    protected override Task<string> Column(string sql) => Task.FromResult(string.Join(",", OperatorTests.Rows(fixture, sql).Select(r => r[0])));
+
+    protected override string Now => "0";
 }
