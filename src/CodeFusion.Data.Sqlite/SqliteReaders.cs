@@ -430,8 +430,8 @@ internal sealed class SqliteReaders : IDisposable
     public DataResult Run<TReader>(SqliteJob job, object? state, CancellationToken aborted) where TReader : IRowReader
     {
         if (aborted.IsCancellationRequested) return DataResult.Of(DataStatus.Canceled);
-        // the thread whose event-loop batch holds the connection reads on it, between the batch's transactions (one
-        // that is open takes the read in, SqliteWriter.ReadInBatch)
+        // the thread whose event-loop batch holds the connection reads on it: between the batch's transactions, or in the
+        // open one when the batch wrote none of the tables it reads (else the batch takes the read in, ReadInBatch)
         bool own = _shared && Volatile.Read(ref _owner) == Environment.CurrentManagedThreadId;
         int i = own ? 0 : Take();
         if (i < 0) return DataResult.Of(DataStatus.Stopped);

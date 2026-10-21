@@ -58,7 +58,7 @@ public readonly struct Sqlite : IDataProvider<Sqlite, SqliteStatement, SqliteCom
         var job = Claim(command);
         if (command.Owner is SqliteReaders readers)
         {
-            if (readers.Writer is { } batches && batches.HoldsOpenBatch) return batches.ReadInBatch<TReader>(job, state, aborted);
+            if (readers.Writer is { } batches && batches.ReadJoinsBatch(job)) return batches.ReadInBatch<TReader>(job, state, aborted);
             try
             {
                 return new ValueTask<DataResult>(readers.Run<TReader>(job, state, aborted));

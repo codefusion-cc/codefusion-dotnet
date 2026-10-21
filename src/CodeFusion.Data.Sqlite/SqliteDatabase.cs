@@ -100,9 +100,10 @@ public sealed class SqliteDatabase
     /// wake-up commits together when the server ends the loop's batch (<see cref="SqliteDataSource.EndEventLoopBatch"/>,
     /// which <see cref="SqliteServices.AddDatabase{TContext}"/> registers). A write completes after that COMMIT, on the
     /// loop, before the batch's answers are sent. Each write has a savepoint, so one that fails fails alone. A read on
-    /// the loop while the batch holds writes not committed yet runs inside its transaction, sees them, and completes with
-    /// them: after the one COMMIT, or failed with it. Other threads wait for the batch. Writes off a loop go to the writer
-    /// thread as before. Off by default.
+    /// the loop of a table the batch has written and not committed yet runs inside its transaction, sees the writes, and
+    /// completes with them: after the one COMMIT, or failed with it. A read of tables the batch hasn't written answers at
+    /// once (the tables are what SQLite reports as it prepares each statement, triggers and foreign-key actions
+    /// included). Other threads wait for the batch. Writes off a loop go to the writer thread as before. Off by default.
     /// </summary>
     public bool EventLoopBatches { get; init; }
 

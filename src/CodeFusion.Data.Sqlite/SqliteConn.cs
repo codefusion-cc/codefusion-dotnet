@@ -218,11 +218,72 @@ internal sealed unsafe class SqliteConn : IDisposable
     /// same unit); null for one. Valid once <see cref="Statement"/> prepared it.</summary>
     public nint[]? More(SqliteStatement s) => (uint)s.Id < (uint)_more.Length ? _more[s.Id] : null;
 
+    // ---------- the tables each statement reads and writes ----------
+    //
+    // What SQLite reports as it prepares a statement (sqlite3_set_authorizer): every table it reads, a count(*) included,
+    // and every table it writes, those its triggers and foreign-key actions write included, and views as their tables.
+    // Kept per statement as a mask over this connection's tables (bit i: the i-th table it met; the 64th and after share
+    // the last bit), so an event-loop batch can tell, without a lookup, whether a read sees a table it wrote.
+
+    ulong[] _reads = new ulong[64], _writes = new ulong[64];
+    readonly Dictionary<string, int> _tableBits = new(StringComparer.OrdinalIgnoreCase);
+    ulong _preparingReads, _preparingWrites;
+    GCHandle _self;
+
+    /// <summary>The tables <paramref name="s"/> reads, prepared now if it wasn't.</summary>
+    public ulong ReadsOf(SqliteStatement s)
+    {
+        _ = Statement(s);
+        return _reads[s.Id];
+    }
+
+    /// <summary>The tables <paramref name="s"/> writes, prepared now if it wasn't.</summary>
+    public ulong WritesOf(SqliteStatement s)
+    {
+        _ = Statement(s);
+        return _writes[s.Id];
+    }
+
+    ulong Bit(byte* name)
+    {
+        string table = Marshal.PtrToStringUTF8((nint)name) ?? "";
+        if (!_tableBits.TryGetValue(table, out int bit))
+        {
+            bit = Math.Min(_tableBits.Count, 63);
+            _tableBits[table] = bit;
+        }
+        return 1UL << bit;
+    }
+
+    [UnmanagedCallersOnly]
+    static int Authorize(nint self, int action, byte* first, byte* second, byte* database, byte* trigger)
+    {
+        var conn = (SqliteConn)GCHandle.FromIntPtr(self).Target!;
+        switch (action)
+        {
+            case Sqlite3.AuthRead:
+                if (first is not null) conn._preparingReads |= conn.Bit(first);
+                break;
+            case Sqlite3.AuthInsert or Sqlite3.AuthUpdate or Sqlite3.AuthDelete:
+                if (first is not null) conn._preparingWrites |= conn.Bit(first);
+                break;
+        }
+        return Sqlite3.Ok;
+    }
+
     nint Prepare(SqliteStatement s)
     {
         if (s.Id >= _statements.Length) Array.Resize(ref _statements, Math.Max(s.Id + 1, _statements.Length * 2));
         if (s.Id >= _more.Length) Array.Resize(ref _more, _statements.Length);
+        if (s.Id >= _reads.Length)
+        {
+            Array.Resize(ref _reads, _statements.Length);
+            Array.Resize(ref _writes, _statements.Length);
+        }
         var pieces = new List<nint>(1);
+        if (!_self.IsAllocated) _self = GCHandle.Alloc(this);
+        _preparingReads = _preparingWrites = 0;
+        _ = Sqlite3.SetAuthorizer(_db, &Authorize, GCHandle.ToIntPtr(_self));
         try
         {
             fixed (byte* sql = s.Utf8)
@@ -248,6 +309,12 @@ internal sealed unsafe class SqliteConn : IDisposable
             foreach (var p in pieces) _ = Sqlite3.Finalize(p);
             throw;
         }
+        finally
+        {
+            _ = Sqlite3.SetAuthorizer(_db, null, 0); // only while preparing: nothing else pays for it
+        }
+        _reads[s.Id] = _preparingReads;
+        _writes[s.Id] = _preparingWrites;
         _statements[s.Id] = pieces[0];
         if (pieces.Count > 1) _more[s.Id] = pieces.GetRange(1, pieces.Count - 1).ToArray();
         return pieces[0];
@@ -332,5 +399,6 @@ internal sealed unsafe class SqliteConn : IDisposable
             if (more is not null)
                 foreach (var s in more) _ = Sqlite3.Finalize(s);
         _ = Sqlite3.Close(db);
+        if (_self.IsAllocated) _self.Free();
     }
 }

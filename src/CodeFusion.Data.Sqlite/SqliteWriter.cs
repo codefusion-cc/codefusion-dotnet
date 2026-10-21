@@ -460,9 +460,41 @@ public sealed unsafe class SqliteWriter
     /// <summary>The batch's transaction is open (BEGIN ran and nothing ended it).</summary>
     bool _batchOpen;
 
-    /// <summary>This thread's event-loop batch holds the connection with its transaction open: writes in it are not
-    /// committed yet, so a read here must run inside it and wait for its COMMIT (<see cref="ReadInBatch"/>).</summary>
-    internal bool HoldsOpenBatch => _options.EventLoopBatches && Volatile.Read(ref _batchThread) == Environment.CurrentManagedThreadId && _batchOpen;
+    /// <summary>The tables the batch's writes since its last commit wrote (<see cref="SqliteConn.WritesOf"/>, triggers and
+    /// foreign-key actions included).</summary>
+    ulong _batchWrote;
+
+    /// <summary>This thread's event-loop batch holds the connection with writes not committed yet in a table
+    /// <paramref name="read"/> reads: the read must run inside it and wait for its COMMIT (<see cref="ReadInBatch"/>).
+    /// A read of tables the batch hasn't written sees only committed rows, and answers at once.</summary>
+    internal bool ReadJoinsBatch(SqliteJob read)
+    {
+        if (!_options.EventLoopBatches || Volatile.Read(ref _batchThread) != Environment.CurrentManagedThreadId || !_batchOpen) return false;
+        ulong reads = 0;
+        try
+        {
+            for (int i = 0; i < read.Count; i++) reads |= _conn.ReadsOf(read.Statements[i]);
+        }
+        catch (Exception e) when (e is SqliteException || e is InvalidOperationException and not JobLifeException)
+        {
+            return false; // it can't be prepared: it fails as any read does, outside the batch
+        }
+        return (reads & _batchWrote) != 0;
+    }
+
+    ulong WritesOf(SqliteJob write)
+    {
+        ulong writes = 0;
+        try
+        {
+            for (int i = 0; i < write.Count; i++) writes |= _conn.WritesOf(write.Statements[i]);
+        }
+        catch (Exception e) when (e is SqliteException || e is InvalidOperationException and not JobLifeException)
+        {
+            return ulong.MaxValue; // it can't be prepared: it fails when it runs, and counts as writing everything till then
+        }
+        return writes;
+    }
 
     /// <summary>
     /// A read on the loop whose batch holds writes not committed yet: it runs now, in the batch's transaction, so it sees
@@ -514,6 +546,7 @@ public sealed unsafe class SqliteWriter
         _batch[_batchCount++] = job;
         try
         {
+            if (!job.BatchedRead) _batchWrote |= WritesOf(job); // before it runs: a failed write still counts
             if (!_batchOpen)
             {
                 int rc = Begin();
@@ -544,6 +577,7 @@ public sealed unsafe class SqliteWriter
     {
         RollbackOpen();
         _batchOpen = false;
+        _batchWrote = 0;
         if (_batchCount > 0 && ReferenceEquals(_batch[_batchCount - 1], thrower)) _batch[--_batchCount] = null;
         var lost = new DataResult(DataStatus.Failed);
         for (int i = _batchCommitted; i < _batchCount; i++)
@@ -590,6 +624,7 @@ public sealed unsafe class SqliteWriter
     {
         if (!_batchOpen) return;
         _batchOpen = false;
+        _batchWrote = 0; // committed or failed, nothing it wrote is waiting any more
         if (Commit() is { } failed)
             for (int i = _batchCommitted; i < _batchCount; i++)
                 if (_batch[i] is { Failed: false } job)

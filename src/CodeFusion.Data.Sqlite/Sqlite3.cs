@@ -89,6 +89,13 @@ internal static unsafe partial class Sqlite3
     [LibraryImport(Lib, EntryPoint = "sqlite3_threadsafe")]
     public static partial int ThreadSafe();
 
+    /// <summary>Calls <paramref name="callback"/> for each table and column a statement uses as it is prepared; null stops it.</summary>
+    [LibraryImport(Lib, EntryPoint = "sqlite3_set_authorizer")]
+    public static partial int SetAuthorizer(nint db, delegate* unmanaged<nint, int, byte*, byte*, byte*, byte*, int> callback, nint userData);
+
+    // the authorizer's actions this provider reads: a table's first argument is its name
+    public const int AuthDelete = 9, AuthInsert = 18, AuthRead = 20, AuthUpdate = 23;
+
     /// <summary>The connection's transaction: none, read or write (<see cref="TxnWrite"/>).</summary>
     [LibraryImport(Lib, EntryPoint = "sqlite3_txn_state"), SuppressGCTransition]
     public static partial int TxnState(nint db, byte* schema);

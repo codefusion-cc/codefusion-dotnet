@@ -166,6 +166,55 @@ public sealed class ProviderAllocationTests : IDisposable
     // ---------- event-loop batches ----------
 
     [Fact(Timeout = 30_000)]
+    public async Task BatchedReadsOfUntouchedTablesAllocateNothingOnceWarm()
+    {
+        Assert.SkipWhen(Debug(), "Debug builds make every async state machine an object: run in Release");
+        var s = _db.Open(_db.Database(exclusive: true, batches: true,
+            more: ["CREATE TABLE other (k TEXT PRIMARY KEY, v INTEGER NOT NULL) WITHOUT ROWID; INSERT INTO other VALUES ('k42', 42)"]));
+        Assert.True((await Kv.WriteMany(s, "k", 100)).IsOk);
+        using var loop = new TestLoop(s);
+        var tasks = new ValueTask<DataResult>[64];
+        int perWakeUp = 16;
+        Action wakeUp = () =>
+        {
+            // a write to kv, then a read of a table the batch hasn't written: answered at once
+            for (int i = 0; i < perWakeUp; i++)
+            {
+                var c = s.Write(Set);
+                c.Text(Key);
+                c.Int64(i);
+                tasks[2 * i] = Sqlite.Run<Value>(c.Hold(), null, default);
+                var r = s.Read(GetOther);
+                r.Text(Key);
+                tasks[2 * i + 1] = Sqlite.Run<Value>(r.Hold(), null, default);
+                if (!tasks[2 * i + 1].IsCompleted) throw new InvalidOperationException("a read of an untouched table waited");
+            }
+        };
+        async Task<long> Measure(int wakeUps, int each)
+        {
+            perWakeUp = each;
+            long before = GC.GetTotalAllocatedBytes(precise: true);
+            for (int n = 0; n < wakeUps; n++)
+            {
+                await loop.WakeUp(wakeUp);
+                for (int i = 0; i < 2 * each; i++)
+                    if (!tasks[i].Result.IsOk) throw new InvalidOperationException("a batched read or write failed");
+            }
+            return GC.GetTotalAllocatedBytes(precise: true) - before;
+        }
+        await Measure(200, 32); // warm
+        long once = long.MaxValue, twice = long.MaxValue;
+        for (int k = 0; k < 3; k++)
+        {
+            once = Math.Min(once, await Measure(500, 16));
+            twice = Math.Min(twice, await Measure(500, 32));
+        }
+        Assert.True(twice - once < 16_000 / 40, $"{once} B for 500 wake-ups of 16 writes and reads, {twice} B of 32");
+    }
+
+    static readonly SqliteStatement GetOther = new("SELECT v FROM other WHERE k = ?1", DataType.Text);
+
+    [Fact(Timeout = 30_000)]
     public async Task BatchedReadsAndWritesAllocateNothingOnceWarm()
     {
         Assert.SkipWhen(Debug(), "Debug builds make every async state machine an object: run in Release");

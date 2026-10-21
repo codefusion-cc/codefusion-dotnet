@@ -113,10 +113,12 @@ together when the server has handled its events. Each write completes after that
 out with the wake-up's others. A write has a savepoint of its own, so one that fails fails alone. `AddDatabase` hands
 the server the batch's end; nothing else to wire. Writes off a loop still go to the writer thread. A batch opened after
 the batch's end ran in that wake-up (by another database's completions, or a handler resumed as answers go out) asks the
-loop for another round, so it still ends in its wake-up. A read on the loop while the batch holds writes not committed
-yet runs inside its transaction and sees them; it completes with the writes, after the one COMMIT, or fails with them.
-So a wake-up commits once, whatever its reads and writes, and no answer goes out with a write its COMMIT then loses. A
-handler that reads and then writes waits for the read, so its write joins the batch the completions open: one more
+loop for another round, so it still ends in its wake-up. A read on the loop of a table the batch has written and not
+committed yet runs inside its transaction and sees the writes; it completes with them, after the one COMMIT, or fails
+with them. A read of tables the batch hasn't written answers at once, from committed rows. What each statement reads and
+writes is what SQLite reports as it prepares it (triggers, foreign-key actions and views included), so raw SQL counts as
+generated SQL does. So a wake-up commits once, and no answer goes out with a write its COMMIT then loses. A handler that
+reads a written table and then writes waits for the read, so its write joins the batch the completions open: one more
 COMMIT for the wake-up, not one per request. While a batch holds the connection, other threads waiting for it park
 instead of spinning.
 

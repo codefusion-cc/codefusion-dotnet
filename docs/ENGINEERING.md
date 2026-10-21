@@ -838,14 +838,14 @@ Postgres 18 with CODEFUSION_TEST_DB and the four CODEFUSION_TEST_PG_* logins set
 
 ## The SQLite provider (tests/CodeFusion.Data.Sqlite.Tests)
 
-205 tests, nothing to set up. 47 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked
+211 tests, nothing to set up. 47 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked
 unchanged: the same Conduit queries, seed and expected replies as on Postgres. 51 are the operator tests ported: each
 query's SQL in SQLite's dialect, checked as text, and the same results on the same seed. 5 are the conditional-write
 tests both providers run (`tests/Shared/Ops/ConditionalWriteTests.cs`). The rest are the provider's own: group commit
 (9), reads and snapshots (8), migrations (4), the one-connection `Exclusive` mode (7), one transaction per event-loop
-wake-up (14, and 1 under HttpServer's real event loop), durability when SQLite rolls back, a statement can't be
+wake-up (14, 5 on which reads join a batch, and 1 under HttpServer's real event loop), durability when SQLite rolls back, a statement can't be
 prepared, a COMMIT fails or the source stops (14), the SQLite build loaded and where from (16 and 4), its keywords (1),
-allocations and spinning (5, in a collection that runs alone), races and faults only Debug hooks make certain (3, alone
+allocations and spinning (6, in a collection that runs alone), races and faults only Debug hooks make certain (3, alone
 too), and crash recovery (14: a child process killed mid-group and after a commit, and a batching event loop killed 0,
 1, 3 or 10 ms into a wake-up or at its first answer, each with `synchronous` NORMAL and FULL). Every test that stops a
 source checks that the writer caught nothing unexpected and, in Debug builds, that every job it rented is back in the
@@ -945,7 +945,7 @@ didn't.
 | # | Finding | Fix | Tests |
 |---|---|---|---|
 | 1 | A loop completed its finished batch from the list the next batch, any loop's, writes into: writes lost, another loop's answered before their COMMIT | The batch's jobs are copied to the loop thread's own list before the connection goes. The writer thread's group list was checked: its busy flag keeps the next group out until its completions ran | `ABatchsCompletionsStayItsOwnWhileAnotherLoopBatches` |
-| 2 | Finding 7's early commit made a COMMIT per read after a write | A read on the loop while the batch holds uncommitted writes runs in its transaction, keeps its rows, and completes after the one COMMIT or fails with it. A handler that reads then writes costs one more COMMIT a wake-up, not one per request | `AWakeUpOfReadsAndWritesCommitsOnce`, `AReadOfAWakeUpWhoseCommitFailsFailsWithIt`, `AReadOnTheLoopSeesItsBatchsWritesAndAnswersAfterTheirCommit`, `BatchedReadsAndWritesAllocateNothingOnceWarm` |
+| 2 | Finding 7's early commit made a COMMIT per read after a write | A read on the loop of a table the batch wrote and hasn't committed runs in its transaction, keeps its rows, and completes after the one COMMIT or fails with it; a read of tables the batch hasn't written answers at once (the tables as SQLite reports them while preparing: triggers, foreign-key actions, views, raw SQL). A handler that reads then writes costs one more COMMIT a wake-up, not one per request | `AWakeUpOfReadsAndWritesCommitsOnce`, `AReadOfAWakeUpWhoseCommitFailsFailsWithIt`, `AReadOnTheLoopSeesItsBatchsWritesAndAnswersAfterTheirCommit`, `BatchedReadsAndWritesAllocateNothingOnceWarm`, the 5 `BatchReadTests`, `BatchedReadsOfUntouchedTablesAllocateNothingOnceWarm` |
 | 3 | Stop hung with writes queued while a loop held a batch; a read could take the close; the WAL count was read after free | After a stop a wait for the connection gives up at the stop's deadline; whoever gives the connection back last closes it; the WAL hook's counters are pinned GC memory | `StopEndsInTimeWhileALoopHoldsABatchAndWritesAreQueued`, `AReadAsTheBatchGivesTheConnectionBackDoesntKeepItOpen` (Debug hooks) |
 | 4 | Packages shared internals with "x or newer" dependencies | Exact `[x.y.z]` dependencies between CodeFusion packages and on the SQLite build (shared build target, `scripts/CheckPackages.cs` in CI); each package but Core checks the CodeFusion versions it loads | `PackageVersionsTests`, `scripts/CheckPackages.cs` |
 | 5 | The lock file broke on an SDK patch and covered less than SECURITY.md said | Version pinned exactly, package hash checked at build, the package's library checked at open for the tested build; SECURITY.md exact | `BuildCheckTests` |
@@ -967,6 +967,7 @@ Proven red (broken on purpose, or the test written before the fix and seen faili
 | no rollback on an exception in a batch (before the fix) | the hooked test: the half-run unit committed |
 | the watchdog's double read (before the fix) | the hooked watchdog test, 3 runs of 3 |
 | no `RequestBatchEnd`, under the real loop | `ABatchOpenedAfterItsEndRanStillEndsInItsWakeUp` |
+| reads joining the batch by table: a trigger's writes, all but a statement's first written table, count(*) reads, or the batch's writes not tracked | `ATriggersTableCountsAsWritten`, `ACascadesTableCountsAsWritten`, `AReadOfAnUntouchedTableIsAnsweredThoughTheCommitFails` (each mutant 1 to 3 red) |
 | waiters that never park; `Exit` that doesn't wake them | `NothingSpinsWhileALoopsBatchHoldsTheConnection` |
 
 Not provable by a test: removing the null check for a build that can't say its options doesn't compile (nullability
