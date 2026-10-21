@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -84,6 +85,9 @@ public abstract class RowState
     /// <summary>A reader's return for the last row: it was found, but the write's condition didn't hold.</summary>
     public const long Refused = long.MinValue;
 
+    /// <summary>Gives a lent list back to <paramref name="context"/> after its request.</summary>
+    internal virtual void ReturnTo(DataContext context) { }
+
     private protected void StartRun()
     {
         Seen = 0;
@@ -103,6 +107,9 @@ public sealed class RowSlot<T> : RowState where T : struct
 
     /// <summary>Whether a row was copied already: only the first counts.</summary>
     public bool HasValue => _has;
+
+    /// <summary>The row kept, without letting go of the slot (a lent one's).</summary>
+    internal T Value => _value;
 
     /// <summary>Keeps the row's value; its text is in <see cref="RowState.Arena"/>.</summary>
     public void Set(T value)
@@ -125,5 +132,71 @@ public sealed class RowSlot<T> : RowState where T : struct
         _value = default;
         Arena = null!;
         return value;
+    }
+
+    /// <summary>The slot belongs to the Each pool (see <c>EachPool</c>), not to a context.</summary>
+    internal bool Pooled;
+}
+
+
+/// <summary>
+/// Where the rows of an awaited list of <typeparamref name="T"/> go: added by the generated reader, on the provider's
+/// thread. The context keeps it, and its array, for the next list of the same type once the request has ended.
+/// </summary>
+[EditorBrowsable(EditorBrowsableState.Never)]
+public sealed class RowList<T> : RowState
+{
+    // a list this long is let go after its request rather than kept for the context's next list
+    const int KeptLength = 1024;
+
+    internal RowList<T>? Next;
+    T[] _items = [];
+    int _count;
+
+    internal RowList() { }
+
+    internal T[] Items => _items;
+
+    internal int Count => _count;
+
+    /// <summary>Whether the awaiting handler took the list: only then can the context use it again.</summary>
+    internal bool Taken;
+
+    /// <summary>Adds a row; its text is in <see cref="RowState.Arena"/>.</summary>
+    public void Add(T value)
+    {
+        if (_count == _items.Length) Grow();
+        _items[_count++] = value;
+    }
+
+    void Grow() => Array.Resize(ref _items, Math.Max(16, _items.Length * 2));
+
+    internal void Start(IRequestArena arena)
+    {
+        StartRun();
+        Arena = arena;
+        _count = 0;
+        Taken = false;
+    }
+
+    /// <summary>The list belongs to the Each pool (see <c>EachPool</c>), not to a context.</summary>
+    internal bool Pooled;
+
+    /// <summary>Lets go of the array, which the pool can't keep.</summary>
+    internal void LetGoOfItems() => _items = [];
+
+    internal override void ReturnTo(DataContext context) => context.ReturnLentList(this);
+
+    /// <summary>Bumped each time the list is let go, so a Debug build's <see cref="Rows{T}"/> sees it was used after.</summary>
+    internal int Lease;
+
+    /// <summary>Lets go of the rows: their text pointed into an arena that has been reset.</summary>
+    internal void Clear()
+    {
+        Lease++;
+        if (RuntimeHelpers.IsReferenceOrContainsReferences<T>()) Array.Clear(_items, 0, _count);
+        if (_items.Length > KeptLength) _items = [];
+        _count = 0;
+        Arena = null!;
     }
 }

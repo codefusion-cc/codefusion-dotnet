@@ -24,7 +24,19 @@ return db.ArticleBySlug(slug, viewer.Id).OrNotFound(Errors.ArticleNotFound);
 // or awaited: the row is copied into the request's arena
 var user = await db.UserByEmail(email);
 if (user.Failed) return user.Error!;
+
+// a list awaited: every row, valid until the request ends
+var comments = await db.CommentsOf(slug, viewer.Id);
+foreach (ref readonly var c in comments) ...
+
+// several reads sent together, their rows in order
+var users = await db.Each(Emails.Length, static (db, i) => db.UserByEmail(Emails[i]));
 ```
+
+Awaited rows belong to their request: when it ends (`IRequestScoped.Unbind`, or the context's next `Bind`), their
+lists go back to pools every connection shares, so keep none past it and copy what a later request needs. A Debug
+build of CodeFusion.Data throws on rows read after their request. The pools keep large arrays within a budget:
+about 8 Eaches of 500 reads at once allocate nothing once warm, and more than that at once allocate their arrays anew.
 
 A query method marked `[RunsAlone]` runs apart from the provider's groups, for a query slow enough to hold the
 others up.

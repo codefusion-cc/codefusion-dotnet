@@ -18,14 +18,17 @@ public interface IResponse
     /// <summary>Seconds for a Retry-After header; 0 sends none.</summary>
     int RetryAfter { get; set; }
 
+    /// <summary>The body's media type; null is <see cref="MediaType.Json"/>. No body, no Content-Type.</summary>
+    MediaType? ContentType { get; set; }
+
     /// <summary>The body's JSON writer, ready at the start of the body (Content-Type: application/json).</summary>
     Utf8JsonWriter Json { get; }
 
     /// <summary>The body as bytes, for a body written without the JSON writer (a pre-encoded error).</summary>
     IBufferWriter<byte> Body { get; }
 
-    /// <summary>Drops what was written, in <see cref="Json"/> and <see cref="Body"/>, sets the status back to 200 and
-    /// <see cref="RetryAfter"/> back to 0.</summary>
+    /// <summary>Drops what was written, in <see cref="Json"/> and <see cref="Body"/>, sets the status back to 200,
+    /// <see cref="RetryAfter"/> back to 0 and <see cref="ContentType"/> back to null.</summary>
     void Reset();
 
     /// <summary>Memory that lives until the response has been sent.</summary>
@@ -132,6 +135,90 @@ public sealed class ErrorReply : IReply
         response.Reset();
         response.Status = Status;
         response.RetryAfter = RetryAfter;
+        response.Body.Write(_body);
+        return default;
+    }
+}
+
+/// <summary>
+/// A response's Content-Type, its header line encoded once: <see cref="Json"/>, <see cref="PlainText"/>,
+/// <see cref="Html"/>, or one of your own made once (a static field).
+/// </summary>
+public sealed class MediaType
+{
+    /// <summary>The longest value a media type may have, so a response's head stays within its reserved room.</summary>
+    public const int MaxLength = 64;
+
+    readonly byte[] _line;
+
+    /// <summary>A media type such as <c>text/csv; charset=utf-8</c>: visible ASCII and spaces, at most
+    /// <see cref="MaxLength"/> characters.</summary>
+    public MediaType(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (value.Length is 0 or > MaxLength || value[0] == ' ' || value[^1] == ' ')
+            throw new ArgumentException($"a media type is 1 to {MaxLength} characters, not starting or ending with a space", nameof(value));
+        foreach (char c in value)
+            if (c is < ' ' or > '~') throw new ArgumentException("a media type is visible ASCII and spaces", nameof(value));
+        Value = value;
+        _line = System.Text.Encoding.ASCII.GetBytes("Content-Type: " + value + "\r\n");
+    }
+
+    /// <summary>The media type's text.</summary>
+    public string Value { get; }
+
+    /// <summary><c>Content-Type: value</c> and its line break, as the head writes it.</summary>
+    public ReadOnlySpan<byte> HeaderLine => _line;
+
+    /// <summary><c>application/json</c>, what a body is unless set.</summary>
+    public static MediaType Json { get; } = new("application/json");
+
+    /// <summary><c>text/plain</c>.</summary>
+    public static MediaType PlainText { get; } = new("text/plain");
+
+    /// <summary><c>text/html; charset=utf-8</c>.</summary>
+    public static MediaType Html { get; } = new("text/html; charset=utf-8");
+
+    /// <inheritdoc/>
+    public override string ToString() => Value;
+}
+
+/// <summary>
+/// A status with a constant body of any media type, such as a plain-text greeting: writing it copies the bytes. Make
+/// each once (a static field) and return it from a handler.
+/// </summary>
+public readonly struct ContentReply : IReply
+{
+    readonly byte[]? _body;
+
+    /// <summary><paramref name="status"/> (200 to 999) with <paramref name="body"/> as <paramref name="type"/>.</summary>
+    public ContentReply(MediaType type, ReadOnlySpan<byte> body, int status = 200)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        if (status is < 200 or > 999) throw new ArgumentOutOfRangeException(nameof(status));
+        if (status is 204 or 304 && !body.IsEmpty) throw new ArgumentException($"a {status} goes out without a body", nameof(body));
+        Type = type;
+        Status = status;
+        _body = body.ToArray();
+    }
+
+    /// <summary>The body's media type.</summary>
+    public MediaType Type { get; }
+
+    /// <summary>The status code.</summary>
+    public int Status { get; }
+
+    /// <summary>The body's bytes.</summary>
+    public ReadOnlySpan<byte> Body => _body;
+
+    /// <inheritdoc/>
+    public ValueTask WriteAsync<TResponse>(TResponse response) where TResponse : IResponse
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        if (Type is null) throw new InvalidOperationException("a default ContentReply has no media type: make it with its constructor");
+        response.Reset();
+        response.Status = Status;
+        response.ContentType = Type;
         response.Body.Write(_body);
         return default;
     }

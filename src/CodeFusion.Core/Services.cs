@@ -43,4 +43,11 @@ public interface IRequestScoped
 {
     /// <summary>Binds the service to the request <paramref name="response"/> answers, until the next call.</summary>
     void Bind(IResponse response);
+
+    /// <summary>The connection's request has ended: its handler is done and its reply written, and the request's arena
+    /// let go. What the service lent the request can go back now, rather than when the connection's next request
+    /// comes. Every service the connection has made hears it, once for each request a handler ran for, whether or not
+    /// that request bound it, and before the next request's <see cref="Bind"/>. What it throws is logged as a
+    /// handler's failure is, and the other services still hear it. By default it does nothing.</summary>
+    void Unbind() { }
 }

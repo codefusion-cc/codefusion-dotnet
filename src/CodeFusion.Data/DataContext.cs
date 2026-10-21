@@ -25,6 +25,10 @@ public abstract class DataContext : IRequestScoped
     ReplyRun? _reply;
     WriteRun? _write;
     object?[] _slots = [];
+    object?[] _lists = [];
+    // Lists lent to the bound request's awaited results: they hold its rows until the next request binds.
+    RowState[] _lent = new RowState[2];
+    int _lentCount;
     // Commands built by a query call and not run yet: discarded when the next request binds, if the handler
     // dropped its result.
     Held[] _held = new Held[4];
@@ -49,8 +53,15 @@ public abstract class DataContext : IRequestScoped
     {
         ArgumentNullException.ThrowIfNull(response);
         DiscardHeld();
+        ReturnLent();
         _response = response;
     }
+
+    /// <inheritdoc/>
+    /// <remarks>The lists and arenas the request's Eaches lent go back to the pools every connection shares, so a
+    /// <see cref="Rows{T}"/> must not outlive its request. Without a server that calls this, they go back at the next
+    /// <see cref="Bind"/>.</remarks>
+    public void Unbind() => ReturnLent();
 
     // ---------- for query definitions ----------
     // Instance members, though none touches the instance: a query method calls them on its context, as LINQ reads.
@@ -140,10 +151,86 @@ public abstract class DataContext : IRequestScoped
             ops.Discard(command);
             throw new InvalidOperationException("awaiting a result needs a request: bind the context first");
         }
-        var slot = RentSlot<T>();
-        slot.Start(response.Arena);
+        RowSlot<T> slot;
+        if (_eachArena is { } eachArena)
+        {
+            // a read of an Each: it may finish on a provider thread while another read of it finishes on another, so
+            // its row's text goes into the Each's own arena, and its slot is one the Each took from the Each pool
+            if (_eachSlots is RowSlot<T>?[] slots && _eachSlot < slots.Length && slots[_eachSlot] is { } next)
+            {
+                slot = next;
+                _eachSlot++;
+            }
+            else slot = EachPool<T>.RentSlot(); // a read awaiting more than one result: the GC takes the extra slot
+            slot.Start(eachArena);
+        }
+        else
+        {
+            slot = RentSlot<T>();
+            slot.Start(response.Arena);
+        }
         return new RowAwaiter<T>(this, slot, ops, options, ops.RunCopy(command, slot, response.Aborted));
     }
+
+    /// <summary>Runs a result for every row, copied into the bound request's arena.</summary>
+    internal RowsAwaiter<T> AwaitRows<T>(in PendingCommand command, QueryOps ops, in ReplyOptions options)
+    {
+        if (!Release(command)) NotHeld();
+        if (_response is not { } response)
+        {
+            ops.Discard(command);
+            throw new InvalidOperationException("awaiting a result needs a request: bind the context first");
+        }
+        var list = RentList<T>();
+        list.Start(response.Arena);
+        if (_lentCount == _lent.Length) Array.Resize(ref _lent, _lent.Length * 2);
+        _lent[_lentCount++] = list;
+        return new RowsAwaiter<T>(this, list, ops, options, ops.RunCopy(command, list, response.Aborted));
+    }
+
+    /// <summary>Starts <paramref name="count"/> reads together and gathers their rows (<c>Each</c>).</summary>
+    internal ValueTask<Rows<T>> RunEach<TContext, T>(int count, Func<TContext, int, One<T>> read) where TContext : DataContext where T : struct
+    {
+        if (_response is null) throw new InvalidOperationException("awaiting a result needs a request: bind the context first");
+        // the list, the run, the reads' slots and the arena for their text come from pools shared by every context,
+        // so a connection keeps none of them between requests; the list and the arena are lent until the request ends
+        var list = EachLists<T>.Rent();
+        list.Start(null!);
+        Lend(list);
+        if (count == 0)
+        {
+            list.Taken = true;
+            return new ValueTask<Rows<T>>(new Rows<T>(list));
+        }
+        var arena = EachArena.Rent();
+        Lend(arena);
+        var run = RunPool<EachRun<T>>.Rent();
+        _eachArena = arena;
+        _eachSlots = run.RentSlots(count);
+        _eachSlot = 0;
+        try
+        {
+            return run.Start((TContext)this, list, arena, count, read);
+        }
+        finally
+        {
+            _eachArena = null;
+            _eachSlots = null;
+        }
+    }
+
+    void Lend(RowState state)
+    {
+        if (_lentCount == _lent.Length) Array.Resize(ref _lent, _lent.Length * 2);
+        _lent[_lentCount++] = state;
+    }
+
+    /// <summary>An Each is starting its reads: their rows' text goes into its arena.</summary>
+    EachArena? _eachArena;
+
+    /// <summary>Its reads' slots (a <c>RowSlot&lt;T&gt;[]</c>), and the next to use.</summary>
+    object? _eachSlots;
+    int _eachSlot;
 
     /// <summary>Runs a write that gives back nothing, for its outcome. Its state is its own: a reply may be reading
     /// its rows meanwhile, into the reply's.</summary>
@@ -178,6 +265,7 @@ public abstract class DataContext : IRequestScoped
         {
             _slots[i] = slot.Next;
             slot.Next = null;
+            _slotCounts[i]--;
             return slot;
         }
         return new RowSlot<T>();
@@ -186,8 +274,73 @@ public abstract class DataContext : IRequestScoped
     internal void ReturnSlot<T>(RowSlot<T> slot) where T : struct
     {
         int i = SlotIndex<T>.Value;
+        if (i >= _slotCounts.Length) Array.Resize(ref _slotCounts, _slots.Length);
+        // an Each of hundreds of reads lends as many slots: past KeptSlots of a type they go, so a connection
+        // doesn't keep its largest Each's slots (and their arenas) for good
+        if (_slotCounts[i] >= KeptSlots) return;
+        _slotCounts[i]++;
         slot.Next = (RowSlot<T>?)_slots[i];
         _slots[i] = slot;
+    }
+
+    const int KeptSlots = 64;
+    int[] _slotCounts = [];
+
+    /// <summary>The slots of <typeparamref name="T"/> on the free list. For tests.</summary>
+    internal int FreeSlots<T>() where T : struct
+    {
+        int i = SlotIndex<T>.Value;
+        int n = 0;
+        for (var slot = i < _slots.Length ? _slots[i] as RowSlot<T> : null; slot is not null; slot = slot.Next) n++;
+        return n;
+    }
+
+    // Lists have free lists of their own, by the same type numbers.
+    static int _listTypes;
+
+    static class ListIndex<T>
+    {
+        public static readonly int Value = Interlocked.Increment(ref _listTypes) - 1;
+    }
+
+    RowList<T> RentList<T>()
+    {
+        int i = ListIndex<T>.Value;
+        if (i >= _lists.Length) Array.Resize(ref _lists, Math.Max(i + 1, _lists.Length * 2));
+        if (_lists[i] is RowList<T> list)
+        {
+            _lists[i] = list.Next;
+            list.Next = null;
+            return list;
+        }
+        return new RowList<T>();
+    }
+
+    void ReturnList<T>(RowList<T> list)
+    {
+        int i = ListIndex<T>.Value;
+        list.Next = (RowList<T>?)_lists[i];
+        _lists[i] = list;
+    }
+
+    /// <summary>The previous request's lists go back to their free lists. One its handler never took may still be
+    /// filling, so it is let go instead.</summary>
+    void ReturnLent()
+    {
+        while (_lentCount > 0)
+        {
+            var state = _lent[--_lentCount];
+            _lent[_lentCount] = null!;
+            state.ReturnTo(this);
+        }
+    }
+
+    internal void ReturnLentList<T>(RowList<T> list)
+    {
+        if (!list.Taken) return;
+        list.Clear();
+        if (list.Pooled) EachLists<T>.Return(list);
+        else ReturnList(list);
     }
 
     /// <summary>

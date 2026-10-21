@@ -79,6 +79,13 @@ public sealed class RequestContext : IResponse, IValueTaskSource
     }
 
     /// <inheritdoc/>
+    public MediaType? ContentType
+    {
+        get => _x.ContentType;
+        set => _x.ContentType = value;
+    }
+
+    /// <inheritdoc/>
     public Utf8JsonWriter Json
     {
         get
@@ -333,6 +340,19 @@ public sealed class RequestContext : IResponse, IValueTaskSource
         _viewer = 0;
         _claimPayload = default;
         _claims.AsSpan().Fill(-1);
+        // the connection's services let go of what they lent this request (a data context's lists); one that throws
+        // is logged as a handler's failure is, and the others still hear it
+        foreach (object? service in _scoped)
+            if (service is IRequestScoped scoped)
+                try { scoped.Unbind(); }
+                catch (Exception e) { UnbindFailed(e); }
+    }
+
+    void UnbindFailed(Exception e)
+    {
+        if (_app.Server is { } server) Interlocked.Increment(ref server.CallbackFailures);
+        try { _app.Errors.Log?.Invoke(_x, e); }
+        catch (Exception) { } // a failing logger mustn't take the connection down either
     }
 
     /// <summary>The connection is idle or closed: the arena's kept chunk goes back to the pool.</summary>

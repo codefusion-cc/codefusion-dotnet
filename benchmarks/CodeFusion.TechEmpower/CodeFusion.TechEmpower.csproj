@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The TechEmpower Framework Benchmarks' six tests on CodeFusion, written as an app writes them: generated
+       endpoints and LINQ queries compiled to SQL. README.md says how it runs and how it is measured. -->
+  <Import Project="../../src/CodeFusion.Http/buildTransitive/CodeFusion.Http.props" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CodeFusion.TechEmpower</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <TieredPGO>true</TieredPGO>
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);CodeFusion.Data.Generated</InterceptorsNamespaces>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/CodeFusion.Http/CodeFusion.Http.csproj" />
+    <ProjectReference Include="../../src/CodeFusion.Http.Generators/CodeFusion.Http.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../src/CodeFusion.Data.Postgres/CodeFusion.Data.Postgres.csproj" />
+    <ProjectReference Include="../../src/CodeFusion.Data.Generator/CodeFusion.Data.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

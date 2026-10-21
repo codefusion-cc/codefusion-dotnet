@@ -105,7 +105,26 @@ static CodeFusion.Utf8List.operator !=(CodeFusion.Utf8List left, CodeFusion.Utf8
 static CodeFusion.Utf8List.operator ==(CodeFusion.Utf8List left, CodeFusion.Utf8List right) -> bool
 static CodeFusion.Utf8List.RecordBytes(int textBytes, int count) -> int
 static CodeFusion.Utf8List.Write(System.ReadOnlySpan<byte> text, System.Span<byte> destination) -> int
+CodeFusion.ContentReply
+CodeFusion.ContentReply.Body.get -> System.ReadOnlySpan<byte>
+CodeFusion.ContentReply.ContentReply() -> void
+CodeFusion.ContentReply.ContentReply(CodeFusion.MediaType! type, System.ReadOnlySpan<byte> body, int status = 200) -> void
+CodeFusion.ContentReply.Status.get -> int
+CodeFusion.ContentReply.Type.get -> CodeFusion.MediaType!
+CodeFusion.ContentReply.WriteAsync<TResponse>(TResponse response) -> System.Threading.Tasks.ValueTask
+CodeFusion.IResponse.ContentType.get -> CodeFusion.MediaType?
+CodeFusion.IResponse.ContentType.set -> void
+CodeFusion.MediaType
+CodeFusion.MediaType.HeaderLine.get -> System.ReadOnlySpan<byte>
+CodeFusion.MediaType.MediaType(string! value) -> void
+CodeFusion.MediaType.Value.get -> string!
+const CodeFusion.MediaType.MaxLength = 64 -> int
+override CodeFusion.MediaType.ToString() -> string!
+static CodeFusion.MediaType.Html.get -> CodeFusion.MediaType!
+static CodeFusion.MediaType.Json.get -> CodeFusion.MediaType!
+static CodeFusion.MediaType.PlainText.get -> CodeFusion.MediaType!
 CodeFusion.EventLoopThread
 CodeFusion.IServiceRegistry.OnEventLoopBatch(System.Action<int>! onBatch) -> void
 static CodeFusion.EventLoopThread.Current.get -> int
 static CodeFusion.EventLoopThread.RequestBatchEnd() -> void
+CodeFusion.IRequestScoped.Unbind() -> void

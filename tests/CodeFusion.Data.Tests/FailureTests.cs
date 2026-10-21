@@ -114,6 +114,10 @@ public sealed class FailureTests(OpsFixture fixture)
             Assert.True(failures.TryDequeue(out f), "the row's statement timeout wasn't reported");
             Assert.Equal(("OpsDb.Sleep", DataStatus.StatementTimeout), (f.Item1, f.Item2.Status));
             _response.Next();
+            Assert.Equal(DataStatus.StatementTimeout, (await db.Sleeps(2)).Status);
+            Assert.True(failures.TryDequeue(out f), "the list's statement timeout wasn't reported");
+            Assert.Equal(("OpsDb.Sleeps", DataStatus.StatementTimeout), (f.Item1, f.Item2.Status));
+            _response.Next();
             Assert.Equal("1", await Json(db.Sleep(0)));
             // not for a client that left: its own abort isn't the database's trouble
             _response.Next();

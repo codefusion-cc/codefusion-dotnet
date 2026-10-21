@@ -54,6 +54,10 @@ registered on the builder, singletons or one per connection (`IRequestScoped`); 
 or any `Reply` such as `Reply.NotFound(error)`), a `Reply`, an `ErrorReply`, or any struct implementing `IReply`; an
 `async` lambda returns them through a pooled `Pending<T>` with no attribute needed.
 
+A body is JSON unless the reply says otherwise: a `ContentReply` (`new ContentReply(MediaType.PlainText, "Hello"u8)`,
+made once) sends constant bytes of any media type, and a reply of your own sets `response.ContentType`. Set
+`builder.Options.ServerName` to send a Server header with every response, the server's own refusals included.
+
 A `Utf8` is a view of bytes: of the request, or of the request's arena when it had to be decoded. It is valid until the
 response has been sent, so the analyzer refuses to let a class keep one.
 

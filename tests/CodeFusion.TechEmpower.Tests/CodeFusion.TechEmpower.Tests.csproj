@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- benchmarks/CodeFusion.TechEmpower run as its own process against a TFB schema made in CODEFUSION_TEST_DB's
+       server (without it the tests skip), checked as TFB's verifier checks each test type. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CodeFusion.TechEmpower.Tests</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+    <NoWarn>$(NoWarn);CA1515;CA1707;CA2007;CA1001;CA1861;xUnit1051</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="Npgsql" />
+    <Compile Include="../Shared/RunGuard.cs" Link="Shared/RunGuard.cs" />
+    <!-- built first; the tests start it from its own output folder -->
+    <ProjectReference Include="../../benchmarks/CodeFusion.TechEmpower/CodeFusion.TechEmpower.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+</Project>

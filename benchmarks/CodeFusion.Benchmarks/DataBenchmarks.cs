@@ -210,6 +210,7 @@ sealed class BenchResponse : IResponse
 
     public int Status { get; set; } = 200;
     public int RetryAfter { get; set; }
+    public MediaType? ContentType { get; set; }
     public Utf8JsonWriter Json => _json;
     public IBufferWriter<byte> Body => _body;
     public IRequestArena Arena => _arena;
@@ -230,6 +231,7 @@ sealed class BenchResponse : IResponse
         _body.ResetWrittenCount();
         Status = 200;
         RetryAfter = 0;
+        ContentType = null;
     }
 
     public void Next()

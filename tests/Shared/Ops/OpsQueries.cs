@@ -229,6 +229,8 @@ public sealed partial class OpsDb
 
     // ---------- Select ----------
 
+    public Many<Utf8> NamesFrom(int minAge) => People.Where(p => p.Age >= minAge).OrderBy(p => p.Id).Select(p => p.Name).Many();
+
     public Many<Card> Cards() => People.OrderBy(p => p.Id).Select(p => new Card(p.Id, p.Name, p.Nick, p.Age, p.Score, p.Active, p.Born)).Many();
 
     public Many<Name> NickOrName() => People.OrderBy(p => p.Id).Select(p => new Name(p.Id, p.Nick ?? p.Name)).Many();
@@ -334,6 +336,8 @@ public sealed partial class OpsDb
         Insert(Pets, new Pet { Id = id, OwnerId = owner, Name = name, Legs = 4 }).Select(x => new Owned(x.Name, Name.Of(x.Owner)));
 
     public Write AddLabelOnce(int id, Utf8 name) => Insert(Labels, new Label { Id = id, Name = name }).OrIgnore();
+
+    public Write AddLabel(int id, Utf8 name) => Insert(Labels, new Label { Id = id, Name = name });
 
     public Write<Name> AddNicknamed(Utf8 name) =>
         Insert(People, n => new Person { Name = name, Nick = SqlText.Lower(name), Age = 1, Active = false, Born = SqlFunctions.Now(), TeamId = n.Id % 2 + 1 })

@@ -421,7 +421,30 @@ virtual CodeFusion.Data.QueryOps.HasSource.get -> bool
 virtual CodeFusion.Data.QueryOps.Status.get -> int
 ~override CodeFusion.Data.Paging.Equals(object obj) -> bool
 ~override CodeFusion.Data.Paging.ToString() -> string
+CodeFusion.Data.Many<T>.GetAwaiter() -> CodeFusion.Data.RowsAwaiter<T>
+CodeFusion.Data.RowList<T>
+CodeFusion.Data.RowList<T>.Add(T value) -> void
+CodeFusion.Data.Rows<T>
+CodeFusion.Data.Rows<T>.Count.get -> int
+CodeFusion.Data.Rows<T>.Error.get -> CodeFusion.ErrorReply?
+CodeFusion.Data.Rows<T>.Failed.get -> bool
+CodeFusion.Data.Rows<T>.Found.get -> bool
+CodeFusion.Data.Rows<T>.GetEnumerator() -> System.ReadOnlySpan<T>.Enumerator
+CodeFusion.Data.Rows<T>.Rows() -> void
+CodeFusion.Data.Rows<T>.Span.get -> System.ReadOnlySpan<T>
+CodeFusion.Data.Rows<T>.Status.get -> CodeFusion.Data.DataStatus
+CodeFusion.Data.Rows<T>.this[int index].get -> T
+CodeFusion.Data.RowsAwaiter<T>
+CodeFusion.Data.RowsAwaiter<T>.GetResult() -> CodeFusion.Data.Rows<T>
+CodeFusion.Data.RowsAwaiter<T>.IsCompleted.get -> bool
+CodeFusion.Data.RowsAwaiter<T>.OnCompleted(System.Action! continuation) -> void
+CodeFusion.Data.RowsAwaiter<T>.RowsAwaiter() -> void
+CodeFusion.Data.RowsAwaiter<T>.UnsafeOnCompleted(System.Action! continuation) -> void
+CodeFusion.Data.DataContextExtensions
+static CodeFusion.Data.DataContextExtensions.Each<TContext, T>(this TContext! context, int count, System.Func<TContext!, int, CodeFusion.Data.One<T>>! read) -> System.Threading.Tasks.ValueTask<CodeFusion.Data.Rows<T>>
+static CodeFusion.Data.DataContextExtensions.Each<TContext, TState>(this TContext! context, int count, TState state, System.Func<TContext!, TState, int, CodeFusion.Data.Write>! write) -> System.Threading.Tasks.ValueTask<CodeFusion.Data.DataResult>
 CodeFusion.Data.IDataProvider<TSelf, TStatement, TCommand>.KeyedUpdate(string! sql, string! table, string! key, int keyParameter, string![]! columns, int[]! columnParameters, params System.ReadOnlySpan<CodeFusion.Data.DataType> parameters) -> TStatement!
 CodeFusion.Data.RunsAloneAttribute
 CodeFusion.Data.RunsAloneAttribute.RunsAloneAttribute() -> void
 CodeFusion.Data.IDataProvider<TSelf, TStatement, TCommand>.Alone(TStatement! statement) -> TStatement!
+CodeFusion.Data.DataContext.Unbind() -> void

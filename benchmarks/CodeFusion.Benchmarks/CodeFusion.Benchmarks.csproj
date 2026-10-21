@@ -30,6 +30,8 @@
     <ProjectReference Include="../../src/CodeFusion.Data.Generator/CodeFusion.Data.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <!-- The Conduit context the data tests use, compiled here so its calls are taken over here too. -->
     <Compile Include="../../tests/Shared/Conduit/*.cs" Link="Conduit/%(Filename)%(Extension)" />
+    <!-- TFB's context, for EachBenchmarks. -->
+    <Compile Include="../CodeFusion.TechEmpower/Data.cs" Link="TechEmpower/Data.cs" />
     <!-- PgBenchmarks seeds its schema from it, found next to the binaries. -->
     <None Include="schema.sql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>

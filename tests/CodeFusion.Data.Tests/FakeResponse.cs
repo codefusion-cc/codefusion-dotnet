@@ -23,6 +23,7 @@ public sealed class FakeResponse : IResponse
 
     public int Status { get; set; } = 200;
     public int RetryAfter { get; set; }
+    public MediaType? ContentType { get; set; }
     public Utf8JsonWriter Json => _json;
     public IBufferWriter<byte> Body => _body;
     public FakeArena Arena { get; } = new();
@@ -36,6 +37,7 @@ public sealed class FakeResponse : IResponse
         _body.ResetWrittenCount();
         Status = 200;
         RetryAfter = 0;
+        ContentType = null;
         Resets++;
     }
 
@@ -46,6 +48,7 @@ public sealed class FakeResponse : IResponse
         _body.ResetWrittenCount();
         Status = 200;
         RetryAfter = 0;
+        ContentType = null;
         Resets = 0;
         Arena.Reset();
     }
