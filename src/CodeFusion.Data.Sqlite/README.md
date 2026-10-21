@@ -111,7 +111,11 @@ Behind CodeFusion.Http's event loops (`HttpTransport.EventLoop`), `EventLoopBatc
 write made on a loop runs there at once, inside one transaction per loop wake-up, and every write of the wake-up commits
 together when the server has handled its events. Each write completes after that COMMIT, on the loop, so its answer goes
 out with the wake-up's others. A write has a savepoint of its own, so one that fails fails alone. `AddDatabase` hands the
-server the batch's end; nothing else to wire. Writes off a loop still go to the writer thread.
+server the batch's end; nothing else to wire. Writes off a loop still go to the writer thread. A batch opened after the
+batch's end ran in that wake-up (by another database's completions, or a handler resumed as answers go out) asks the
+loop for another round, so it still ends in its wake-up. A read on the loop commits the batch's writes first, so it
+never sees one whose COMMIT could fail. While a batch holds the connection, other threads waiting for it park instead of
+spinning.
 
 ## Failures
 

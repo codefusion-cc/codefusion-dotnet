@@ -838,14 +838,17 @@ Postgres 18 with CODEFUSION_TEST_DB and the four CODEFUSION_TEST_PG_* logins set
 
 ## The SQLite provider (tests/CodeFusion.Data.Sqlite.Tests)
 
-154 tests, nothing to set up. 48 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked
+193 tests, nothing to set up. 47 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked
 unchanged: the same Conduit queries, seed and expected replies as on Postgres. 51 are the operator tests ported: each
-query's SQL in SQLite's dialect, checked as text, and the same results on the same seed. The rest are the provider's
-own: group commit (9), reads and snapshots (8), migrations (4), the one-connection `Exclusive` mode (7), one
-transaction per event-loop wake-up (11), where e_sqlite3 is loaded from (3), the allocations of those two modes (2, in a
-collection that runs alone), and crash recovery (10: a child process killed mid-group and after a commit, and a
-batching event loop killed 0, 1 or 3 ms into a wake-up, each with `synchronous` NORMAL and FULL). Every test that stops a source checks that the writer
-caught nothing unexpected and, in Debug builds, that every job it rented is back in the pool (`SqliteChecks`).
+query's SQL in SQLite's dialect, checked as text, and the same results on the same seed. 5 are the conditional-write
+tests both providers run (`tests/Shared/Ops/ConditionalWriteTests.cs`). The rest are the provider's own: group commit
+(9), reads and snapshots (8), migrations (4), the one-connection `Exclusive` mode (7), one transaction per event-loop
+wake-up (12), durability when SQLite rolls back, a statement can't be prepared, a COMMIT fails or the source stops
+(13), the SQLite build loaded and where from (13 and 3), its keywords (1), allocations and spinning (4, in a
+collection that runs alone), and crash recovery (14: a child process killed mid-group and after a commit, and a
+batching event loop killed 0, 1, 3 or 10 ms into a wake-up or at its first answer, each with `synchronous` NORMAL and
+FULL). Every test that stops a source checks that the writer caught nothing unexpected and, in Debug builds, that
+every job it rented is back in the pool (`SqliteChecks`).
 
 The schema and LINQ queries both providers run live in `tests/Shared/Conduit` and `tests/Shared/Ops`; each provider's
 part of a context (`ConduitDb.Sqlite.cs`, `OpsDb.Sqlite.cs`) names the provider and holds the queries written in its
@@ -888,6 +891,50 @@ survives, every completed write does) is SQLite's WAL recovery, which a kill can
 provider keeps to it: a write completes only after its COMMIT, and the file opens again. The event-loop one can: its
 child answers each write the moment it completes, so an answer before the COMMIT, or a wake-up committed in pieces,
 shows after the kill.
+
+### Review fixes (SQLite, review of bdfb8e9)
+
+An Opus review found 15 problems: 3 high, 5 medium, 7 low. Each fix's test was written first and seen failing, or the
+finding was refuted by breaking the code that already handled it.
+
+| # | Finding | Fix | Tests |
+|---|---|---|---|
+| 1 | A rollback SQLite does outside a write went unnoticed in a batch, and its writes were answered Ok | After any error the transaction's real state is read (`sqlite3_get_autocommit`); a read on the loop commits the batch first | `AReadOnTheLoopThatRollsBackLosesNoAnsweredWrite` |
+| 2 | A second rollback in `Rerun` left rerun writes Ok and the batch in autocommit | One `Run(attempts)` for groups and batches; RELEASE and COMMIT always checked | `AGroupRolledBackTwiceAnswersNoneOfItsWritesOk`, `ABatchRolledBackTwiceAnswersNoneOfItsWritesOkAndGoesOn` |
+| 3 | An exception inside a transaction left it open | Rolled back in a `finally`; a statement that can't be prepared fails alone | `AStatementThatCantBePreparedFailsAloneAndTheWriterGoesOn`, `AUnitThatCantBePreparedLeavesNothing…` (2), `AReadThatCantBePreparedFailsAndGivesItsCommandBack` |
+| 4 | SQL of several statements had no savepoint on the writer thread | A savepoint per write in every mode | `SqlOfSeveralStatementsIsUndoneWholeWhenOneFails` |
+| 5 | SQLite's own keywords weren't quoted | The dialect's `Keywords`, checked against `sqlite3_keyword_name` | `TheDialectQuotesEveryKeywordOfTheLibrary`, `AColumnNamedAfterAKeywordIsQuotedAndItsQueryRuns` |
+| 6 | A batch opened after its source's end ran waited for the next wake-up, and the waiters spun | A batch asks its loop for another round (`EventLoopThread.RequestBatchEnd`); waiters park while a batch holds the connection | `AWriteMadeAfterItsSourcesEndRanEndsInTheSameWakeUp`, `NothingSpinsWhileALoopsBatchHoldsTheConnection` |
+| 7 | Reads in a batch saw uncommitted writes and were answered even when the COMMIT failed | A read on the loop commits the batch before it runs, so it never sees a write whose COMMIT could fail | `AReadOnTheLoopNeverSeesAWriteWhoseCommitFails` |
+| 8 | Stop could close the connection under a batch, or hang | Stop waits 2 s for a batch, then the batch's end closes it | `StopEndsInTimeWhileALoopHoldsABatch`, `StopDuringBatchesEndsCleanlyAndAnswersEveryWrite` |
+| 9 | A negative Take or Skip meant no limit | Refuted: the generated binder clamps it at 0 | `ANegativeTakeOrSkipIsNoneOrAll` red without the clamp |
+| 10 | Conditional writes gave a written row back twice when the SET broke the condition | The refused rows are read before the write; the reader takes the first written row | 5 shared `ConditionalWriteTests` on both providers, `AConditionalWritesStatementsGiveEachRowFoundOnce` |
+| 11 | The crash test left the wake-up in flight unchecked | The child waits for the parent's word after READY and stops at its first answer; every wake-up that opened is checked | `AKilledEventLoopLosesNoAnsweredWriteAndLeavesNoWakeUpHalfDone` (10 cases) |
+| 12 | The native library's origin and build weren't checked | `packages.lock.json` pins its hash (CI restores locked); the build is checked at first use | `BuildCheckTests` (13) |
+| 13 | Refused writes allocated an exception each | A unique violation, busy or a timeout carries no exception; README and SECURITY.md say what the claim covers | `UniqueViolationsAllocateNothingOnceWarm` |
+| 14 | The job pool and life cycle were copied from Postgres | `JobLife` and `JobPool<T>` in CodeFusion.Data, held by both providers' jobs | `JobLifeTests` (11), the Postgres suite and its allocation tests |
+| 15 | The watchdog could interrupt the statement after the slow one | It interrupts only if the statement it timed still runs | `AFailedStatementLeavesNothingForTheWatchdogToInterrupt` |
+
+Proven red for this round (broken on purpose, seen failing, restored):
+
+| Broken | Caught by |
+|---|---|
+| the fixes for 1 to 4, 7, 8 and 15 not there yet (584b71f's parent) | 9 of the 13 `DurabilityTests` |
+| the refused SELECT after the write | `AConditionalWritesStatementsGiveEachRowFoundOnce` |
+| the reader takes the first row, written or refused | `TheReplyIsTheWrittenRowWithTheSmallestKey`, `ARowItsOwnSetMakesFailTheConditionIsWrittenNotRefused` (SQLite) |
+| a batch's jobs completed before its COMMIT | the crash test's -1 and 10 ms cases, 5 runs of 5, NORMAL and FULL |
+| no `sqlite3_threadsafe` check; `OMIT_JSON` not checked | `ASingleThreadedBuildIsRefused`; `ABuildWithoutWhatTheSqlUsesIsRefused(OMIT_JSON)` |
+| memory statistics turned on, the Apple arm64 value passed in a register, the result ignored | `MemoryStatisticsAreOff` (each) |
+| a changed hash in `packages.lock.json` | restore with `CI=true`: NU1403 |
+| a unique violation builds a `SqliteException` | `UniqueViolationsAllocateNothingOnceWarm` (720 KB more for 2,000 more refused writes) |
+| a hold stored without the + 1; a returned job's hold kept; an unheld job queued where a hold is needed | `JobLifeTests` (4, 1 and 1 tests) |
+| no `RequestBatchEnd` | `AWriteMadeAfterItsSourcesEndRanEndsInTheSameWakeUp` |
+| waiters spin while a batch holds the connection; `Exit` doesn't wake them | `NothingSpinsWhileALoopsBatchHoldsTheConnection` (1,039 ms of CPU in 500 ms; woken by the 1 s fallback) |
+| no clamp on Take | `ANegativeTakeOrSkipIsNoneOrAll` |
+
+Not provable by a test: a parked waiter that misses its wake-up (the check under the monitor) only waits for its 1 s
+fallback, and the race is too narrow to hit on purpose. A real `SQLITE_THREADSAFE=0` build wasn't made; the check is
+tested with the values such a build reports.
 
 ### Found on the way
 
