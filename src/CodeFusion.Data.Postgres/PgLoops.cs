@@ -18,7 +18,8 @@ public sealed class PgCounters
     public long Merged;
     /// <summary>Reader: groups sent while an earlier one on the same connection was still being answered.</summary>
     public long Pipelined;
-    /// <summary>Commands whose statements run alone (<see cref="PgStatement.RunsAlone"/>), on the loops' own connection for them.</summary>
+    /// <summary>Commands whose statements run alone (<see cref="PgStatement.RunsAlone"/>), on the loops' own connections
+    /// for them (<see cref="PgSettings.AloneConnections"/>).</summary>
     public long Alone;
     /// <summary>Writer: time from taking a group to its last commit, the most of it, and the longest a write waited in the queue.</summary>
     public long Ticks, TicksMax, WaitTicksMax;

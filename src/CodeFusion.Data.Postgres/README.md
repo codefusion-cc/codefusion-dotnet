@@ -22,8 +22,8 @@ arrives while other read loops sleep is shared out among them, so its reads run 
 
 A statement made with `RunsAlone = true` (or a query method marked `[RunsAlone]`) runs apart: on connections of their
 own, each command in its own transaction, so a slow sign-up or report holds up no group commit or read group. A reader
-or writer opens `PgSettings.AloneConnections` of them (2 by default) at its first such command, on top of its loops'
-connections; each runs one command at a time and the next goes to a free one, so one slow report holds up no sign-up.
+or writer opens `PgSettings.AloneConnections` of them (2 by default, at least 1) at its first such command, on top of
+its loops' connections; each runs one command at a time and the next goes to a free one, so one slow report holds up no sign-up.
 
 It is also CodeFusion.Data's Postgres provider: a context deriving from `DataContext<Postgres>` has its LINQ
 compiled to Postgres's SQL at build time and run on these loops, registered with
@@ -66,11 +66,13 @@ added. The task completes on the loop's thread, so continue quickly and never bl
 and 4,000 writes from 8 callers after warm-up, against a real Postgres 18: about 4 KB in all, which is the test's own
 8 tasks, or 0.17 B per operation.
 
-What makes that possible is a pool of commands (jobs), and its memory is bounded. It keeps at most as many jobs as
-the started readers and writers can hold at once (their queues and their groups in flight; given back when they
-complete), and never more than were ever out together, about a kilobyte each. Their buffers grown past 4 KB stay
-only while all of them together fit 16 MB; past that, a returned job's buffers shrink back, and a buffer past 64 KB is
-never kept. Each thread keeps up to 32 jobs in front of the shared pool, and gives them back when it ends.
+What makes that possible is a pool of commands (jobs), and its memory is bounded. The shared pool holds at most
+32 MB, each job counted whole (about 512 B of its own and its buffers); past that a returning job's buffers shrink
+back, and then the jobs used least recently go.
+It also keeps no more jobs than the started readers and writers can hold at once (their queues and groups in
+flight, given back when they complete), at most 16,384, and never more than were ever out together. A buffer past
+64 KB is never kept. Each thread keeps up to 32 jobs whose buffers are 4 KB or less in front of the shared pool,
+and gives them back when it ends: at most 32 × 8.5 KB a thread on top of the 32 MB.
 
 Against Npgsql 10 as the contest server used it before (BenchmarkDotNet short run, Postgres 18 on the same Apple
 M-series Mac, 16 read loops and 2 writers for both, rows read as bytes the way a JSON writer reads them). Client CPU
@@ -89,7 +91,7 @@ Postgres on the same 8 cores limits. One at a time, most of the CPU is the bench
 the same for both clients.
 
 An idle burst of 32 reads takes 70 to 87 µs per read against Npgsql's 106 to 122: the burst is shared out among the
-loops asleep, so it runs on several backends at once (it took 155 to 172 µs on one before,
+loops asleep, so it runs on several backends at once (it took 162 to 172 µs on one before,
 [2026-10-21-pg-read-burst.md](../../docs/benchmarks/2026-10-21-pg-read-burst.md)). Under load, one Sync per group is
 what saves Postgres CPU.
 

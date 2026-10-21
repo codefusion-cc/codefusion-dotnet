@@ -98,7 +98,8 @@ public sealed class PgAloneTests : IAsyncDisposable
     {
         var r = _reader = new PgReader(PgTestDb.Settings());
         r.Start(1);
-        Assert.True((await Run(r, AlonePid)).IsOk); // the alone loops are up and asleep
+        // both alone connections open (two at once take one each), so none is opened inside the timed part
+        Assert.Equal(2, (await Task.WhenAll(Run(r, SlowPid), Run(r, SlowPid))).Select(x => x.ThrowIfFailed().Value).Distinct().Count());
         var slow = Run(r, SlowRead, 7);
         await Task.Delay(50);
         var started = Stopwatch.GetTimestamp();

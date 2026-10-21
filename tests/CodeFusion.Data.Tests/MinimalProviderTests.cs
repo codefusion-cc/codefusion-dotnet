@@ -82,6 +82,10 @@ public sealed class MinimalProviderTests
             """;
         var result = GeneratorHarness.Run(source);
         Assert.True(result.Generator.IsEmpty && result.Errors.IsEmpty, string.Join("\n", result.Generator.Concat(result.Errors).Take(10)));
+        // and the queries were generated: each statement made by the provider, each method intercepted
+        Assert.Contains("global::Mini.Statement(", result.Generated);
+        Assert.Contains("ItemAlone", result.Generated);
+        Assert.Contains("SetCount", result.Generated);
         Assert.DoesNotContain("Mini.Alone(", result.Generated);
         Assert.DoesNotContain("Mini.KeyedUpdate(", result.Generated);
     }
