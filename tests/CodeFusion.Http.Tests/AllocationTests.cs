@@ -93,13 +93,17 @@ public class AllocationTests(ITestOutputHelper output)
                            + "Content-Type: application/json\r\nContent-Length: 30\r\n\r\n{\"comment\":{\"body\":\"hello!!\"}}";
 
     [Theory(Timeout = 120_000)]
-    [InlineData(false, 1)]
-    [InlineData(true, 1)]
-    [InlineData(true, 8)]
-    public async Task KeepAliveRequestsAllocateNothing(bool async, int connections)
+    [InlineData(false, 1, HttpTransport.Sockets)]
+    [InlineData(true, 1, HttpTransport.Sockets)]
+    [InlineData(true, 8, HttpTransport.Sockets)]
+    [InlineData(false, 1, HttpTransport.EventLoop)]
+    [InlineData(true, 1, HttpTransport.EventLoop)]
+    [InlineData(false, 8, HttpTransport.EventLoop)]
+    [InlineData(true, 8, HttpTransport.EventLoop)]
+    public async Task KeepAliveRequestsAllocateNothing(bool async, int connections, HttpTransport transport)
     {
         Assert.SkipWhen(Debugger(), "Debug builds make every async method's state machine a class: run in Release");
-        await using var t = TestServer.Start(async ? Async : Sync);
+        await using var t = TestServer.Start(async ? Async : Sync, o => TestTransport.UseWithHook(o, transport));
         byte[] request = System.Text.Encoding.ASCII.GetBytes(Request);
         var sockets = new Socket[connections];
         var responseLength = new int[connections];

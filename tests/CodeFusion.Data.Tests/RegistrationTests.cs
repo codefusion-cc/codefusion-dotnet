@@ -26,6 +26,8 @@ public sealed class RegistrationTests(ConduitFixture fixture)
         public void AddPerConnection<TService>(Func<TService> factory) where TService : class, IRequestScoped => PerConnection.Add(factory);
 
         public void OnStopping(Action onStopping) => Stopping.Add(onStopping);
+        public void OnEventLoopBatch(Action<int> onBatch) => Batches.Add(onBatch);
+        public readonly List<Action<int>> Batches = [];
     }
 
     [Fact]

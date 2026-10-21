@@ -103,3 +103,7 @@ static CodeFusion.Utf8List.operator !=(CodeFusion.Utf8List left, CodeFusion.Utf8
 static CodeFusion.Utf8List.operator ==(CodeFusion.Utf8List left, CodeFusion.Utf8List right) -> bool
 static CodeFusion.Utf8List.RecordBytes(int textBytes, int count) -> int
 static CodeFusion.Utf8List.Write(System.ReadOnlySpan<byte> text, System.Span<byte> destination) -> int
+CodeFusion.EventLoopThread
+CodeFusion.IServiceRegistry.OnEventLoopBatch(System.Action<int>! onBatch) -> void
+static CodeFusion.EventLoopThread.Current.get -> int
+static CodeFusion.EventLoopThread.RequestBatchEnd() -> void
