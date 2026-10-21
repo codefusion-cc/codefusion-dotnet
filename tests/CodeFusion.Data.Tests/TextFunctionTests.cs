@@ -153,9 +153,10 @@ public sealed class TextFunctionTests(OpsFixture fixture)
     [Fact]
     public void AsCSharpAPatternRunsInLinearTimeOnALongText()
     {
-        // overlapping + atoms that never match: a backtracking engine tries each split at each start (2.8 s here)
+        // overlapping + atoms that never match: a backtracking engine tries each split at each start, in time n squared
+        // (7 s for these 48,000 characters here, 2.8 s for half as many, against the bound of 1 s)
         var watch = System.Diagnostics.Stopwatch.StartNew();
-        var text = U(string.Concat(Enumerable.Repeat("a-", 12000)));
+        var text = U(string.Concat(Enumerable.Repeat("a-", 24000)));
         Assert.Equal(text.ToString(), text.ReplaceMatches("[a-z]+-[a-z-]+x", "_").ToString());
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1), $"{watch.Elapsed}");
     }
