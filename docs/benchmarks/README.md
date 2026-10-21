@@ -36,6 +36,7 @@ readers per core and four writers. These are reduced-rig numbers; the TechEmpowe
 | 2026-10-21 | [review-fixes-and-batch-size](2026-10-21-review-fixes-and-batch-size.md) | Review fixes on one CPU; Sockets, batches of 512 and of 64 on two CPUs | one CPU: -2.5% health, -6% mix (one round); two CPUs: loop +22% over Sockets, p99 16-19 vs 10-11 ms; batches of 64 worse |
 | 2026-10-21 | [second-review-fixes-send-and-listeners](2026-10-21-second-review-fixes-send-and-listeners.md) | 00cc86e against 805f8d9; send with and without its GC transition; listener per loop against one on two CPUs | health level or better, mix -6% on the loop (not syscalls, not the edge word); keep the transition; listeners level |
 | 2026-10-21 | [mix-bisect](2026-10-21-mix-bisect.md) | The mix at five commits from 805f8d9 to 00cc86e, two rounds, profiles of both ends | no commit costs the mix: +4% in round 1, -5% in round 2, by position in the run; profiles alike |
+| 2026-10-21 | [loop-pools-c4](2026-10-21-loop-pools-c4.md) | A buffer stack per event loop against the locked pool, C4, TechEmpower plaintext and json, ABBA | plaintext +2.5%, json +1.9%, the lock gone from the profile; one listener level; 6 loops on 8 cores -10 to 16% |
 
 ## Template
 
