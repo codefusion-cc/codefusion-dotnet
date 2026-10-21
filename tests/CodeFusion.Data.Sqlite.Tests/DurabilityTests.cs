@@ -263,6 +263,47 @@ public sealed class DurabilityTests : IDisposable
     }
 
     [Fact(Timeout = 30_000)]
+    public async Task StopEndsInTimeWhileALoopHoldsABatchAndWritesAreQueued()
+    {
+        var db = _db.Database(exclusive: true, batches: true);
+        var s = db.OpenSource();
+        using var loop = new TestLoop(s);
+        using var holding = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        ValueTask<DataResult> held = default;
+        var wake = loop.WakeUp(() =>
+        {
+            held = Kv.Write(s, "held", 1);
+            holding.Set();
+            release.Wait(TimeSpan.FromSeconds(20));
+        });
+        holding.Wait(TestContext.Current.CancellationToken);
+        // off the loop: the writer thread takes it and waits for the connection the batch holds
+        var queued = Kv.Write(s, "queued", 2);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+        var stopped = Stopwatch.StartNew();
+        var stopping = Task.Run(s.Stop, TestContext.Current.CancellationToken);
+        try
+        {
+            Assert.True(await Task.WhenAny(stopping, Task.Delay(TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken)) == stopping,
+                "Stop didn't end within 8 s while a loop held its batch and a write was queued");
+            Assert.Equal(DataStatus.Stopped, (await queued).Status);
+        }
+        finally
+        {
+            release.Set();
+        }
+        await wake;
+        var r = await held;
+        Assert.True(r.Status is DataStatus.Ok or DataStatus.Stopped, r.ToString());
+        await stopping;
+        // the batch's end closed the connection: the file opens again in this process
+        var again = _db.Open(db);
+        Assert.Equal(r.IsOk ? 1 : 0, Kv.Count(again, "held"));
+        Assert.Equal(0, Kv.Count(again, "queued"));
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task StopDuringBatchesEndsCleanlyAndAnswersEveryWrite()
     {
         var db = _db.Database(exclusive: true, batches: true);
@@ -297,10 +338,11 @@ public sealed class DurabilityTests : IDisposable
     [Fact(Timeout = 30_000)]
     public async Task AFailedStatementLeavesNothingForTheWatchdogToInterrupt()
     {
-        var db = _db.Database(timeout: TimeSpan.FromMilliseconds(200));
+        // a timeout no write comes near even on a loaded machine (200 ms did, in a full run beside other classes)
+        var db = _db.Database(timeout: TimeSpan.FromSeconds(2));
         var s = _db.Open(db);
         Assert.Equal(DataStatus.Failed, (await Sqlite.Run<Value>(s.Write(Statement("INSERT INTO nowhere VALUES (1)")).Hold(), null, default)).Status);
-        await Task.Delay(500, TestContext.Current.CancellationToken); // past the timeout: a stale start would be "over" now
+        await Task.Delay(2_500, TestContext.Current.CancellationToken); // past the timeout: a stale start would be "over" now
         for (int i = 0; i < 50; i++) Assert.True((await Kv.Write(s, "w" + i, i)).IsOk);
         Assert.Equal(0, s.Interrupted);
     }

@@ -353,6 +353,9 @@ public sealed class TestLoop : IDisposable
     readonly BlockingCollection<(Action Handlers, TaskCompletionSource Done)> _wakeUps = [];
     readonly Thread _thread;
 
+    /// <summary>The loop's thread.</summary>
+    public int ThreadId => _thread.ManagedThreadId;
+
     /// <summary>Loop 0, whose batch actions are <paramref name="sources"/>' ends, in that order.</summary>
     public TestLoop(params SqliteDataSource[] sources) : this(0, sources) { }
 

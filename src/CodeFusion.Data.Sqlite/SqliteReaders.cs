@@ -194,12 +194,20 @@ internal sealed class SqliteReaders : IDisposable
 
     internal SqliteConn[] Connections => _conns;
 
-    /// <summary>The writer, whose event-loop batch a read on its loop commits first (Exclusive mode).</summary>
+    /// <summary>The writer: its event-loop batch takes a read on its loop in (Exclusive mode), and it closes the connection.</summary>
     internal SqliteWriter? Writer;
 
+    /// <summary>Exclusive mode, once stopped: when a wait for the connection gives up (a loop's batch may hold it as long
+    /// as its handler runs). Stopwatch ticks; never before the stop.</summary>
+    long _giveUpAt = long.MaxValue;
+    static readonly TimeSpan StopWait = TimeSpan.FromSeconds(2);
+
+    bool GaveUp() => Stopwatch.GetTimestamp() >= Volatile.Read(ref _giveUpAt);
+
     /// <summary>Exclusive mode: the writer takes the connection for a group, waiting for a read running on it, stopped or
-    /// not (the writer commits what has queued after a stop).</summary>
-    internal void Enter()
+    /// not (the writer commits what has queued after a stop). False when it gave up: stopped, and a loop's batch held the
+    /// connection past <see cref="StopWait"/>.</summary>
+    internal bool Enter()
     {
         // turns: a read that waited goes before the next group, and no read starts while the writer waits, so neither
         // side waits for more than one of the other's
@@ -208,13 +216,47 @@ internal sealed class SqliteReaders : IDisposable
             long seen = Volatile.Read(ref _readsDone);
             SpinWait turn = default;
             long since = 0;
-            while (!ReadWent(this, seen)) Pause(ref turn, ref since, ReadWent, seen);
+            while (!ReadWent(this, seen))
+            {
+                if (GaveUp()) return false;
+                Pause(ref turn, ref since, ReadWent, seen);
+            }
         }
         Volatile.Write(ref _writerWaits, 1);
         SpinWait spin = default;
         long waited = 0;
-        while (Interlocked.CompareExchange(ref _taken[0], 1, 0) != 0) Pause(ref spin, ref waited, Free, 0);
+        while (Interlocked.CompareExchange(ref _taken[0], 1, 0) != 0)
+        {
+            if (GaveUp())
+            {
+                Volatile.Write(ref _writerWaits, 0);
+                return false;
+            }
+            Pause(ref spin, ref waited, Free, 0);
+        }
         Volatile.Write(ref _writerWaits, 0);
+        return true;
+    }
+
+    /// <summary>Exclusive mode: the connection is to close as soon as nothing holds it (<see cref="CloseWhenFree"/>).</summary>
+    int _closePending;
+
+    /// <summary>Exclusive mode, stopping: closes the connection now if nothing holds it within <paramref name="wait"/>;
+    /// else whoever gives it back last closes it (<see cref="Released"/>). Never lost: the flag is set with a full fence
+    /// before the try, and every give-back reads it after a full fence of its own.</summary>
+    internal void CloseWhenFree(TimeSpan wait)
+    {
+        Interlocked.Exchange(ref _closePending, 1);
+        if (TryEnter(wait)) Writer!.CloseHeld();
+    }
+
+    /// <summary>The close is done (or not wanted any more), by the thread holding the connection.</summary>
+    internal void CloseDone() => Volatile.Write(ref _closePending, 0);
+
+    /// <summary>After the connection was given back, with a full fence: closes it if a close waits for it free.</summary>
+    void Released()
+    {
+        if (Volatile.Read(ref _closePending) != 0 && TryEnter(TimeSpan.Zero)) Writer!.CloseHeld();
     }
 
     static readonly Func<SqliteReaders, long, bool> ReadWent =
@@ -288,7 +330,11 @@ internal sealed class SqliteReaders : IDisposable
                 if (Volatile.Read(ref _writerWaits) == 0 && Volatile.Read(ref _taken[0]) == 0 && Interlocked.CompareExchange(ref _taken[0], 1, 0) == 0)
                 {
                     if (Volatile.Read(ref _stopped) == 0) return 0;
-                    Volatile.Write(ref _taken[0], 0);
+#if DEBUG
+                    StoppedRead?.Invoke();
+#endif
+                    Interlocked.Exchange(ref _taken[0], 0);
+                    Released();
                     return -1;
                 }
                 if (Volatile.Read(ref _stopped) != 0) return -1;
@@ -324,8 +370,19 @@ internal sealed class SqliteReaders : IDisposable
     internal void Exit()
     {
         Interlocked.Exchange(ref _taken[0], 0);
+#if DEBUG
+        AfterExit?.Invoke();
+#endif
         WakeParked();
+        Released();
     }
+
+#if DEBUG
+    /// <summary>Debug, tests: runs right after the connection is given back (<see cref="Exit"/>).</summary>
+    internal static Action? AfterExit;
+    /// <summary>Debug, tests: runs while a read that took the connection after the stop still holds it.</summary>
+    internal static Action? StoppedRead;
+#endif
 
     /// <summary>Exclusive mode: the thread whose event-loop batch holds the connection (it took it with <see cref="Enter"/>),
     /// 0 when none does. Its reads run in the batch's transaction.</summary>
@@ -418,8 +475,12 @@ internal sealed class SqliteReaders : IDisposable
             conn.Ended();
             if (!own)
             {
-                if (_shared) Interlocked.Increment(ref _readsDone);
                 Volatile.Write(ref _taken[i * Stride], 0);
+                if (_shared)
+                {
+                    Interlocked.Increment(ref _readsDone); // the full fence Released reads after
+                    Released();
+                }
             }
         }
     }
@@ -449,10 +510,12 @@ internal sealed class SqliteReaders : IDisposable
         if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
         if (_shared)
         {
+            // waits for the connection give up from now on: the writer's for its last groups too
+            Volatile.Write(ref _giveUpAt, Stopwatch.GetTimestamp() + (long)(StopWait.TotalSeconds * Stopwatch.Frequency));
             WakeParked(); // reads parked for the connection see the stop
             // the writer's connection, which it closes after its last group: only the read running is waited for, and a
             // loop's batch holding it isn't waited for long (its end closes the connection then)
-            if (TryEnter(TimeSpan.FromSeconds(2))) Exit();
+            if (TryEnter(StopWait)) Exit();
             return;
         }
         for (int i = 0; i < _conns.Length; i++)

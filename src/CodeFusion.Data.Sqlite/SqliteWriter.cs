@@ -203,7 +203,12 @@ public sealed unsafe class SqliteWriter
     {
         // in exclusive mode the connection is the readers' too: taken for the transaction, and given back before any of
         // the group's writes completes, whose continuation may read
-        Enter();
+        if (!Enter())
+        {
+            // stopped while a loop's batch held the connection past the stop's wait: the group never ran
+            Complete(_group, n, DataResult.Of(DataStatus.Stopped), Inline);
+            return;
+        }
         DataResult? failed;
         try
         {
@@ -397,10 +402,8 @@ public sealed unsafe class SqliteWriter
         }
     }
 
-    void Enter()
-    {
-        if (_options.Exclusive) Readers!.Enter();
-    }
+    /// <summary>Takes the connection from the reads in Exclusive mode; false when the stop gave up on it.</summary>
+    bool Enter() => !_options.Exclusive || Readers!.Enter();
 
     void Exit()
     {
@@ -419,21 +422,22 @@ public sealed unsafe class SqliteWriter
     /// group's latency.</summary>
     void AfterGroup()
     {
+        if (Volatile.Read(ref _closed)) return;
         Readers?.Sweep();
-        if (*_conn.WalFrames < _options.CheckpointFrames || Volatile.Read(ref _closed)) return;
-        Enter();
+        // the WAL hook's count: GC memory the connection holds, so it reads stale, never freed, if a close came between
+        if (*_conn.WalFrames < _options.CheckpointFrames || !Enter()) return;
         try
         {
             if (Volatile.Read(ref _closed)) return;
             EndRead();
             _ = Sqlite3.WalCheckpoint(_conn.Db, null, 0, out _, out _); // PASSIVE: never waits on a reader
+            *_conn.WalFrames = 0;
         }
         finally
         {
             Exit();
         }
         Interlocked.Increment(ref Counters.Checkpoints);
-        *_conn.WalFrames = 0;
     }
 
     // ---------- event-loop batches (SqliteDatabase.EventLoopBatches) ----------
@@ -484,7 +488,11 @@ public sealed unsafe class SqliteWriter
         if (Volatile.Read(ref _batchThread) != me)
         {
             if (Volatile.Read(ref _stopped) || Interlocked.CompareExchange(ref _batchThread, me, 0) != 0) return false;
-            Readers!.Enter(); // after the read or group running, in turn
+            if (!Readers!.Enter()) // after the read or group running, in turn
+            {
+                Volatile.Write(ref _batchThread, 0);
+                return false;
+            }
             if (Volatile.Read(ref _stopped) || Volatile.Read(ref _closed))
             {
                 // stopped while it waited: the writer refuses it, and the connection may be closing
@@ -596,8 +604,7 @@ public sealed unsafe class SqliteWriter
     {
         Readers!.Owner = 0;
         Volatile.Write(ref _batchThread, 0);
-        Readers.Exit();
-        if (Volatile.Read(ref _closeWhenFree)) CloseIfFree(); // the source stopped while this batch held the connection
+        Readers.Exit(); // the source stopped while this batch held the connection: closes it, unless a read still holds it
     }
 
     void FailAll(int n, in DataResult result)
@@ -614,12 +621,10 @@ public sealed unsafe class SqliteWriter
 
     /// <summary>The connection is closed.</summary>
     bool _closed;
-    /// <summary>Stop couldn't take the connection in time (a loop held its batch): the holder closes it on release.</summary>
-    bool _closeWhenFree;
     static readonly TimeSpan CloseWait = TimeSpan.FromSeconds(2);
 
     /// <summary>Closes the connection once nothing uses it. In Exclusive mode a loop's batch may hold it: waits for it at
-    /// most <see cref="CloseWait"/>, then leaves the closing to the batch's end.</summary>
+    /// most <see cref="CloseWait"/>, then leaves the closing to whoever gives it back last.</summary>
     void CloseConnection()
     {
         if (!_options.Exclusive)
@@ -628,18 +633,11 @@ public sealed unsafe class SqliteWriter
             _conn.Dispose();
             return;
         }
-        Volatile.Write(ref _closeWhenFree, true);
-        if (!Readers!.TryEnter(CloseWait)) return; // the batch holding it closes it
-        Close();
+        Readers!.CloseWhenFree(CloseWait);
     }
 
-    void CloseIfFree()
-    {
-        if (Readers!.TryEnter(TimeSpan.Zero)) Close();
-    }
-
-    /// <summary>Holding the connection: closes it, once.</summary>
-    void Close()
+    /// <summary>Holding the connection (Exclusive mode): closes it, once, and gives it back.</summary>
+    internal void CloseHeld()
     {
         try
         {
@@ -650,7 +648,8 @@ public sealed unsafe class SqliteWriter
         }
         finally
         {
-            Readers!.Exit();
+            Readers!.CloseDone();
+            Readers.Exit();
         }
     }
 
@@ -666,7 +665,7 @@ public sealed unsafe class SqliteWriter
         if (t_writer == this)
         {
             // on the writer's own thread, in a completion: after the group's COMMIT, between transactions
-            Enter();
+            if (!Enter()) throw new InvalidOperationException("the source stopped");
             try
             {
                 EndRead();
@@ -689,7 +688,11 @@ public sealed unsafe class SqliteWriter
                 }
             Thread.Sleep(1);
         }
-        Enter();
+        if (!Enter())
+        {
+            lock (_lock) _busy = false;
+            throw new InvalidOperationException("the source stopped");
+        }
         try
         {
             EndRead();
@@ -709,8 +712,12 @@ public sealed unsafe class SqliteWriter
         lock (_lock) _stopped = true;
         lock (_ring) Monitor.PulseAll(_ring);
         if (!_started) _conn.Dispose();
-        else if (Thread.CurrentThread != _thread) _thread.Join(); // on its own thread (a continuation): it closes when its loop ends
+        // on its own thread (a continuation): it closes when its loop ends. Else bounded: the thread's waits for the
+        // connection give up after the stop (Readers), then its close waits CloseWait at most
+        else if (Thread.CurrentThread != _thread && !_thread.Join(StopJoin)) Record(new TimeoutException("the SQLite writer thread didn't end within " + StopJoin));
     }
+
+    static readonly TimeSpan StopJoin = TimeSpan.FromSeconds(10);
 
     /// <summary>Whether the writer's thread has ended.</summary>
     internal bool Stopped => !_thread.IsAlive;

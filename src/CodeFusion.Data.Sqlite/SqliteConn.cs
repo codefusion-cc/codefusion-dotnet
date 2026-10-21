@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -55,11 +56,15 @@ internal sealed unsafe class SqliteConn : IDisposable
     /// <summary>When the running job started (Stopwatch ticks), 0 between jobs: the watchdog interrupts one that runs too long.</summary>
     long _started;
 
+    /// <summary>The cells <see cref="Clock"/> and <see cref="WalFrames"/> point into: GC memory, pinned, never freed while
+    /// anything still holds this connection, so a read of them after a close is stale, not of freed memory.</summary>
+    readonly long[] _cells = GC.AllocateArray<long>(2, pinned: true);
+
     SqliteConn(nint db)
     {
         _db = db;
-        Clock = (long*)NativeMemory.AllocZeroed(sizeof(long));
-        WalFrames = (int*)NativeMemory.AllocZeroed(sizeof(int));
+        Clock = (long*)Unsafe.AsPointer(ref _cells[0]);
+        WalFrames = (int*)Unsafe.AsPointer(ref _cells[1]);
     }
 
     internal nint Db => _db;
@@ -276,7 +281,5 @@ internal sealed unsafe class SqliteConn : IDisposable
             if (more is not null)
                 foreach (var s in more) _ = Sqlite3.Finalize(s);
         _ = Sqlite3.Close(db);
-        NativeMemory.Free(Clock);
-        NativeMemory.Free(WalFrames);
     }
 }
