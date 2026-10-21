@@ -1312,6 +1312,14 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         Kick();
     }
 
+    /// <summary>Closes the socket as a timeout does, with a FIN (a reset only if the client's bytes are unread), and
+    /// wakes the run, which finds it closed.</summary>
+    internal void Close()
+    {
+        Volatile.Read(ref _socket)?.Dispose();
+        Kick();
+    }
+
     /// <summary>Shutdown's last step: closes the socket whatever the connection is doing, with a reset, so the kernel
     /// drops what it holds for the client. A plain close reset only when a receive or send was pending (.NET closes
     /// abortively when it cancels one), not under a handler that blocks its thread.</summary>

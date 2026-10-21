@@ -36,6 +36,26 @@ public class EdgeTests
         Assert.Contains("SequenceEqual(b.PropertyName(name), \"user\"u8)", body, StringComparison.Ordinal);
     }
 
+    // One pass binds and checks the syntax: the reader reports a malformed body instead of throwing, so the binder
+    // has no try, no catch and no second read, and asks ReadToEnd whether the body was JSON before any field's reply.
+    [Fact]
+    public void ABodyIsBoundAndCheckedInOnePassWithoutExceptions()
+    {
+        string body = Generated("""
+            [JsonEnvelope("user")] public partial struct NewUser { public Utf8 Email; public long Age; }
+            public static class P
+            {
+                public static void Map(IEndpointRouteBuilder api) => api.MapPost("/users", static (NewUser u) => Reply.NoContent());
+            }
+            """, "NewUser.Body.g.cs");
+        foreach (string gone in new[] { "try", "catch", "JsonException", "IsWellFormed" })
+            Assert.DoesNotContain(gone, body, StringComparison.Ordinal);
+        Assert.Contains("if (!b.ReadRootObject()) return b.ReadToEnd() ? source.InvalidBody : source.MalformedBody ?? source.InvalidBody;", body, StringComparison.Ordinal);
+        int end = body.IndexOf("if (!b.ReadToEnd()) return source.MalformedBody ?? source.InvalidBody;", StringComparison.Ordinal);
+        Assert.True(end > 0, body);
+        Assert.True(end < body.IndexOf("if (!found) return", StringComparison.Ordinal) && end < body.IndexOf("IsRequiredText", StringComparison.Ordinal), body);
+    }
+
     [Fact]
     public void AnIntQueryFieldsBoundsStayInsideInt()
     {

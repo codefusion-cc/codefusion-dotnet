@@ -138,8 +138,8 @@ namespace CodeFusion.Http.Generated
         public override global::System.Threading.Tasks.ValueTask Invoke(global::CodeFusion.Http.RequestContext c)
         {
             global::CodeFusion.Utf8 p0 = c.RouteText(_route0);
-            if (!c.TryRouteInt64(_route1, out long p1)) return c.Errors.NotFound.WriteAsync(c);
-            if (!c.TryRouteInt32(_route2, out int p2)) return c.Errors.NotFound.WriteAsync(c);
+            if (!c.TryRouteInt64(_route1, out long p1)) return c.RejectRouteValue(this);
+            if (!c.TryRouteInt32(_route2, out int p2)) return c.RejectRouteValue(this);
             return Send3.Send(_handler(p0, p1, p2), c);
         }
     }

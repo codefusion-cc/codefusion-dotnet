@@ -172,10 +172,10 @@ internal static class Emitter
                     w.Line($"{pm.Type} p{p} = c.RouteText(_route{p});");
                     break;
                 case ParameterKind.RouteInt64:
-                    w.Line($"if (!c.TryRouteInt64(_route{p}, out long p{p})) return c.Errors.NotFound.WriteAsync(c);");
+                    w.Line($"if (!c.TryRouteInt64(_route{p}, out long p{p}){Outside(pm, $"p{p}")}) return c.RejectRouteValue(this);");
                     break;
                 case ParameterKind.RouteInt32:
-                    w.Line($"if (!c.TryRouteInt32(_route{p}, out int p{p})) return c.Errors.NotFound.WriteAsync(c);");
+                    w.Line($"if (!c.TryRouteInt32(_route{p}, out int p{p}){Outside(pm, $"p{p}")}) return c.RejectRouteValue(this);");
                     break;
             }
         }
@@ -205,6 +205,10 @@ internal static class Emitter
         w.Close();
         w.Close();
     }
+
+    /// <summary>" || " and the condition that a route value is outside its [Range], or nothing when it has none.</summary>
+    static string Outside(ParameterModel pm, string value) =>
+        (pm.Min is null ? "" : $" || {value} < {pm.Min}") + (pm.Max is null ? "" : $" || {value} > {pm.Max}");
 
     static void Sender(Writer w, ReplyModel r, int i)
     {
@@ -442,13 +446,13 @@ internal static class Emitter
         w.Line("[global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]");
         w.Open($"internal static global::CodeFusion.ErrorReply? __BindBody(in {Http}.BodySource source, out {b.Home.FullName} value)");
         w.Line("value = default;");
+        w.Line($"if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? {structural};");
         w.Line($"var b = new {Http}.JsonBody(source);");
         w.Line($"global::System.Span<byte> name = stackalloc byte[{buffer}];");
         Locals(w, b);
         if (b.Envelope is not null) w.Line("bool found = false;");
-        w.Line("try");
-        w.Open("");
-        w.Line($"if (!b.ReadRootObject()) return {structural};");
+        w.Line("// one pass reads and checks the body: a syntax error stops the reads, and ReadToEnd reports it, never a throw");
+        w.Line($"if (!b.ReadRootObject()) return b.ReadToEnd() ? {structural} : source.MalformedBody ?? {structural};");
         if (b.Envelope is not null)
         {
             w.Line("while (b.NextProperty())");
@@ -459,19 +463,20 @@ internal static class Emitter
             w.Line("continue;");
             w.Close();
             w.Line("// a later wrapper replaces an earlier one, fields and all");
-            for (int i = 0; i < b.Fields.Count; i++) w.Line($"f{i} = default;");
+            for (int i = 0; i < b.Fields.Count; i++)
+            {
+                w.Line($"f{i} = default;");
+                if (b.Fields[i].Kind != BodyFieldKind.Nested) continue;
+                w.Line($"n{i} = default;");
+                w.Line($"e{i} = null;");
+            }
             w.Line("found = b.ReadObject();");
             w.Line("if (!found) continue;");
             ReadFields(w, b);
             w.Close();
         }
         else ReadFields(w, b);
-        w.Line("b.ReadToEnd();");
-        w.Close();
-        w.Line("catch (global::System.Text.Json.JsonException)");
-        w.Open("");
-        w.Line($"return {structural};");
-        w.Close();
+        w.Line($"if (!b.ReadToEnd()) return source.MalformedBody ?? {structural};");
         if (b.Envelope is not null) w.Line($"if (!found) return {structural};");
         Validate(w, b, i => b.Fields[i].Error ?? fieldError, nested: false);
         w.Line("return null;");
