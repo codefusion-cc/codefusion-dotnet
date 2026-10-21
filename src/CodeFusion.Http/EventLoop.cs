@@ -302,7 +302,8 @@ internal abstract unsafe class EventLoop
     }
 
     /// <summary>The batch's actions, then its answers; again while sending them started handlers (a pipelined request
-    /// behind an answer), so every handler that starts on the loop is in a batch whose actions run after it. Past
+    /// behind an answer) or something asked for another end (EventLoopThread.RequestBatchEnd), so every handler that
+    /// starts on the loop, and every batch opened on it, is in a batch whose actions run after it. Past
     /// <see cref="RoundsPerWake"/> what is left waits for the next wake-up, which then doesn't block. (Sending every
     /// 64 events instead lost throughput and didn't shorten the tail:
     /// docs/benchmarks/2026-10-21-review-fixes-and-batch-size.md.)</summary>
@@ -311,13 +312,15 @@ internal abstract unsafe class EventLoop
         _pending = false;
         for (int round = 0; ; round++)
         {
+            // a batch end asked for before now is this round's (EventLoopThread.RequestBatchEnd)
+            _ = EventLoopThread.TakeBatchEndRequest();
             if (_server.Options.OnEventLoopBatch is { } hook) RunBatchAction(hook, 0);
             Action<int>[] actions = _server.BatchActions;
             for (int i = 0; i < actions.Length; i++) RunBatchAction(actions[i], i + 1);
-            if (_sendCount == 0) return;
+            if (_sendCount == 0 && !EventLoopThread.BatchEndRequested) return;
             int runs = _handlerRuns;
             SendAll();
-            if (_handlerRuns == runs && _sendCount == 0) return;
+            if (_handlerRuns == runs && _sendCount == 0 && !EventLoopThread.BatchEndRequested) return;
             if (round + 1 == RoundsPerWake)
             {
                 _pending = true;

@@ -288,6 +288,60 @@ public sealed class EventLoopBatchTests
         Assert.DoesNotContain(-1, loops);
     }
 
+    // A batch opened on the loop by code that runs as a held answer is sent (not a handler: here the connection's idle
+    // hook, as a write after a handler's own flush would) asks for its end, and gets it before the loop waits again.
+    [Fact(Timeout = 20_000)]
+    public async Task ABatchOpenedWhileAnswersAreSentEndsBeforeTheLoopWaitsAgain()
+    {
+        Assert.SkipUnless(AllocationTests.Debugger(), "Debug builds count the loop's waits");
+        int waits = 0, opened = -1, ended = -1;
+        bool open = false;
+        await using var t = Start(Path, loop =>
+        {
+            if (!Volatile.Read(ref open)) return;
+            Volatile.Write(ref open, false);
+            Volatile.Write(ref ended, Volatile.Read(ref waits));
+        });
+        t.Server.LoopWaitHook = _ =>
+        {
+            Interlocked.Increment(ref waits);
+            return false;
+        };
+        using Client c = await t.ConnectAsync();
+        await Warm(c);
+        t.Server.ConnectionIdle = _ =>
+        {
+            if (EventLoopThread.Current < 0 || Volatile.Read(ref opened) >= 0) return;
+            Volatile.Write(ref open, true);
+            Volatile.Write(ref opened, Volatile.Read(ref waits));
+            EventLoopThread.RequestBatchEnd();
+        };
+        await c.SendAsync(Get("/a"));
+        Assert.Equal("/a", (await c.ReadAsync()).Text);
+        await TestServer.Until(() => Volatile.Read(ref ended) >= 0, 2000, () => "the batch never ended");
+        Assert.True(opened >= 0);
+        Assert.Equal(opened, ended);
+    }
+
+    // A loop whose batches keep asking for another end runs its rounds, and past them goes on without waiting for an
+    // event: no batch is left open until some unrelated request arrives.
+    [Fact(Timeout = 20_000)]
+    public async Task BatchEndsAskedForPastTheRoundsGoOnWithoutAnEvent()
+    {
+        int calls = 0, asking = 0;
+        await using var t = Start(Path, loop =>
+        {
+            Interlocked.Increment(ref calls);
+            if (Volatile.Read(ref asking) > 0 && Interlocked.Decrement(ref asking) >= 0) EventLoopThread.RequestBatchEnd();
+        });
+        using Client c = await t.ConnectAsync();
+        await Warm(c);
+        Volatile.Write(ref asking, 30); // 30 more ends asked for: over three wake-ups' rounds
+        await c.SendAsync(Get("/a"));
+        Assert.Equal("/a", (await c.ReadAsync()).Text);
+        await TestServer.Until(() => Volatile.Read(ref asking) <= 0, 2000, () => $"{asking} batch ends still asked for after {calls} calls");
+    }
+
     // What CodeFusion.Data's providers use: actions an app's services register, run after the options' hook in their
     // order, each with the loop's index, on that loop's thread; none after Build.
     [Fact(Timeout = 20_000)]
