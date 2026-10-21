@@ -251,13 +251,14 @@ public static class HandWrittenApi
 
     static ValueTask Article(HttpExchange x)
     {
-        long viewer = _jwt.Viewer(x.HasAuthorization, x.Authorization);
-        if (viewer < 0)
+        Connection c = Of(x);
+        // what the dispatcher does for an AuthOptional endpoint, by hand
+        TokenCheck check = _jwt.Authenticate(x.HasAuthorization, x.Authorization, c.Arena, Span<int>.Empty, out long viewer, out _);
+        if (HttpApp.Refuses(check, x.HasAuthorization, AuthMode.Optional))
         {
             x.Status = 401;
             return default;
         }
-        Connection c = Of(x);
         var q = new QuerySource(x.RequestBuffer, x.QueryOffset, x.QueryLength, c.Arena);
         q.TryText("tag"u8, out Utf8 tag);
         QueryNumber n = q.TryNumber("limit"u8, 1, 100, out long limit);

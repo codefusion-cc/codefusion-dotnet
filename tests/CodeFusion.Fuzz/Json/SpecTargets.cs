@@ -38,7 +38,7 @@ static class JsonSyntaxTarget
             threw = true;
         }
         bool reader = !threw && theirs.Count > 0;
-        if (reader == c.Malformed || reader != JsonSyntax.IsValid(input, 64))
+        if (reader == c.Malformed)
             throw new FuzzFinding($"json-syntax: the reader {(reader ? "takes" : "refuses")} what the cursor {(c.Malformed ? "refuses" : "takes")}", Findings.Show(input));
         int both = Math.Min(ours.Count, theirs.Count);
         for (int k = 0; k < both; k++)

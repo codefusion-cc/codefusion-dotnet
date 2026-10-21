@@ -519,7 +519,7 @@ internal sealed class Analysis(KnownTypes known)
             max = End(args[1].Value);
         }
         else if (args.Length == 3 && args[0].Value is ITypeSymbol { SpecialType: SpecialType.System_Int16 or SpecialType.System_Int32 or SpecialType.System_Int64 or SpecialType.System_Byte
-            or SpecialType.System_SByte or SpecialType.System_UInt16 or SpecialType.System_UInt32 or SpecialType.System_Single or SpecialType.System_Double or SpecialType.System_Decimal })
+            or SpecialType.System_SByte or SpecialType.System_UInt16 or SpecialType.System_UInt32 or SpecialType.System_UInt64 or SpecialType.System_Single or SpecialType.System_Double or SpecialType.System_Decimal })
         {
             min = End(args[1].Value as string);
             max = End(args[2].Value as string);

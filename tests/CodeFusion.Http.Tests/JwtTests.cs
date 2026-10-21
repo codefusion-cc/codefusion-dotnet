@@ -136,7 +136,16 @@ public sealed class JwtSchemeTests
         return Encoding.ASCII.GetString(b, 0, jwt.Issue(user, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), b));
     }
 
-    static long Viewer(Jwt jwt, string? header) => jwt.Viewer(header is not null, header is null ? default : Encoding.UTF8.GetBytes(header));
+    static long Viewer(Jwt jwt, string? header) => Dispatched(jwt, header);
+
+    /// <summary>What the dispatcher makes of <paramref name="header"/> on an endpoint whose auth is
+    /// <paramref name="auth"/>, through its own calls: the viewer's id, 0 for anonymous, -1 for a 401.</summary>
+    internal static long Dispatched(Jwt jwt, string? header, AuthMode auth = AuthMode.Optional)
+    {
+        byte[] h = header is null ? [] : Encoding.UTF8.GetBytes(header);
+        TokenCheck check = jwt.Authenticate(header is not null, h, new JwtClaimTests.CountingArena(), new int[2 * jwt.ClaimCount], out long id, out _);
+        return HttpApp.Refuses(check, header is not null, auth) ? -1 : id;
+    }
 
     [Fact]
     public void TheSchemeIsTokenUnlessSet()

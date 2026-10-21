@@ -173,12 +173,17 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
         {
             TokenCheck check = _jwt!.Authenticate(x.HasAuthorization, x.Authorization, c.Arena, c.ClaimRanges, out long viewer, out ArenaBytes payload);
             // no header is anonymous where that is allowed; a header that isn't a valid token never is
-            if (check != TokenCheck.Valid && (x.HasAuthorization || e.Auth == AuthMode.Required)) return Errors.Refused(check).WriteAsync(c);
+            if (Refuses(check, x.HasAuthorization, e.Auth)) return Errors.Refused(check).WriteAsync(c);
             c.ViewerId = viewer;
             c.ClaimPayload = payload;
         }
         return e.Invoke(c);
     }
+
+    /// <summary>Whether an endpoint that reads the header answers 401: anything but a valid token, except that no
+    /// header at all is anonymous where auth is optional.</summary>
+    internal static bool Refuses(TokenCheck check, bool hasAuthorization, AuthMode auth) =>
+        check != TokenCheck.Valid && (hasAuthorization || auth == AuthMode.Required);
 
     RequestContext NewContext(HttpExchange x)
     {

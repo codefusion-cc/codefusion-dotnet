@@ -552,19 +552,6 @@ public sealed class Jwt : IRequestScoped
         return Check(token, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), arena, claims, out id, out payload);
     }
 
-    /// <summary>
-    /// The viewer's user id from the first Authorization header: 0 when none was sent (<paramref name="present"/>
-    /// false); -1 when one was sent but isn't the scheme, one space and a valid token. A header sent empty (or only
-    /// whitespace) is present and invalid, not anonymous. Surrounding spaces and tabs are trimmed, as Kestrel did.
-    /// </summary>
-    internal long Viewer(bool present, ReadOnlySpan<byte> header)
-    {
-        if (!present) return 0;
-        if (!TryToken(header, out ReadOnlySpan<byte> token)) return -1;
-        long id = Verify(token);
-        return id > 0 ? id : -1;
-    }
-
     /// <summary>The token in an Authorization header's value: what follows the scheme and one space once surrounding
     /// spaces and tabs are trimmed, as Kestrel did; false for another scheme, in any case.</summary>
     internal bool TryToken(ReadOnlySpan<byte> header, out ReadOnlySpan<byte> token)

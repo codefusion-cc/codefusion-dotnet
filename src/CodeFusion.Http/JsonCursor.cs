@@ -5,18 +5,6 @@ using System.Text.Json;
 
 namespace CodeFusion.Http;
 
-/// <summary>Whether bytes are one JSON value as <see cref="JsonCursor"/> (and so <c>Utf8JsonReader</c>) reads them.</summary>
-internal static class JsonSyntax
-{
-    /// <summary>One value and only whitespace around it, nested at most <paramref name="maxDepth"/> (at most 64) deep.</summary>
-    public static bool IsValid(ReadOnlySpan<byte> s, int maxDepth)
-    {
-        var c = new JsonCursor(s, maxDepth);
-        while (c.Read()) { }
-        return !c.Malformed;
-    }
-}
-
 /// <summary>
 /// The body binders' JSON reader: <c>Utf8JsonReader</c>'s tokens for a final block with no comments, no trailing
 /// commas and a depth limit, read in one pass, reporting a syntax error as <see cref="Malformed"/> instead of throwing,

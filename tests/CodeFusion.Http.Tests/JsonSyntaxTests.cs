@@ -33,11 +33,19 @@ public sealed class JsonSyntaxTests
         }
     }
 
+    /// <summary>Whether the cursor reads the bytes to their end as one value.</summary>
+    static bool CursorTakes(ReadOnlySpan<byte> json)
+    {
+        var c = new JsonCursor(json, 64);
+        while (c.Read()) { }
+        return !c.Malformed;
+    }
+
     static void Same(byte[] json)
     {
         SameTokens(json);
         bool reader = ReaderTakes(json);
-        bool ours = JsonSyntax.IsValid(json, 64);
+        bool ours = CursorTakes(json);
         Assert.True(reader == ours, $"reader {(reader ? "takes" : "refuses")}, the check {(ours ? "takes" : "refuses")}: {Encoding.UTF8.GetString(json)}");
     }
 

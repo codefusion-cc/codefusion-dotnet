@@ -871,9 +871,9 @@ What it decided:
 - The reasons are nullable properties next to `Unauthorized`, not a new reply type: an app that set only
   `Unauthorized` (Conduit's `{"errors":{"body":[...]}}`) keeps it for every reason. A header without the scheme is
   the missing reason, as the feed spec says, even on an optional endpoint, where it stays a 401 as before.
-- A body is malformed when the reader throws: a syntax error, an end too early, anything after the root but
-  whitespace, depth past 64. A root that isn't an object is read to its end first, so `[1,` is malformed and `[]`
-  is another shape. That read is bounded by the body limit, and no binder stops early on a well-formed body anyway.
+- (Superseded by the single pass below: nothing throws now, and malformed means `JsonCursor.Malformed`.) A body was
+  malformed when the reader threw: a syntax error, an end too early, anything after the root but whitespace, depth
+  past 64. A root that isn't an object is read to its end, so `[1,` is malformed and `[]` is another shape. That read is bounded by the body limit, and no binder stops early on a well-formed body anyway.
   Raw invalid UTF-8 inside a string isn't a syntax error to `Utf8JsonReader`, so it stays a bad field, as before.
   Missing means no bytes at all; whitespace is malformed. Neither new reply is a struct member: a struct's own
   `InvalidBody` already answers for its shape, and a reason the app names wins over it.
@@ -884,14 +884,14 @@ What it decided:
   `??` chain in `RejectRouteValue`. Auth runs in the dispatcher before the endpoint binds anything, as before.
 - A malformed body cost a `JsonException` (1,176 B per request in `AppAllocationTests`), as it had since the binders
   were written; it mattered once a malformed body had its own reply. For one commit the binder checked every body's
-  syntax first, without throwing (`JsonSyntax`, about 150 lines, one pass). The check is never stricter than the
+  syntax first, without throwing (`JsonSyntax`, about 150 lines, one pass, since folded into `JsonCursor`). The check is never stricter than the
   reader: `JsonSyntaxTests` (60 cases, 25,000 generated inputs, depth 63 to 1,000) and the `json-syntax` fuzz target
   hold them to the same verdict. Broken on purpose (leading zeros taken, the depth limit one off), the property test
   failed.
 - That read a well-formed body twice: binding got 65 to 75% slower
   ([2026-10-21-body-syntax-check.md](benchmarks/2026-10-21-body-syntax-check.md)). Binding first again gave that
   back but made a malformed body throw (1,192 B, about 4 µs).
-- Now one reader does both, in one pass: `JsonCursor`, `JsonSyntax`'s state machine read a token at a time, with
+- Now one reader does both, in one pass: `JsonCursor`, that state machine read a token at a time, with
   `Utf8JsonReader`'s tokens (type, start, value bytes, escape flag, `TryGetInt64`, `TryGetInt32`, `TryGetDouble`,
   `Skip`). It reports a syntax error as `Malformed` instead of throwing. `JsonBody` reads through it, the generated
   binders have no `try` or `catch`, and `ReadToEnd()` says whether the body was JSON before any field's reply. A
@@ -945,6 +945,9 @@ except where the row says the test is a guard.
 | 3 | A later envelope reset each field but not a nested field's value and error, so the first wrapper's reason answered for the last (older than the spec options) | the reset clears `n{i}` and `e{i}` too | `ALaterWrapperReplacesAnEarlierOnesNestedErrorsToo` (three orders) | 1 of 3: `bad age` for a last wrapper with no author |
 | 4 | On a body cut short in an array, `ReadTextArray` returned an array whose count ran past its texts; no handler saw it, since `ReadToEnd` decides first | `Invalid` when the cursor is malformed | `AnArrayInAMalformedBodyIsInvalid` (four cuts) | 4 of 4 |
 | 8 | A signed `exp` of `1e400` reads as an infinity, so the token never expired (older than the spec options) | an `exp` or `nbf` that isn't finite makes the payload invalid; a past one, `-1e400` among them, stays expired | `ATimeThatIsntAFiniteNumberIsntAUsablePayload` (seven cases, `Verify` too) | 3 of 7: valid |
+| 10 | `Jwt.Viewer` and `JsonSyntax.IsValid` were called only by tests, and the auth property test covered `Jwt.Viewer`, not the dispatcher's path | both deleted; the dispatcher's rule is `HttpApp.Refuses`, which `Dispatch`, `BinderPropertyTests` (through `JwtSchemeTests.Dispatched`: `Authenticate` and `Refuses`) and the hand-written benchmark app all call; the cursor check is test code | `ViewersMatchTheContestAuth`, `ArbitraryHeadersAgreeToo` | with the rule broken on purpose (a header without the scheme taken as anonymous), 2 red; the old test stayed green on that |
+| 11 | `[Range(typeof(ulong), ...)]` was CFH0103 | `UInt64` among the types the generator reads | `RouteValueRangesItUses` (`typeof(ulong)`, `typeof(byte)`) | CFH0103 |
+| 7 | `TryTextEquals` said its text was ASCII of at most 16 bytes; a paragraph said a body is malformed when the reader throws; `JsonSyntax` was described as the binders' check | rewritten or marked superseded | (comments) | |
 
 ## Fuzzing (tests/CodeFusion.Fuzz)
 

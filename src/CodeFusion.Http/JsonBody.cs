@@ -434,8 +434,10 @@ public ref struct JsonBody
     static int Hex4(ReadOnlySpan<byte> h) => Query.Hex(h[0]) << 12 | Query.Hex(h[1]) << 8 | Query.Hex(h[2]) << 4 | Query.Hex(h[3]);
 
     /// <summary>
-    /// Compares the string or property name the reader is on with <paramref name="text"/> (ASCII, at most 16
-    /// bytes) once unescaped, without throwing: false when it is escaped and doesn't unescape (a lone surrogate).
+    /// Compares the string or property name the reader is on with <paramref name="text"/> (any UTF-8: a JWT claim's
+    /// declared name is up to 64 bytes) once unescaped, without throwing: false when it is escaped and doesn't unescape
+    /// (a lone surrogate). It unescapes into a stack buffer of the raw name's size, at most six bytes per byte of
+    /// <paramref name="text"/>.
     /// </summary>
     internal static bool TryTextEquals(ref Utf8JsonReader r, ReadOnlySpan<byte> text, out bool equal)
     {

@@ -456,6 +456,8 @@ public class DiagnosticTests
     [InlineData("[Range(-5, 5)] int n")]
     [InlineData("[Range(1, long.MaxValue)] long id")]
     [InlineData("[Range(typeof(int), \"1\", \"100\")] int n")]
+    [InlineData("[Range(typeof(ulong), \"1\", \"1000\")] long id")]
+    [InlineData("[Range(typeof(byte), \"1\", \"200\")] int n")]
     public void RouteValueRangesItUses(string parameter)
     {
         string name = parameter.EndsWith(" id", System.StringComparison.Ordinal) ? "id" : "n";
