@@ -1,7 +1,8 @@
 # CodeFusion.Data.Sqlite
 
 CodeFusion.Data's SQLite provider: the same contexts and LINQ queries as on Postgres, compiled at build time to
-SQLite's SQL, run in process against one database file. Nothing is allocated per query.
+SQLite's SQL, run in process against one database file. Once warm, nothing is allocated per query (exactly what that
+covers is under [Zero allocations, measured](#zero-allocations-measured)).
 
 It calls SQLite directly (`e_sqlite3`, no ADO.NET layer). Reads run on the caller's thread, on reader connections
 that keep their WAL snapshot until a write commits. Writes go to one writer thread, which commits whatever has
@@ -127,7 +128,17 @@ server the batch's end; nothing else to wire. Writes off a loop still go to the 
 
 CodeFusion.Data's allocation test runs here unchanged: 14,600 reads and writes of the Conduit queries from 4 callers
 allocate 2.9 KB in the whole process, the test's own tasks, and twice as many allocate the same
-([the run](../../docs/benchmarks/2026-10-21-sqlite-provider-allocation.md)).
+([the run](../../docs/benchmarks/2026-10-21-sqlite-provider-allocation.md)). The provider's own tests measure the same
+for Exclusive mode, event-loop batches and writes refused as unique violations.
+
+What that covers, exactly: a query that runs, or ends as a unique violation, once warm. Busy and a timeout take
+the unique violation's path. What still allocates:
+
+- **The first time**: a connection prepares each statement on its first use, and the pools and queues fill up to
+  what the load needs (at most 4,096 pooled commands).
+- **Large commands**: more than 64 parameters or 64 columns in a row; a command buffer past 64 KB isn't pooled.
+- **Other failures**: a statement SQLite refuses for any other reason carries a `SqliteException` with its message.
+- **Your code**: replies, handlers and what you do with the rows.
 
 ## Limits
 

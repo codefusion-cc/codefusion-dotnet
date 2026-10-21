@@ -107,6 +107,21 @@ Fixes go into the latest release only.
   is theirs to clear, and a password that SASLprep must normalize (rare: compatibility characters, combining marks),
   which passes through one more string.
 
+## CodeFusion.Data.Sqlite
+
+- **The native library** is SourceGear.sqlite3's `e_sqlite3`, pinned by content hash as well as version
+  (`src/CodeFusion.Data.Sqlite/packages.lock.json`; CI restores in locked mode). An app may ship its own
+  `e_sqlite3` in its directory, and that one is loaded instead. Whichever loads is checked once, before the first
+  connection: a SQLite older than 3.44, built single-threaded (`SQLITE_THREADSAFE=0`) or without JSON, CTEs, upserts,
+  WAL or subqueries is refused with why.
+- **Parameters are always bound**, never spliced into SQL text. Identifiers the generator writes are quoted when they
+  are SQLite keywords.
+- **What a client can make the server allocate.** A query that runs allocates nothing once warm, and neither does one
+  that ends as a unique violation (a 409), busy or a timeout. Any other failure carries a `SqliteException` with
+  SQLite's message, a few hundred bytes; the reply is the context's 500 and never includes it. Commands with more than
+  64 parameters or columns allocate their offsets. The README's
+  [Zero allocations, measured](src/CodeFusion.Data.Sqlite/README.md#zero-allocations-measured) has the full list.
+
 ## CodeFusion.Security.Bcrypt
 
 ### What it does to keep hashes safe

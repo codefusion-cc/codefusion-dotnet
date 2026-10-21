@@ -78,6 +78,38 @@ public sealed class ProviderAllocationTests : IDisposable
         }
     }
 
+    // ---------- expected failures ----------
+
+    [Fact]
+    public async Task UniqueViolationsAllocateNothingOnceWarm()
+    {
+        Assert.SkipWhen(Debug(), "Debug builds make every async state machine an object: run in Release");
+        var s = _db.Open(_db.Database());
+        Assert.True((await Kv.WriteMany(s, "k", 100)).IsOk);
+        static async Task<long> Taken(SqliteDataSource s, int n)
+        {
+            long before = GC.GetTotalAllocatedBytes(precise: true);
+            for (int i = 0; i < n; i++)
+            {
+                var c = s.Write(Kv.Put);
+                c.Text(Key);
+                c.Int64(i);
+                // a 409: the key is there
+                if ((await Sqlite.Run<Value>(c.Hold(), null, default).ConfigureAwait(false)).Status != DataStatus.UniqueViolation)
+                    throw new InvalidOperationException("the write wasn't refused");
+            }
+            return GC.GetTotalAllocatedBytes(precise: true) - before;
+        }
+        await Taken(s, 2_000); // warm
+        long once = long.MaxValue, twice = long.MaxValue;
+        for (int k = 0; k < 3; k++)
+        {
+            once = Math.Min(once, await Taken(s, 2_000));
+            twice = Math.Min(twice, await Taken(s, 4_000));
+        }
+        Assert.True(twice - once < 400, $"{once} B for 2,000 refused writes, {twice} B for 4,000");
+    }
+
     // ---------- event-loop batches ----------
 
     [Fact(Timeout = 30_000)]

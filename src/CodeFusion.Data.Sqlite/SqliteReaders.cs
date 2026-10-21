@@ -115,7 +115,9 @@ internal static unsafe class SqliteRun
         return code != Sqlite3.Ok ? code : rc;
     }
 
-    /// <summary>A failed statement as CodeFusion.Data's result.</summary>
+    /// <summary>A failed statement as CodeFusion.Data's result. The failures a busy app meets in the normal course (a
+    /// unique violation, busy, a timeout) carry their status and code name only, allocating nothing; the rest carry a
+    /// <see cref="SqliteException"/> with SQLite's message.</summary>
     public static DataResult Failed(SqliteConn conn, int code, int rows = 0)
     {
         var status = code switch
@@ -125,7 +127,8 @@ internal static unsafe class SqliteRun
             _ when (code & 0xFF) == Sqlite3.Interrupt => DataStatus.StatementTimeout,
             _ => DataStatus.Failed,
         };
-        return new DataResult(status, rows, 0, SqliteException.From(conn.Db, code), Sqlite3.CodeName(code));
+        var error = status == DataStatus.Failed ? SqliteException.From(conn.Db, code) : null;
+        return new DataResult(status, rows, 0, error, Sqlite3.CodeName(code));
     }
 }
 
