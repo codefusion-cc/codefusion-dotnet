@@ -457,6 +457,40 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
     static readonly PgJob?[] Pool = new PgJob?[MaxPooled];
     static readonly object PoolLock = new();
     static int _pooled;
+
+    // Each thread keeps a few jobs of its own in front of the shared stack, and moves them to or from it a batch at a
+    // time: a job is rented on a request's thread and returned on a loop's, so without it every command took the
+    // shared lock twice. The jobs a thread holds count against no limit but its cache's.
+    const int CacheSize = 64, Batch = 32;
+    [ThreadStatic] static PgJob?[]? t_cache;
+    [ThreadStatic] static int t_cached;
+
+    /// <summary>An empty cache takes a batch from the shared stack (none when it is empty: the job is made anew).</summary>
+    static void Refill(PgJob?[] cache)
+    {
+        lock (PoolLock)
+        {
+            int n = Math.Min(Batch, _pooled);
+            for (int i = 0; i < n; i++)
+            {
+                cache[i] = Pool[--_pooled];
+                Pool[_pooled] = null;
+            }
+            t_cached = n;
+        }
+    }
+
+    /// <summary>A full cache gives a batch to the shared stack; past its limit they go.</summary>
+    static void Spill(PgJob?[] cache)
+    {
+        lock (PoolLock)
+            for (int i = 0; i < Batch; i++)
+            {
+                var job = cache[--t_cached];
+                cache[t_cached] = null;
+                if (_pooled < MaxPooled) Pool[_pooled++] = job;
+            }
+    }
     static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     /// <summary>Buffers past this size go with a returned job instead of being pooled.</summary>
     const int MaxPooledBytes = 64 << 10;
@@ -517,13 +551,14 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
 
     internal static PgJob Rent(PgStatement first)
     {
+        var cache = t_cache ??= new PgJob?[CacheSize];
+        if (t_cached == 0) Refill(cache);
         PgJob? job = null;
-        lock (PoolLock)
-            if (_pooled > 0)
-            {
-                job = Pool[--_pooled];
-                Pool[_pooled] = null;
-            }
+        if (t_cached > 0)
+        {
+            job = cache[--t_cached];
+            cache[t_cached] = null;
+        }
         job ??= new PgJob();
         job.CheckUnwritten();
         job.To(Life.Building);
@@ -551,8 +586,9 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
         _core.Reset();
         To(Life.Pooled);
         FillReturned();
-        lock (PoolLock)
-            if (_pooled < MaxPooled) Pool[_pooled++] = this;
+        var cache = t_cache ??= new PgJob?[CacheSize];
+        if (t_cached == CacheSize) Spill(cache);
+        cache[t_cached++] = this;
     }
 
     /// <summary>Back to the pool without having run (refused, cancelled at once, or the build failed).</summary>
