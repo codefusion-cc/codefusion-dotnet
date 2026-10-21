@@ -93,6 +93,9 @@ internal static unsafe partial class Sqlite3
     // the authorizer's actions this provider reads: a table's first argument is its name, a function's second its name;
     // the DDL actions run from CREATE INDEX (1) to CREATE VIEW (8), DROP INDEX (10) to DROP VIEW (17), ATTACH (24) to DROP
     // VTABLE (30)
+    /// <summary>An authorizer's answer that fails the prepare.</summary>
+    public const int Deny = 1;
+
     public const int AuthCreateIndex = 1, AuthCreateView = 8, AuthDelete = 9, AuthDropIndex = 10, AuthDropView = 17, AuthInsert = 18,
         AuthPragma = 19, AuthRead = 20, AuthUpdate = 23, AuthAttach = 24, AuthDropVtable = 30, AuthFunction = 31;
 

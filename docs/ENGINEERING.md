@@ -995,6 +995,26 @@ Proven red: each test above failed before its fix, or with the code broken on pu
 
 Not provable by a test: the virtual-table rule, DDL marking and finalizing at the watch's start each have a net under them that catches the same case first (FTS5 and DDL make SQLite compile outside a prepare, which marks the schema changed; no statement prepared before the watch is used after it), so their mutants stay green. They stay as defence in depth.
 
+### Check of the third-review fixes (310b512 and eafbbd8)
+
+A short check found the 10 fixes right, and 6 more, all low, plus 2 untested spots:
+
+- **N2:** finding 1's tests couldn't fail. The read, `SELECT cf_ioerr()`, read no table, and SQLite rolls back only for
+  a statement that reads one; the Debug hook rolled back from the fix's own call site. The test now reads a table the
+  batch didn't write, and fails with the guard off on the pinned 3.50.4 (`AReadOnTheLoopThatRollsBackLosesNoAnsweredWrite`).
+- **N1:** a write after the batch's transaction was lost failed unrun, and the job's tables were learned after the
+  check. Now: tables, then the check, then the job joins and runs in a new transaction
+  (`AWriteAfterTheBatchsTransactionWasLostRunsInANewOne`, red on the old order).
+- **N3, N4, N5:** a real column whose text SQLite can't give (out of memory) no longer copies from address 0;
+  `IsSequence` reads the name to its NUL; `Prepare` keeps and puts back a running prepare's state. None can be driven
+  from a test (out of memory inside one call, an out-of-bounds read with no visible effect, no nested prepare today).
+- **N6:** a compile outside a prepare turns by-table reads off for the process; the README says so and what triggers it.
+- **Finding 8's second half:** an exception in the authorizer is caught, recorded, and fails that prepare with it as the
+  cause (`AnExceptionInTheTableTrackingFailsThatPrepareOnly`; without the catch the test process dies).
+- **Finding 5:** the open's check goes through `CheckLoaded`, which the switch alone decides
+  (`TheSwitchAloneLetsAnotherBuildIn`, red with the switch ignored); the refusal also says to pin a reference the app
+  didn't mean to make.
+
 ### Found on the way
 
 - Keys of a table whose name needs quotes: `sqlite_sequence` holds the bare name, and the generator gave the key

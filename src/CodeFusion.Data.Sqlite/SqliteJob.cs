@@ -246,7 +246,7 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
                     real = Sqlite3.ColumnDouble(stmt, c);
                     integer = Sqlite3.ColumnInt64(stmt, c);
                     text = Sqlite3.ColumnText(stmt, c);
-                    len = Sqlite3.ColumnBytes(stmt, c);
+                    len = text is null ? -1 : Sqlite3.ColumnBytes(stmt, c); // null: out of memory
                     break;
                 case Sqlite3.TypeText or Sqlite3.TypeBlob:
                     integer = Sqlite3.ColumnInt64(stmt, c);

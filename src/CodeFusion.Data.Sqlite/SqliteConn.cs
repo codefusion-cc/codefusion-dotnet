@@ -99,8 +99,7 @@ internal sealed unsafe class SqliteConn : IDisposable
             MemoryStatusOff = Sqlite3.DisableMemoryStatus();
             int rc = Sqlite3.Initialize();
             if (rc != Sqlite3.Ok) throw new SqliteException("sqlite3_initialize failed", rc);
-            bool otherBuild = AppContext.TryGetSwitch(OtherBuildSwitch, out bool own) && own;
-            if (Unfit(Sqlite3.LibVersionNumber(), Sqlite3.SourceId(), otherBuild, Sqlite3.ThreadSafe(), Sqlite3.CompileOptions()) is { } why)
+            if (CheckLoaded(Sqlite3.SourceId()) is { } why)
                 throw new InvalidOperationException(why);
             Volatile.Write(ref _initialized, 1);
         }
@@ -117,6 +116,11 @@ internal sealed unsafe class SqliteConn : IDisposable
 
     internal const string TestedSourceId = "2025-07-30 19:33:53 4d8adfb30e03f9cf27f800a2c1ba3c48fb4ca1b08b0f5ed59a4d5ecbf45e20a3";
 
+    /// <summary>Why the library loaded, saying it was built from <paramref name="sourceId"/>, can't serve the provider, by
+    /// the app's <see cref="OtherBuildSwitch"/> and what the library reports; null when it can.</summary>
+    internal static string? CheckLoaded(string sourceId) =>
+        Unfit(Sqlite3.LibVersionNumber(), sourceId, AppContext.TryGetSwitch(OtherBuildSwitch, out bool own) && own, Sqlite3.ThreadSafe(), Sqlite3.CompileOptions());
+
     /// <summary>Why a SQLite of <paramref name="version"/> and <paramref name="sourceId"/>, <paramref name="threadSafe"/>
     /// (sqlite3_threadsafe) and the compile options <paramref name="used"/> says it has (null: it can't say), can't serve
     /// the provider; null when it can. It must be the build tested, unless the app ships its own
@@ -126,7 +130,9 @@ internal sealed unsafe class SqliteConn : IDisposable
         if (version < Sqlite3.MinVersion) return $"SQLite {version} is older than {Sqlite3.MinVersion}, which the generated SQL needs";
         if (!otherBuildAllowed && (version != TestedVersion || sourceId != TestedSourceId))
             return $"the SQLite loaded is {version} from {sourceId}, not the build CodeFusion.Data.Sqlite was tested with ({TestedVersion} from " +
-                $"{TestedSourceId}). An app that ships its own SQLite on purpose sets the AppContext switch {OtherBuildSwitch} to true";
+                $"{TestedSourceId}). An app that ships its own SQLite on purpose, and tests it, sets the AppContext switch " +
+                $"{OtherBuildSwitch} to true; one that didn't mean to (a newer SourceGear.sqlite3 through a direct reference) pins " +
+                "that reference to the tested version instead";
         // connections move between threads (readers, the writer, an event loop's batch) and the watchdog interrupts
         // from its own: THREADSAFE=1 or 2
         if (threadSafe == 0) return "SQLite was built with SQLITE_THREADSAFE=0; the provider uses connections from several threads";
@@ -300,10 +306,37 @@ internal sealed unsafe class SqliteConn : IDisposable
         return 1UL << bit;
     }
 
+    /// <summary>What the authorizer threw while preparing: the prepare fails with it (<see cref="Prepare"/>).</summary>
+    Exception? _authorizerFailure;
+
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static int Authorize(nint self, int action, byte* first, byte* second, byte* database, byte* trigger)
     {
         var conn = (SqliteConn)GCHandle.FromIntPtr(self).Target!;
+        try
+        {
+#if DEBUG
+            AuthorizeFault?.Invoke();
+#endif
+            return conn.Record(action, first, second);
+        }
+#pragma warning disable CA1031 // nothing may leave an UnmanagedCallersOnly method: it would end the process
+        catch (Exception e)
+#pragma warning restore CA1031
+        {
+            conn._authorizerFailure ??= e;
+            return Sqlite3.Deny; // the prepare fails, and Prepare throws what was caught
+        }
+    }
+
+#if DEBUG
+    /// <summary>Debug, tests: runs in the authorizer, as an out-of-memory there would.</summary>
+    internal static Action? AuthorizeFault;
+#endif
+
+    int Record(int action, byte* first, byte* second)
+    {
+        var conn = this;
         if (conn._quiet) return Sqlite3.Ok;
         if (!conn._collecting)
         {
@@ -336,7 +369,7 @@ internal sealed unsafe class SqliteConn : IDisposable
     }
 
     /// <summary>sqlite_sequence: AUTOINCREMENT writes it without telling the authorizer.</summary>
-    static bool IsSequence(byte* table) => new ReadOnlySpan<byte>(table, "sqlite_sequence"u8.Length + 1).SequenceEqual("sqlite_sequence\0"u8);
+    static bool IsSequence(byte* table) => MemoryMarshal.CreateReadOnlySpanFromNullTerminated(table).SequenceEqual("sqlite_sequence"u8);
 
     /// <summary>A function that reads the connection's own state, which no table holds.</summary>
     static bool IsConnectionState(byte* function)
@@ -392,8 +425,11 @@ internal sealed unsafe class SqliteConn : IDisposable
             Array.Resize(ref _writes, _statements.Length);
         }
         var pieces = new List<nint>(1);
+        // kept and put back after: a prepare made while this one runs (none is today) must not take this one's tables
+        var (outerReads, outerWrites, outerCollecting) = (_preparingReads, _preparingWrites, _collecting);
         _preparingReads = _preparingWrites = 0;
         _collecting = _watching;
+        ulong reads, writes;
         try
         {
             fixed (byte* sql = s.Utf8)
@@ -402,6 +438,13 @@ internal sealed unsafe class SqliteConn : IDisposable
                 while (at < end)
                 {
                     int rc = Sqlite3.Prepare(_db, at, (int)(end - at), Sqlite3.PreparePersistent, out nint stmt, out byte* tail);
+                    if (_authorizerFailure is { } failure)
+                    {
+                        // the table tracking threw (it can't let an exception out to SQLite): this prepare fails with it
+                        _authorizerFailure = null;
+                        if (stmt != 0) _ = Sqlite3.Finalize(stmt);
+                        throw new SqliteException($"keeping the tables of {s.Sql} failed", failure);
+                    }
                     if (rc != Sqlite3.Ok) throw new SqliteException($"{Sqlite3.CodeName(rc)}: {Sqlite3.Message(_db)} in: {s.Sql}", rc);
                     if (stmt != 0) pieces.Add(stmt); // 0: only whitespace or a comment was left
                     if (tail is null || tail <= at) break;
@@ -421,14 +464,16 @@ internal sealed unsafe class SqliteConn : IDisposable
         }
         finally
         {
-            _collecting = false;
+            reads = _preparingReads;
+            writes = _preparingWrites;
+            (_preparingReads, _preparingWrites, _collecting) = (outerReads, outerWrites, outerCollecting);
         }
         if (_watching)
         {
             ClassifyNewTables();
-            bool touchesVirtual = ((_preparingReads | _preparingWrites) & _virtualTables) != 0;
-            _reads[s.Id] = touchesVirtual ? ulong.MaxValue : _preparingReads;
-            _writes[s.Id] = touchesVirtual ? ulong.MaxValue : _preparingWrites;
+            bool touchesVirtual = ((reads | writes) & _virtualTables) != 0;
+            _reads[s.Id] = touchesVirtual ? ulong.MaxValue : reads;
+            _writes[s.Id] = touchesVirtual ? ulong.MaxValue : writes;
         }
         _statements[s.Id] = pieces[0];
         if (pieces.Count > 1) _more[s.Id] = pieces.GetRange(1, pieces.Count - 1).ToArray();

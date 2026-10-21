@@ -24,6 +24,7 @@ public sealed class HookedTests : IDisposable
         SqliteJob.SaveFault = null;
         SqliteConn.BeforeInterrupt = null;
         SqliteConn.AfterInterrupt = null;
+        SqliteConn.AuthorizeFault = null;
 #endif
         _db.Dispose();
     }
@@ -186,6 +187,26 @@ public sealed class HookedTests : IDisposable
         SqliteConn.AfterInterrupt = null;
         Assert.True(interrupted.IsSet);
         Assert.Equal(DataStatus.StatementTimeout, r.Status);
+#endif
+    }
+
+    /// <summary>An exception in the table tracking (out of memory in its dictionary, say) can't leave the authorizer, a
+    /// callback from SQLite: it fails the prepare it happened in, with the exception as the cause, and nothing else.</summary>
+    [Fact(Timeout = 30_000)]
+    public void AnExceptionInTheTableTrackingFailsThatPrepareOnly()
+    {
+#if !DEBUG
+        Assert.Skip("needs the Debug hook");
+#else
+        var s = _db.Open(_db.Database(exclusive: true, batches: true));
+        Assert.Equal(0, Kv.Count(s)); // the read path's own statements prepared: the fault meets only the new one
+        SqliteConn.AuthorizeFault = static () => throw new InvalidOperationException("the tracking broke");
+        var failed = Read(s, "SELECT count(*) FROM kv WHERE v > 5");
+        SqliteConn.AuthorizeFault = null;
+        Assert.Equal(DataStatus.Failed, failed.Status);
+        Assert.Equal("the tracking broke", Assert.IsType<InvalidOperationException>(failed.Error!.InnerException).Message);
+        var again = Read(s, "SELECT count(*) FROM kv WHERE v > 5");
+        Assert.True(again.IsOk, again.ToString());
 #endif
     }
 

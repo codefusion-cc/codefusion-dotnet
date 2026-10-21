@@ -27,6 +27,27 @@ public sealed class BuildCheckTests
         Assert.Null(SqliteConn.Unfit(Current, Tested, otherBuildAllowed: false, 2, _ => false));
     }
 
+    /// <summary>The check the first open makes, with the library's source id given: the AppContext switch, not where
+    /// the library was loaded from, decides whether another build may run.</summary>
+    [Fact]
+    public void TheSwitchAloneLetsAnotherBuildIn()
+    {
+        try
+        {
+            AppContext.SetSwitch(SqliteConn.OtherBuildSwitch, false);
+            string? refused = SqliteConn.CheckLoaded("2026-01-01 00:00:00 another");
+            Assert.NotNull(refused);
+            Assert.Contains("pin", refused, StringComparison.Ordinal);
+            Assert.Null(SqliteConn.CheckLoaded(Tested));
+            AppContext.SetSwitch(SqliteConn.OtherBuildSwitch, true);
+            Assert.Null(SqliteConn.CheckLoaded("2026-01-01 00:00:00 another"));
+        }
+        finally
+        {
+            AppContext.SetSwitch(SqliteConn.OtherBuildSwitch, false);
+        }
+    }
+
     [Fact]
     public void AnAppsOwnBuildMayBeAnotherOne() =>
         Assert.Null(SqliteConn.Unfit(3_054_001, "2026-01-01 00:00:00 any", otherBuildAllowed: true, 2, _ => false));

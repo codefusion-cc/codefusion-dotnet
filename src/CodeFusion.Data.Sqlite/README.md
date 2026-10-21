@@ -172,5 +172,11 @@ the unique violation's path. What still allocates:
 
 ## Limits
 
+A loop's read waits for its batch's COMMIT only when the batch wrote a table it reads, by the tables SQLite reports as
+it prepares each statement. Once SQLite compiles a statement outside a prepare, a re-prepare after a schema change made
+at run time, a virtual table's own SQL (FTS5) or a `pragma_` table-valued function, those reports may be stale, so from
+then on, for the rest of the process, every loop read of a batch that wrote waits for its COMMIT: still correct, as
+before by-table reads, but without their speed.
+
 One process writes the file: a second writer process works (SQLite makes it wait) but breaks up the groups. Reads and
 writes are only as concurrent as SQLite is: any number of reads, one write transaction at a time.
