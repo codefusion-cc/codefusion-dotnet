@@ -95,6 +95,17 @@ public sealed class SqliteDatabase
     public bool Exclusive { get; init; }
 
     /// <summary>
+    /// With <see cref="Exclusive"/>, behind a server that runs event loops (CodeFusion.Http's EventLoop transport): a
+    /// write made on a loop's thread runs there at once, inside one transaction per loop wake-up, and every write of the
+    /// wake-up commits together when the server ends the loop's batch (<see cref="SqliteDataSource.EndEventLoopBatch"/>,
+    /// which <see cref="SqliteServices.AddDatabase{TContext}"/> registers). A write completes after that COMMIT, on the
+    /// loop, before the batch's answers are sent. Each write has a savepoint, so one that fails fails alone. A read on
+    /// the loop sees its batch's writes; other threads wait for the batch. Writes off a loop go to the writer thread as
+    /// before. Off by default.
+    /// </summary>
+    public bool EventLoopBatches { get; init; }
+
+    /// <summary>
     /// The schema, as numbered steps: step n (from 1) is <c>Migrations[n - 1]</c>. At <see cref="OpenSource"/> each step
     /// past the file's <c>PRAGMA user_version</c> runs in its own transaction with the version moved inside it, so a
     /// crash leaves the file at one version or the next, and the next open finishes. A file at a version the app
@@ -115,6 +126,7 @@ public sealed class SqliteDatabase
         ArgumentOutOfRangeException.ThrowIfLessThan(Readers, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxGroup, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxQueued, 1);
+        if (EventLoopBatches && !Exclusive) throw new ArgumentException("EventLoopBatches needs Exclusive: the batch's transaction holds the one connection", nameof(EventLoopBatches));
         var writerConn = SqliteConn.Open(Path, this, writer: true);
         SqliteReaders? readers = null;
         try
@@ -208,6 +220,18 @@ public sealed class SqliteDataSource : DataSource, IDisposable
         }
     }
 
+    /// <summary>
+    /// Ends this loop thread's batch (<see cref="SqliteDatabase.EventLoopBatches"/>): commits the writes its wake-up made,
+    /// gives the connection back, and completes them here, on the loop. Their continuations may write again; those are
+    /// committed too before this returns. Nothing to do on a thread with no batch open. The server calls it after each
+    /// wake-up; <paramref name="loop"/> is the loop's index.
+    /// </summary>
+    public void EndEventLoopBatch(int loop)
+    {
+        Debug.Assert(loop >= 0, "a loop's index");
+        Writer.EndBatch(); // the batch is the calling thread's
+    }
+
     /// <summary>Takes no more commands: the writer commits what has queued, reads running finish, then every
     /// connection closes.</summary>
     public override void Stop()
@@ -246,6 +270,7 @@ public static class SqliteServices
         services.AddSingleton(source);
         services.AddPerConnection(source.CreateContext<TContext>);
         services.OnStopping(source.Stop);
+        if (database.EventLoopBatches) services.OnEventLoopBatch(source.EndEventLoopBatch);
         return source;
     }
 }

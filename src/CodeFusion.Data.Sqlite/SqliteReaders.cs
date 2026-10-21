@@ -250,6 +250,16 @@ internal sealed class SqliteReaders : IDisposable
     /// <summary>Exclusive mode: the writer gives the connection back, before it completes the group's writes.</summary>
     internal void Exit() => Volatile.Write(ref _taken[0], 0);
 
+    /// <summary>Exclusive mode: the thread whose event-loop batch holds the connection (it took it with <see cref="Enter"/>),
+    /// 0 when none does. Its reads run in the batch's transaction.</summary>
+    internal int Owner
+    {
+        get => Volatile.Read(ref _owner);
+        set => Volatile.Write(ref _owner, value);
+    }
+
+    int _owner;
+
     /// <summary>Takes a free connection, starting from one picked by the thread so threads spread out; -1 once stopped.</summary>
     int Take()
     {
@@ -278,7 +288,9 @@ internal sealed class SqliteReaders : IDisposable
     public DataResult Run<TReader>(SqliteJob job, object? state, CancellationToken aborted) where TReader : IRowReader
     {
         if (aborted.IsCancellationRequested) return DataResult.Of(DataStatus.Canceled);
-        int i = Take();
+        // the thread whose event-loop batch holds the connection reads in the batch's transaction, which it holds already
+        bool own = _shared && Volatile.Read(ref _owner) == Environment.CurrentManagedThreadId;
+        int i = own ? 0 : Take();
         if (i < 0) return DataResult.Of(DataStatus.Stopped);
         var conn = _conns[i];
         conn.Started();
@@ -287,9 +299,13 @@ internal sealed class SqliteReaders : IDisposable
             long now = Volatile.Read(ref _clock.Seq);
             if (_shared)
             {
-                conn.ClearClock();
-                // a read transaction kept from read to read, as the readers' snapshots are: the writer ends it before its BEGIN
-                if (Sqlite3.GetAutocommit(conn.Db) != 0 && conn.Once(_begin) is var b && b != Sqlite3.Ok) return SqliteRun.Failed(conn, b);
+                // in its own event-loop batch, a read keeps the batch's transaction and its time
+                if (!own)
+                {
+                    conn.ClearClock();
+                    // a read transaction kept from read to read, as the readers' snapshots are: the writer ends it before its BEGIN
+                    if (Sqlite3.GetAutocommit(conn.Db) != 0 && conn.Once(_begin) is var b && b != Sqlite3.Ok) return SqliteRun.Failed(conn, b);
+                }
             }
             else if (_snapshot[i] != now)
             {
@@ -310,8 +326,11 @@ internal sealed class SqliteReaders : IDisposable
         finally
         {
             conn.Ended();
-            if (_shared) Interlocked.Increment(ref _readsDone);
-            Volatile.Write(ref _taken[i * Stride], 0);
+            if (!own)
+            {
+                if (_shared) Interlocked.Increment(ref _readsDone);
+                Volatile.Write(ref _taken[i * Stride], 0);
+            }
         }
     }
 

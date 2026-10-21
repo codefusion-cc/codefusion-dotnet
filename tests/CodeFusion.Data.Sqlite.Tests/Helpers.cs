@@ -30,7 +30,7 @@ public sealed class TempDb : IDisposable
 
     /// <summary>A database in this folder with a key-value table (k TEXT PRIMARY KEY, v INTEGER).</summary>
     public SqliteDatabase Database(string name = "test.db", int readers = 2, TimeSpan? timeout = null, int maxQueued = 8192, bool leader = false,
-        int checkpointFrames = 1000, bool exclusive = false, bool completeOnWriter = false) =>
+        int checkpointFrames = 1000, bool exclusive = false, bool completeOnWriter = false, bool batches = false) =>
         new(File(name))
         {
             Synchronous = SqliteSync.Normal,
@@ -41,6 +41,7 @@ public sealed class TempDb : IDisposable
             CheckpointFrames = checkpointFrames,
             Exclusive = exclusive,
             CompleteOnWriterThread = completeOnWriter,
+            EventLoopBatches = batches,
             Migrations = ["CREATE TABLE kv (k TEXT PRIMARY KEY, v INTEGER NOT NULL) WITHOUT ROWID"],
         };
 

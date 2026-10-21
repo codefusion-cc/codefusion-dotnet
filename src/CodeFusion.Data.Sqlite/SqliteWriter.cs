@@ -78,6 +78,7 @@ public sealed unsafe class SqliteWriter
         job.State = state;
         job.Aborted = aborted;
         var task = job.Task;
+        if (_options.EventLoopBatches && EventLoopThread.Current >= 0 && Batch(job)) return task;
         bool wake = false, lead = false;
         lock (_lock)
         {
@@ -348,6 +349,175 @@ public sealed unsafe class SqliteWriter
         }
         Interlocked.Increment(ref Counters.Checkpoints);
         *_conn.WalFrames = 0;
+    }
+
+    // ---------- event-loop batches (SqliteDatabase.EventLoopBatches) ----------
+
+    /// <summary>The thread whose wake-up's transaction holds the connection; 0 when none does.</summary>
+    int _batchThread;
+    /// <summary>The batch's writes, run and waiting for its COMMIT; the spare takes new ones while those complete.</summary>
+    SqliteJob?[] _batch = new SqliteJob?[64], _spare = new SqliteJob?[64];
+    int _batchCount;
+
+    /// <summary>
+    /// A write made on an event loop's thread: runs it now, in the transaction this wake-up opened (opening it if this
+    /// is its first write), and keeps it until <see cref="EndBatch"/> commits. False when another loop's batch holds the
+    /// connection: the write then queues for the writer thread like any other.
+    /// </summary>
+    bool Batch(SqliteJob job)
+    {
+        int me = Environment.CurrentManagedThreadId;
+        if (Volatile.Read(ref _batchThread) != me)
+        {
+            if (Volatile.Read(ref _stopped) || Interlocked.CompareExchange(ref _batchThread, me, 0) != 0) return false;
+            Readers!.Enter(); // after the read or group running, in turn
+            Readers.Owner = me;
+            EndRead();
+            *_conn.Clock = Sqlite.ClockNow(); // cf_now(): the batch's start, for every write in it
+            _conn.Started();
+            int rc = _conn.Once(_beginGroup);
+            _conn.Ended();
+            if (rc != Sqlite3.Ok)
+            {
+                Interlocked.Increment(ref Counters.FailedGroups);
+                var failed = SqliteRun.Failed(_conn, rc);
+                ReleaseBatch();
+                job.Queued();
+                job.Complete(failed, inline: true);
+                return true;
+            }
+        }
+        job.Queued();
+        if (_batchCount == _batch.Length)
+        {
+            Array.Resize(ref _batch, _batch.Length * 2);
+            Array.Resize(ref _spare, _batch.Length);
+        }
+        _batch[_batchCount++] = job;
+        if (job.Aborted.IsCancellationRequested)
+        {
+            // completed with the rest, after the batch
+            job.Failed = true;
+            job.Failure = DataResult.Of(DataStatus.Canceled);
+            return true;
+        }
+        if (!RunInBatch(job)) Rerun();
+        return true;
+    }
+
+    /// <summary>Runs one write of the batch in a savepoint; false when SQLite rolled the whole transaction back.</summary>
+    bool RunInBatch(SqliteJob job)
+    {
+        _conn.Started();
+        try
+        {
+            int rc = _conn.Once(_savepoint);
+            if (rc == Sqlite3.Ok)
+            {
+                rc = SqliteRun.Steps<NoReader>(_conn, job, null, save: true, out _, out _, out _);
+                if (rc == Sqlite3.Ok)
+                {
+                    _ = _conn.Once(_release);
+                    return true;
+                }
+                Interlocked.Increment(ref Counters.FailedAlone);
+            }
+            job.Failed = true;
+            job.Failure = SqliteRun.Failed(_conn, rc, job.SavedRows);
+            if (Sqlite3.GetAutocommit(_conn.Db) != 0) return false; // an I/O error, disk full, an interrupt: all of it undone
+            _ = _conn.Once(_rollbackTo);
+            _ = _conn.Once(_release);
+            return true;
+        }
+        finally
+        {
+            _conn.Ended();
+        }
+    }
+
+    /// <summary>SQLite rolled the batch's transaction back: runs its other writes again, once, in a new one. If that
+    /// fails too, they fail with it, and the batch ends empty.</summary>
+    void Rerun()
+    {
+        Interlocked.Increment(ref Counters.Reruns);
+        _conn.Started();
+        int rc = _conn.Once(_beginGroup);
+        _conn.Ended();
+        bool ok = rc == Sqlite3.Ok;
+        var failure = ok ? default : SqliteRun.Failed(_conn, rc);
+        for (int i = 0; i < _batchCount; i++)
+        {
+            if (_batch[i] is not { Failed: false } job) continue;
+            if (ok)
+            {
+                job.Restart();
+                if (RunInBatch(job)) continue;
+                ok = false;
+                failure = job.Failure;
+                continue;
+            }
+            job.Failed = true;
+            job.Failure = failure;
+        }
+        if (!ok && Sqlite3.GetAutocommit(_conn.Db) == 0) _ = _conn.Once(_rollback);
+    }
+
+    /// <summary>
+    /// The end of this thread's wake-up: commits its batch, gives the connection back, and completes the batch's writes
+    /// here, so their answers join the wake-up's sends. A completion that writes again opens a new batch, which is
+    /// committed the same way before this returns.
+    /// </summary>
+    internal void EndBatch()
+    {
+        int me = Environment.CurrentManagedThreadId;
+        while (Volatile.Read(ref _batchThread) == me)
+        {
+            DataResult? failAll = null;
+            if (Sqlite3.GetAutocommit(_conn.Db) == 0)
+            {
+                _conn.Started();
+                int rc = _conn.Once(_commit);
+                _conn.Ended();
+                if (rc != Sqlite3.Ok)
+                {
+                    failAll = SqliteRun.Failed(_conn, rc);
+                    if (Sqlite3.GetAutocommit(_conn.Db) == 0) _ = _conn.Once(_rollback);
+                    Interlocked.Increment(ref Counters.FailedGroups);
+                }
+                else
+                {
+                    Interlocked.Increment(ref Counters.Commits);
+                    Volatile.Write(ref Clock.Seq, Clock.Seq + 1);
+                }
+            }
+            // the batch's jobs, and a fresh list for any batch their completions open
+            var jobs = _batch;
+            int n = _batchCount;
+            _batch = _spare;
+            _spare = jobs;
+            _batchCount = 0;
+            ReleaseBatch();
+            for (int i = 0; i < n; i++)
+            {
+                var job = jobs[i]!;
+                jobs[i] = null;
+                if (job.Failed) job.Complete(job.Failure, inline: true);
+                else if (failAll is { } f) job.Complete(f, inline: true);
+                else
+                {
+                    Interlocked.Increment(ref Counters.Writes);
+                    job.Complete(job.HandRows(), inline: true);
+                }
+            }
+            if (Volatile.Read(ref _batchThread) == 0) AfterGroup(); // no new batch holds the connection: checkpoint now
+        }
+    }
+
+    void ReleaseBatch()
+    {
+        Readers!.Owner = 0;
+        Volatile.Write(ref _batchThread, 0);
+        Readers.Exit();
     }
 
     void FailAll(int n, in DataResult result)
