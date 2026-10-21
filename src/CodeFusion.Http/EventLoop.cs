@@ -13,8 +13,8 @@ namespace CodeFusion.Http;
 /// One thread of <see cref="HttpTransport.EventLoop"/>: it waits on epoll (Linux) or kqueue (macOS) for its
 /// connections' sockets to turn readable, and hands each edge to its connection (<see cref="HttpExchange.Readable"/>),
 /// whose loop then runs on this thread until it next waits. A socket is added once, edge-triggered and for reading
-/// only, so a request costs no system call besides its own receive and send, and one wait serves every connection
-/// ready at once. Closing a socket takes it out of the set without an event: whoever closes it wakes its connection.
+/// (writing too once a send has had to wait for room), so a request costs no system call besides its own receive and
+/// send, and one wait serves every connection ready at once. Closing a socket takes it out of the set without an event: whoever closes it wakes its connection.
 /// </summary>
 // Its thread closes the descriptors as it ends (Stop), and Discard closes those of a loop never started: nothing
 // else may, while the thread can still wait on them.
@@ -39,20 +39,29 @@ internal abstract unsafe class EventLoop
     readonly int _index;
     // The loop whose thread this is, and the loop whose wake-up it is handling, if any: answers finished then wait in
     // _sends until the batch hook has run. (The thread's index is Core's EventLoopThread.Current.)
-    [ThreadStatic] static EventLoop? t_batching, t_loop;
+    [ThreadStatic] static EventLoop? t_loop;
     // Connections that used their share of a wake-up's reads (HttpExchange.Arm), each with the id it had then: the
     // next round, after a wait that doesn't block, takes them up once the others had their turn.
-    (HttpExchange X, uint Id)[] _later = new (HttpExchange, uint)[16], _taking = new (HttpExchange, uint)[16];
+    (HttpExchange X, uint Id, bool Parked)[] _later = new (HttpExchange, uint, bool)[16], _taking = new (HttpExchange, uint, bool)[16];
     int _laterCount;
+    // A wake-up whose rounds ran out with work left (EndBatch): the next wait doesn't block.
+    bool _pending;
+    // Handlers started on this loop's thread so far: a round that started one needs the batch's actions again.
+    int _handlerRuns;
     readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     volatile bool _failed;
-    HttpExchange?[] _sends = new HttpExchange?[64];
+    HttpExchange?[] _sends = new HttpExchange?[64], _giving = new HttpExchange?[64];
     int _sendCount;
+    /// <summary>The rounds of actions and sends one wake-up may run (EndBatch).</summary>
+    const int RoundsPerWake = 8;
     // Linux: the loop's own listening socket (SO_REUSEPORT), whose connections it accepts on its thread; null when the
     // server's one listener serves every loop. Accepting pauses when the process is out of descriptors (the listener
     // is level-triggered, so it would wake the loop for nothing until one closes); the heartbeat resumes it.
     Socket? _listener;
-    volatile bool _acceptPaused;
+    // Accepting, or Paused: changed only by compare-and-swap, the listener turned off before Paused is published, so a
+    // resume can't land between the two and leave it off for good.
+    const int Accepting = 0, Paused = 1;
+    int _acceptState;
     /// <summary>The epoll or kqueue descriptor; closed by the thread as it ends, once no Add holds it.</summary>
     protected readonly SafeFileHandle Queue;
     volatile bool _stopping;
@@ -70,9 +79,6 @@ internal abstract unsafe class EventLoop
 
     public void Start() => _thread.Start();
 
-    /// <summary>The loop whose wake-up this thread is handling now, if any.</summary>
-    public static EventLoop? Batching => t_batching;
-
     /// <summary>The loop whose thread this is, if any.</summary>
     public static EventLoop? Current => t_loop;
 
@@ -86,11 +92,24 @@ internal abstract unsafe class EventLoop
     public Task Exited => _exited.Task;
 
     /// <summary>On this loop's thread: takes up <paramref name="x"/>'s armed wait in the next round.</summary>
-    public void Later(HttpExchange x)
+    public void Later(HttpExchange x) => AddLater(x, parked: false);
+
+    /// <summary>On this loop's thread: <paramref name="x"/> used its share of handlers in this wake-up; the returned
+    /// wait completes in the next round, after the others had theirs.</summary>
+    public ValueTask Park(HttpExchange x)
+    {
+        AddLater(x, parked: true);
+        return x.WaitParked();
+    }
+
+    void AddLater(HttpExchange x, bool parked)
     {
         if (_laterCount == _later.Length) Array.Resize(ref _later, _later.Length * 2);
-        _later[_laterCount++] = (x, x.ConnectionId);
+        _later[_laterCount++] = (x, x.ConnectionId, parked);
     }
+
+    /// <summary>On this loop's thread: a handler starts.</summary>
+    public void HandlerStarts() => _handlerRuns++;
 
     /// <summary>Holds <paramref name="x"/>'s send until the batch's hook has run; the returned wait completes, on
     /// this thread, when its turn comes.</summary>
@@ -155,33 +174,35 @@ internal abstract unsafe class EventLoop
         byte* events = (byte*)NativeMemory.Alloc(MaxEvents, (nuint)EventSize);
         bool held = false;
         EventLoopThread.Enter(_index);
+        // Everything that runs on a loop's thread is part of a batch: an answer finished anywhere on it waits for the
+        // batch's actions.
         t_loop = this;
         try
         {
             Queue.DangerousAddRef(ref held);
             int queue = (int)Queue.DangerousGetHandle();
             bool stop = false;
-            while (!stop)
+            for (int drain = 0; !stop || ((_laterCount > 0 || _pending) && drain++ < 1000);)
             {
                 bool fail = false;
                 WaitFails(ref fail);
-                int n = fail ? -1 : Wait(queue, events, MaxEvents, block: _laterCount == 0);
+                int n = fail ? -1 : Wait(queue, events, MaxEvents, block: _laterCount == 0 && !_pending);
                 if (n < 0)
                 {
                     if (!fail && Marshal.GetLastPInvokeError() == Interrupted) continue;
-                    // Only a broken descriptor gets here. The loop takes no more connections (its listener closes, so
-                    // the kernel sends them to the others), and the ones it had are closed: nothing would wake them.
+                    // Only a broken descriptor gets here. The loop takes no more connections: its listener goes to the
+                    // runtime's accepts, which give them to the other loops. The ones it had are closed: nothing would
+                    // wake them.
                     _failed = true;
                     _server.Report("http event loop failed", fail ? new IOException("the test hook failed the wait")
                         : Errno(OperatingSystem.IsLinux() ? "epoll_wait" : "kevent"));
-                    _listener?.Dispose();
+                    if (_listener is { } listener) _server.TakeOver(listener);
                     _server.AbortConnectionsOf(this);
                     return;
                 }
                 Wakes++;
                 // Every ready connection first, then the hook, then the answers: the batch ends whole even when the
                 // stop's wake comes with it, so no connection is left waiting for its turn to send.
-                t_batching = this;
                 for (int i = 0; i < n; i++)
                 {
                     ulong token = TokenAt(events, i, out bool readable, out bool writable, out bool closed);
@@ -192,7 +213,15 @@ internal abstract unsafe class EventLoop
                     }
                     if (token == ListenToken)
                     {
-                        AcceptAll();
+                        try
+                        {
+                            AcceptAll();
+                        }
+                        catch (Exception e)
+                        {
+                            Interlocked.Increment(ref _server.FailedConnections);
+                            _server.Report("http event loop failed", e);
+                        }
                         continue;
                     }
                     try
@@ -233,16 +262,29 @@ internal abstract unsafe class EventLoop
         }
     }
 
-    /// <summary>The batch's actions, then its held answers: each connection sends and goes on to its next wait with
-    /// nothing held. (Sending every 64 events instead lost throughput and didn't shorten the tail:
+    /// <summary>The batch's actions, then its answers; again while sending them started handlers (a pipelined request
+    /// behind an answer), so every handler that starts on the loop is in a batch whose actions run after it. Past
+    /// <see cref="RoundsPerWake"/> what is left waits for the next wake-up, which then doesn't block. (Sending every
+    /// 64 events instead lost throughput and didn't shorten the tail:
     /// docs/benchmarks/2026-10-21-review-fixes-and-batch-size.md.)</summary>
     void EndBatch()
     {
-        if (_server.Options.OnEventLoopBatch is { } hook) RunBatchAction(hook, 0);
-        Action<int>[] actions = _server.BatchActions;
-        for (int i = 0; i < actions.Length; i++) RunBatchAction(actions[i], i + 1);
-        t_batching = null;
-        SendAll();
+        _pending = false;
+        for (int round = 0; ; round++)
+        {
+            if (_server.Options.OnEventLoopBatch is { } hook) RunBatchAction(hook, 0);
+            Action<int>[] actions = _server.BatchActions;
+            for (int i = 0; i < actions.Length; i++) RunBatchAction(actions[i], i + 1);
+            if (_sendCount == 0) return;
+            int runs = _handlerRuns;
+            SendAll();
+            if (_handlerRuns == runs && _sendCount == 0) return;
+            if (round + 1 == RoundsPerWake)
+            {
+                _pending = true;
+                return;
+            }
+        }
     }
 
     /// <summary>The connections put off in the last round, each if it is still the one it was.</summary>
@@ -253,11 +295,13 @@ internal abstract unsafe class EventLoop
         _laterCount = 0;
         for (int i = 0; i < n; i++)
         {
-            (HttpExchange x, uint id) = _taking[i];
+            (HttpExchange x, uint id, bool parked) = _taking[i];
             _taking[i] = default;
             try
             {
-                if (x.ConnectionId == id) x.Readable(closed: false);
+                if (x.ConnectionId != id) continue;
+                if (parked) x.TakeParkedTurn();
+                else x.Readable(closed: false);
             }
             catch (Exception e)
             {
@@ -284,11 +328,10 @@ internal abstract unsafe class EventLoop
     /// <summary>Heartbeat: accepting again after the process ran out of descriptors.</summary>
     public void ResumeAccept()
     {
-        if (!_acceptPaused || _listener is not { } l) return;
-        _acceptPaused = false;
+        if (_listener is not { } l || Interlocked.CompareExchange(ref _acceptState, Accepting, Paused) != Paused) return;
         try
         {
-            if (Watch(l, add: false, on: true) < 0) _acceptPaused = true;
+            if (Watch(l, add: false, on: true) < 0) Interlocked.Exchange(ref _acceptState, Paused); // the next beat tries again
         }
         catch (ObjectDisposedException)
         {
@@ -313,6 +356,31 @@ internal abstract unsafe class EventLoop
         }
     }
 
+    /// <summary>Out of descriptors or memory: the listener stops waking the loop until the heartbeat resumes it.</summary>
+    void Pause(Socket listener, int errno)
+    {
+        _server.AcceptFailed(new IOException($"accept4 failed: {Marshal.GetPInvokeErrorMessage(errno)} (errno {errno})"));
+        try
+        {
+            if (Watch(listener, add: false, on: false) < 0) return; // still watched: the next wake tries again
+        }
+        catch (ObjectDisposedException)
+        {
+            return; // the server stopped, from the failure report's own hook perhaps
+        }
+        Pausing();
+        Interlocked.Exchange(ref _acceptState, Paused);
+    }
+
+    [System.Diagnostics.Conditional("DEBUG")]
+    void AcceptFails(ref int errno)
+    {
+        if (_server.AcceptHook is { } hook) errno = hook(_index);
+    }
+
+    [System.Diagnostics.Conditional("DEBUG")]
+    void Pausing() => _server.PauseHook?.Invoke(this);
+
     /// <summary>Takes what the listener holds, up to <see cref="AcceptsPerWakeUp"/>, and starts each connection here.</summary>
     void AcceptAll()
     {
@@ -325,8 +393,10 @@ internal abstract unsafe class EventLoop
             try
             {
                 h.DangerousAddRef(ref held);
-                fd = Accept((int)h.DangerousGetHandle());
-                errno = fd < 0 ? Marshal.GetLastPInvokeError() : 0;
+                errno = 0;
+                AcceptFails(ref errno);
+                fd = errno != 0 ? -1 : Accept((int)h.DangerousGetHandle());
+                if (fd < 0 && errno == 0) errno = Marshal.GetLastPInvokeError();
             }
             catch (ObjectDisposedException)
             {
@@ -340,9 +410,7 @@ internal abstract unsafe class EventLoop
             {
                 if (errno == Again) return;
                 if (!OutOfResources(errno)) continue; // that connection failed before it was taken; the next may not
-                _server.AcceptFailed(new SocketException(errno));
-                _acceptPaused = true;
-                _ = Watch(l, add: false, on: false);
+                Pause(l, errno);
                 return;
             }
             _server.AcceptWorks();
@@ -372,14 +440,19 @@ internal abstract unsafe class EventLoop
         }
     }
 
-    /// <summary>Gives each held answer its turn, in the order they were finished. Each connection sends and goes on to
-    /// its next wait here, with the batch over, so nothing it does now is held.</summary>
+    /// <summary>Sends every held answer first, then lets each connection go on in the order they were held: a
+    /// connection with more requests behind its answer works through them only after its neighbours' answers are out.
+    /// What they hold now waits for the next round.</summary>
     void SendAll()
     {
-        for (int i = 0; i < _sendCount; i++)
+        (_giving, _sends) = (_sends, _giving);
+        int n = _sendCount;
+        _sendCount = 0;
+        for (int i = 0; i < n; i++) _giving[i]!.SendHeld();
+        for (int i = 0; i < n; i++)
         {
-            HttpExchange x = _sends[i]!;
-            _sends[i] = null;
+            HttpExchange x = _giving[i]!;
+            _giving[i] = null;
             try
             {
                 x.TakeSendTurn();
@@ -390,7 +463,6 @@ internal abstract unsafe class EventLoop
                 _server.Report("http event loop failed", e);
             }
         }
-        _sendCount = 0;
     }
 
     static IOException Errno(string call)
@@ -539,8 +611,8 @@ internal abstract unsafe class EventLoop
             return Unsafe.ReadUnaligned<ulong>(ev + (Packed ? 4 : 8));
         }
 
-        // Edge-triggered EPOLLOUT stays in the set once added: it fires only when a full socket gets room again, which
-        // costs nothing while the sends fit.
+        // EPOLLOUT stays in the set once added. Its edges come when a full socket gets room again, and every readable
+        // edge reports it too: a Writable with no send waiting is one failed compare-and-swap.
         protected override int WatchWrite(int queue, int fd, ulong token)
         {
             byte* ev = stackalloc byte[16];

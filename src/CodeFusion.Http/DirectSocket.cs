@@ -17,6 +17,9 @@ internal static unsafe partial class DirectSocket
     static readonly int NoSignal = OperatingSystem.IsLinux() ? 0x4000 : 0;   // MSG_NOSIGNAL; on macOS .NET sets SO_NOSIGPIPE
     const int Interrupted = 4;                                               // EINTR
     const int ConnectionReset = 54, LinuxConnectionReset = 104;              // ECONNRESET on macOS and on Linux
+    // The most one call copies, so a call without a GC transition stays short: a GC waits for it to return. Callers
+    // loop on what is left.
+    public const int MaxPerCall = 64 << 10;
 
     public static int Receive(SafeSocketHandle socket, Span<byte> buffer, out SocketError error)
     {
@@ -29,7 +32,7 @@ internal static unsafe partial class DirectSocket
             {
                 while (true)
                 {
-                    nint n = recv(fd, p, buffer.Length, 0);
+                    nint n = recv(fd, p, Math.Min(buffer.Length, MaxPerCall), 0);
                     if (n >= 0)
                     {
                         error = SocketError.Success;
@@ -57,7 +60,7 @@ internal static unsafe partial class DirectSocket
             {
                 while (true)
                 {
-                    nint n = send(fd, p, buffer.Length, NoSignal);
+                    nint n = send(fd, p, Math.Min(buffer.Length, MaxPerCall), NoSignal);
                     if (n >= 0)
                     {
                         error = SocketError.Success;
@@ -83,9 +86,10 @@ internal static unsafe partial class DirectSocket
         return 0;
     }
 
-    // SuppressGCTransition: the socket is non-blocking, so each call returns in microseconds. SafeDirectories: never a
-    // library planted next to the app; libc comes from the system. errno is read straight after the call, with
-    // nothing in between that could change it.
+    // SuppressGCTransition: the socket is non-blocking and a call copies at most MaxPerCall, so it returns in
+    // microseconds. SafeDirectories: never a library planted next to the app; libc comes from the system. errno is read
+    // straight after the call; the GC poll the JIT puts after it keeps the thread's last error (on Unix, errno) when it
+    // has to wait for a collection, as every P/Invoke's return to managed code does.
     [LibraryImport("libc"), SuppressGCTransition, DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     private static partial nint recv(int fd, byte* buffer, nint length, int flags);
 

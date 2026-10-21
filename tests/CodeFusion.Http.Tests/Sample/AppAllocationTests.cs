@@ -51,6 +51,10 @@ public class AppAllocationTests(ITestOutputHelper output)
         { "async handler, wait ends on another thread", 1, HttpTransport.EventLoop },
         { "async handler, wait ends on another thread", 8, HttpTransport.EventLoop },
         { "reply whose write waits", 1, HttpTransport.EventLoop },
+        { "async handler with a body", 1, HttpTransport.EventLoop },
+        { "error reply", 1, HttpTransport.EventLoop },
+        { "no route: 404", 1, HttpTransport.EventLoop },
+        { "invalid token: 401", 1, HttpTransport.EventLoop },
     };
 
     static string RequestFor(string name) => name switch

@@ -146,14 +146,16 @@ connection and Kestrel about 17.6 KB (`HttpIdleBenchmarks`, measured on the cont
 `HttpServerOptions.Transport = HttpTransport.EventLoop` swaps .NET's sockets for the server's own threads, each waiting
 on epoll (Linux) or kqueue (macOS) for its share of the connections (`EventLoops`, one per core by default). A
 request then costs one receive call instead of two, and its handler runs on the loop's thread until it first awaits,
-with no hop through the runtime's socket thread or the thread pool. Each wake-up's answers go out together, after
-`OnEventLoopBatch`, where a database can commit the batch's writes. On Linux every loop listens on the port itself
-(SO_REUSEPORT) and accepts its own connections. Idle connections still hold no buffer.
+with no hop through the runtime's socket thread or the thread pool. Every answer finished on a loop's thread waits
+for the batch's actions (`OnEventLoopBatch`, and the app's `IServiceRegistry.OnEventLoopBatch` registrations), where a
+database commits the batch's writes; an answer finished on another thread goes out at once. On Linux every loop listens
+on the port itself (SO_REUSEPORT) and accepts its own connections, unless `ListenerPerLoop` is off. Idle connections
+still hold no buffer.
 
 The loop's thread is shared, so a handler that blocks it holds up every connection on that loop: keep the default
-`Sockets` for code that blocks. The rest is guarded: a client that keeps every read full gets its share of reads per
-wake-up, `Aborted`'s callbacks run on the thread pool, and a stop gives a loop a handler holds a second, as it gives
-the handler.
+`Sockets` for code that blocks. The rest is guarded: one connection gets at most 16 reads and 16 handler calls per
+wake-up before its neighbours' turn, `Aborted`'s callbacks run on the thread pool, and a stop gives a loop a handler
+holds a second, as it gives the handler.
 
 ## Limits
 

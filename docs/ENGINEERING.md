@@ -988,13 +988,13 @@ started while its queue is ready makes the call. So one receive per request need
 ### How
 
 `HttpServerOptions.Transport = HttpTransport.EventLoop` starts `EventLoops` threads (one per core by default), each
-with its own epoll (Linux) or kqueue (macOS) set. A connection's socket is added once, for reading only and
-edge-triggered (`EPOLLIN | EPOLLRDHUP | EPOLLET`, `EVFILT_READ` with `EV_CLEAR`), with its slot and a connection id
+with its own epoll (Linux) or kqueue (macOS) set. A connection's socket is added once, for reading (and for writing
+once a send has had to wait) and edge-triggered (`EPOLLIN | EPOLLRDHUP | EPOLLET`, `EVFILT_READ` with `EV_CLEAR`), with its slot and a connection id
 as the event's data, so a late event of a closed socket can't reach the connection object's next socket. The
 connection's wait for a request becomes `Arm()`: no call, only a flag. The loop's edge completes the wait on the
 loop's thread, and the request is read, handled and answered there until the handler first waits. Everything else in
-`HttpExchange` (the parse, deadlines, the close watch, the linger, send waits on the socket's own `SendAsync`) is the
-same code for both transports.
+`HttpExchange` (the parse, deadlines, the close watch, the linger, the send-rate checks) is the same code for both
+transports; a send that waits for room waits on the loop (see the review fixes, 7).
 
 Edges are not repeated, so the exchange keeps one that comes while no wait is armed (`_edge`), and whoever turns
 `_armed` from 1 to 0 completes the wait, exactly once. Three ways an edge would be lost, each with its test:
@@ -1023,20 +1023,27 @@ A handler that blocks its thread holds up every connection on its loop: Sockets 
 - **Direct calls:** a loop's connections call `recv` and `send` themselves (`DirectSocket`: LibraryImport with
   SuppressGCTransition, since neither can block on a non-blocking socket). The handle is held for each call, as Socket
   holds it, so a socket the heartbeat closed is an ObjectDisposedException, never a call on a reused descriptor number.
-  EAGAIN maps to WouldBlock and EINTR is retried. Peeks and the full-buffer `SendAsync` stay on Socket.
-- **Batches:** a loop handles every connection one wake-up found ready, calls `HttpServerOptions.OnEventLoopBatch` with
-  its index, then lets each answer finished in the batch send, in order.
+  EAGAIN maps to WouldBlock and EINTR is retried. Peeks stay on Socket. One call copies at most 64 KB, so a GC never
+  waits long on a call without its transition, and a receive that took 64 KB counts as one that filled the buffer.
+- **Batches:** a loop handles every connection one wake-up found ready, runs the batch's actions
+  (`HttpServerOptions.OnEventLoopBatch`, then the app's `IServiceRegistry.OnEventLoopBatch` registrations, in order),
+  sends every held answer, then lets each connection go on. A connection that goes on into a pipelined request holds
+  its answer again, and the actions run again: up to 8 rounds per wake-up, after which the next wait doesn't block.
   - The hold is awaited in `RunAsync`, whose box lives as long as the connection. Held inside `FlushAsync`, it
     allocated 17 to 20 B/request with 8 connections: the runtime's pooled boxes run out when several are held at once.
   - A handler the hook completes (a commit) runs its rest inside the hook, and its answer joins the batch.
   - The stop's wake ends the loop only after its batch is sent.
-  - `HttpServer.CurrentEventLoop` is the loop's index on its thread and -1 elsewhere.
+  - `CodeFusion.EventLoopThread.Current` (Core) is the loop's index on its thread and -1 elsewhere.
 - **Listeners:** on Linux each loop has its own listening socket (SO_REUSEPORT), level-triggered in its epoll set.
   - It accepts up to 64 connections per wake-up with `accept4` and starts each on its own thread.
   - Out of descriptors or memory, it stops watching the listener (one report per run of failures), and the heartbeat
-    watches it again.
-  - Only sockets of the same user can join a port's group. A second server started on the same port by mistake would
-    share its connections instead of failing to bind.
+    watches it again. The pause is one state changed by compare-and-swap, set after the listener is off.
+  - The kernel spreads connections by a hash of their addresses, not in turn: a few long-lived connections may share a
+    loop. `ListenerPerLoop = false` keeps one listener and gives connections to the loops in turn.
+  - A loop that fails hands its listener to the runtime's accepts, so its queued connections aren't reset; with every
+    loop failed, connections wait on their sockets as Sockets' do.
+  - The runtime's `ReuseAddress` sets SO_REUSEPORT on Unix anyway (checked on macOS), so port sharing by a process of
+    the same user is no different from Sockets'.
   - macOS keeps one listener and the runtime's accepts.
 
 ### Review fixes (review of f00a731)
@@ -1056,6 +1063,20 @@ Each fix had its test first, seen failing on the code before it (`EventLoopGuara
 | 9 (low): `BytesAndTheCloseInOneEdgeStillCloseTheConnection` failed if `/block` ran on a pool thread | It holds only the loop's thread and sends `/block` again until it runs there | |
 | 10 (low): the docs didn't say what the loop gives up | SECURITY.md, `Aborted`, the package README | |
 | 11 (low): copied helpers, a server without the suite's transport, allocation rows run twice in CI | `TestTransport.Use` and `UseWithHook` over `EventLoop.Supported`; `SlowClientTests` applies the transport; CI's second run leaves out the allocation classes | |
+
+### Second review fixes (review of 3a8d89d)
+
+| Finding | Fix | Test |
+|---|---|---|
+| 1 (medium): a handler started while answers were sent, after the batch's actions, could wait for a commit that never came | Everything on a loop's thread is in a batch; the actions run again while sending started handlers, up to 8 rounds, then the next wait doesn't block | `PipelinedWritesThatOnlyTheHookCompletesAreAllAnswered` (red with one round) |
+| 2 (medium): a heartbeat's resume between "paused" and "listener off" left it off | One accept state changed by compare-and-swap, published after the listener is off | `OnLinuxALoopOutOfDescriptorsPausesAndTheHeartbeatResumesIt`, with a hook that resumes mid-pause (Linux, CI only) |
+| 3 (medium): the budget counted reads, and the send phase ran a connection's backlog before its neighbours' answers went | 16 handler calls per connection per wake-up as well (past it the connection parks at a request boundary until the next round); the send phase sends every held answer before any connection goes on | `ANeighbourOfAFloodOfSlowRequestsWaitsAtMostOneShare`: 1 ms handlers flooded, a neighbour within 200 ms (1,120 ms without the budget) |
+| 4 (low): MaxConnections could be passed by loops admitting at once | The limit is checked where the count goes up, under the lock | `OnLinuxMaxConnectionsHoldsAcrossLoops` (Linux, CI only) |
+| 5 (low): the out-of-descriptors branch could throw past the loop, and reported the errno as a SocketError | The listener's branch is guarded like a connection's; the pause catches a listener the stop closed; the report is an IOException with the errno | `OnLinuxAStopStartedByTheAcceptFailureReportEndsClean`, `OnLinuxAnAcceptErrorOfOneConnectionSkipsOnlyIt` (Linux, CI only) |
+| 6 (low): sends without a GC transition had no size bound | One direct call copies at most 64 KB; a receive that took 64 KB counts as full | `ConnectionsOnTheLoopsKeepWorkingThroughCollections`; the 300 KB body row (not red on macOS: its buffers never leave 64 KB queued) |
+| 7 (low): hash spreading, resets on a failed loop, no real fallback | `ListenerPerLoop` (on by default) keeps one listener and turns when off; a failed loop hands its listener to the runtime's accepts; with every loop failed, connections fall back to Sockets' waits | `WithOneListenerConnectionsGoToTheLoopsInTurn`, `ALoopThatFailsTakesNoNewConnections(listenerPerLoop)`, `WhenEveryLoopFailsConnectionsFallBackToSockets` |
+| 8 (low): test gaps | The Linux accept tests above; the stop test's bound 4 s; EventLoop allocation rows for a body, an error, a 404 and a 401 | |
+| 9 (low): stale docs | This section, the package README, SECURITY.md (the exact bound, and port sharing for both transports) | |
 
 ### Tests
 

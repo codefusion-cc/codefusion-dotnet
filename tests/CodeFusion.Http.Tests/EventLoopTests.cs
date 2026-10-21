@@ -117,6 +117,7 @@ public sealed class EventLoopTests
     [InlineData(1)]
     [InlineData(200)]
     [InlineData(64 << 10)]
+    [InlineData(300 << 10)] // past a direct receive's 64 KB: a read can take its most with more left behind
     public async Task ARequestLargerThanTheBufferIsReadWhole(int bodyBytes)
     {
         await using var t = Start(static x =>

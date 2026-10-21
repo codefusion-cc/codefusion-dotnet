@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -225,6 +226,40 @@ public sealed class EventLoopBatchTests
         Assert.Equal(0, calls);
     }
 
+    // Every handler that starts on the loop is inside a batch whose hook runs: here the second of two pipelined writes
+    // starts while the first one's answer is sent, after the hook that committed the first.
+    [Fact(Timeout = 20_000)]
+    public async Task PipelinedWritesThatOnlyTheHookCompletesAreAllAnswered()
+    {
+        var waiting = new List<TaskCompletionSource>();
+        await using var t = Start(async x =>
+        {
+            if (x.Path.SequenceEqual("/write"u8))
+            {
+                var commit = new TaskCompletionSource(); // completed inline, in the hook, as a provider's commit is
+                lock (waiting) waiting.Add(commit);
+                await commit.Task;
+            }
+            TestServer.Write(x, Encoding.UTF8.GetString(x.Path));
+        }, loop =>
+        {
+            TaskCompletionSource[] now;
+            lock (waiting)
+            {
+                now = [.. waiting];
+                waiting.Clear();
+            }
+            foreach (TaskCompletionSource c in now) c.SetResult();
+        });
+        using Client c = await t.ConnectAsync();
+        await Warm(c);
+        for (int round = 0; round < 10; round++)
+        {
+            await c.SendAsync(Get("/write") + Get("/write") + Get("/write"));
+            for (int i = 0; i < 3; i++) Assert.Equal("/write", (await c.ReadAsync(timeoutMs: 1000)).Text);
+        }
+    }
+
     // What CodeFusion.Data's providers use: actions an app's services register, run after the options' hook in their
     // order, each with the loop's index, on that loop's thread; none after Build.
     [Fact(Timeout = 20_000)]
@@ -276,7 +311,8 @@ public sealed class EventLoopBatchTests
         await using var check = new AppCheck(app);
         app.Start();
         using Client c = await Client.ConnectAsync(app.LocalEndPoint);
-        for (int i = 0; i < 5; i++)
+        // the first request may run on the pool thread that starts the connection, outside any batch
+        for (int i = 0; i < 6; i++)
         {
             await c.SendAsync(Get("/api/nothing/here"));
             Assert.Equal(404, (await c.ReadAsync()).Status);
