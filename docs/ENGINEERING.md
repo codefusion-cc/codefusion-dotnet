@@ -838,18 +838,18 @@ Postgres 18 with CODEFUSION_TEST_DB and the four CODEFUSION_TEST_PG_* logins set
 
 ## The SQLite provider (tests/CodeFusion.Data.Sqlite.Tests)
 
-211 tests, nothing to set up. 47 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked
-unchanged: the same Conduit queries, seed and expected replies as on Postgres. 51 are the operator tests ported: each
-query's SQL in SQLite's dialect, checked as text, and the same results on the same seed. 5 are the conditional-write
-tests both providers run (`tests/Shared/Ops/ConditionalWriteTests.cs`). The rest are the provider's own: group commit
-(9), reads and snapshots (8), migrations (4), the one-connection `Exclusive` mode (7), one transaction per event-loop
-wake-up (14, 5 on which reads join a batch, and 1 under HttpServer's real event loop), durability when SQLite rolls back, a statement can't be
-prepared, a COMMIT fails or the source stops (14), the SQLite build loaded and where from (16 and 4), its keywords (1),
-allocations and spinning (6, in a collection that runs alone), races and faults only Debug hooks make certain (3, alone
-too), and crash recovery (14: a child process killed mid-group and after a commit, and a batching event loop killed 0,
-1, 3 or 10 ms into a wake-up or at its first answer, each with `synchronous` NORMAL and FULL). Every test that stops a
-source checks that the writer caught nothing unexpected and, in Debug builds, that every job it rented is back in the
-pool (`SqliteChecks`).
+211 tests, nothing to set up. 47 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked unchanged:
+the same Conduit queries, seed and expected replies as on Postgres. 51 are the operator tests ported: each query's SQL
+in SQLite's dialect, checked as text, and the same results on the same seed. 5 are the conditional-write tests both
+providers run (`tests/Shared/Ops/ConditionalWriteTests.cs`). The rest are the provider's own: group commit (9), reads
+and snapshots (8), migrations (4), the one-connection `Exclusive` mode (7), one transaction per event-loop wake-up (14,
+5 on which reads join a batch, and 1 under HttpServer's real event loop), durability when SQLite rolls back, a statement
+can't be prepared, a COMMIT fails or the source stops (14), the SQLite build loaded and where from (16 and 4), its
+keywords (1), allocations and spinning (6, in a collection that runs alone), races and faults only Debug hooks make
+certain (3, alone too), and crash recovery (14: a child process killed mid-group and after a commit, and a batching
+event loop killed 0, 1, 3 or 10 ms into a wake-up or at its first answer, each with `synchronous` NORMAL and FULL).
+Every test that stops a source checks that the writer caught nothing unexpected and, in Debug builds, that every job it
+rented is back in the pool (`SqliteChecks`).
 
 The schema and LINQ queries both providers run live in `tests/Shared/Conduit` and `tests/Shared/Ops`; each provider's
 part of a context (`ConduitDb.Sqlite.cs`, `OpsDb.Sqlite.cs`) names the provider and holds the queries written in its
