@@ -60,8 +60,8 @@ static class Patterns
             {
                 if (i + 1 >= pattern.Length) return "a '\\' at the end";
                 char x = pattern[i + 1];
-                if (x <= ' ' || x > '~' || IsLetterOrDigit(x) || x == '_')
-                    return $"'\\{x}' (a backslash escapes punctuation only: \\d, \\w, \\s and the like differ between .NET and SQL, and .NET refuses \\_)";
+                if (x <= ' ' || x > '~' || IsLetterOrDigit(x) || x is '_' or '\'' or '<')
+                    return $"'\\{x}' (a backslash escapes punctuation only: \\d, \\w, \\s and the like differ between .NET and SQL, and .NET refuses \\_ and reads \\'name' and \\<name> as back references)";
                 i += 2;
             }
             else if (IsLetterOrDigit(c) || Literals.IndexOf(c) >= 0) i++;

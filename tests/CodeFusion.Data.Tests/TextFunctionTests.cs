@@ -163,9 +163,9 @@ public sealed class TextFunctionTests(OpsFixture fixture)
     // ---------- the patterns ReplaceMatches takes ----------
 
     /// <summary>Pieces of patterns, those .NET and SQL read alike (most) and those they may not.</summary>
-    static readonly string[] Atoms = ["a", "b", "Z", "0", "-", " ", "\\.", "\\-", "[a-z]", "[^a-z]", "[A-Za-z0-9]", "[^0-9]", "[ab-]", "[^ ]", "[.$()*+?{}|]", "[ _,:;!?@#%&=~'\"/<>`]", "[^.$(]", "\\\\", "\\'", "\\[", "\\$", "\\\"", "\\(", "\\*", "\\?", "\\{", "\\|", "'", "\"", "#", "/", "~"];
+    static readonly string[] Atoms = ["a", "b", "Z", "0", "-", " ", "\\.", "\\-", "[a-z]", "[^a-z]", "[A-Za-z0-9]", "[^0-9]", "[ab-]", "[^ ]", "[.$()*+?{}|]", "[ _,:;!?@#%&=~'\"/<>`]", "[^.$(]", "\\\\", "\\[", "\\$", "\\\"", "\\(", "\\*", "\\?", "\\{", "\\|", "'", "\"", "#", "/", "~"];
 
-    static readonly string[] Others = [".", "\\d", "\\w", "é", "(a)", "a|b", "$", "^", "\\_", "\\0"];
+    static readonly string[] Others = [".", "\\d", "\\w", "é", "(a)", "a|b", "$", "^", "\\_", "\\0", "\\'", "\\<"];
 
     static Gen<string> AtomGen => Gen.Frequency((8, Gen.Elements(Atoms)), (1, Gen.Elements(Others)));
 
