@@ -38,9 +38,11 @@ CodeFusion.Http.BodyValue.Kind.get -> CodeFusion.Http.BodyKind
 CodeFusion.Http.Endpoint
 CodeFusion.Http.Endpoint.Auth.get -> CodeFusion.Http.AuthMode
 CodeFusion.Http.Endpoint.Endpoint() -> void
+CodeFusion.Http.Endpoint.InvalidRouteValue.get -> CodeFusion.ErrorReply?
 CodeFusion.Http.EndpointBuilder
 CodeFusion.Http.EndpointBuilder.AuthOptional() -> CodeFusion.Http.EndpointBuilder!
 CodeFusion.Http.EndpointBuilder.AuthRequired() -> CodeFusion.Http.EndpointBuilder!
+CodeFusion.Http.EndpointBuilder.WithInvalidRouteValue(CodeFusion.ErrorReply! error) -> CodeFusion.Http.EndpointBuilder!
 CodeFusion.Http.EndpointRouteBuilderExtensions
 CodeFusion.Http.EndpointSetup
 CodeFusion.Http.EndpointSetup.RouteValue(string! name) -> int
@@ -86,6 +88,8 @@ CodeFusion.Http.HttpAppErrors.Internal.get -> CodeFusion.ErrorReply!
 CodeFusion.Http.HttpAppErrors.Internal.set -> void
 CodeFusion.Http.HttpAppErrors.InvalidBody.get -> CodeFusion.ErrorReply!
 CodeFusion.Http.HttpAppErrors.InvalidBody.set -> void
+CodeFusion.Http.HttpAppErrors.InvalidRouteValue.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.HttpAppErrors.InvalidRouteValue.set -> void
 CodeFusion.Http.HttpAppErrors.InvalidToken.get -> CodeFusion.ErrorReply?
 CodeFusion.Http.HttpAppErrors.InvalidToken.set -> void
 CodeFusion.Http.HttpAppErrors.InvalidTokenPayload.get -> CodeFusion.ErrorReply?
@@ -310,6 +314,7 @@ CodeFusion.Http.RequestContext.Errors.get -> CodeFusion.Http.HttpAppErrors!
 CodeFusion.Http.RequestContext.Exchange.get -> CodeFusion.Http.HttpExchange!
 CodeFusion.Http.RequestContext.Json.get -> System.Text.Json.Utf8JsonWriter!
 CodeFusion.Http.RequestContext.Query.get -> CodeFusion.Http.QuerySource
+CodeFusion.Http.RequestContext.RejectRouteValue(CodeFusion.Http.Endpoint! endpoint) -> System.Threading.Tasks.ValueTask
 CodeFusion.Http.RequestContext.RequestBody.get -> CodeFusion.Http.BodySource
 CodeFusion.Http.RequestContext.Reset() -> void
 CodeFusion.Http.RequestContext.RetryAfter.get -> int

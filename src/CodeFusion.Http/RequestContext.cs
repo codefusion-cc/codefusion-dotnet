@@ -183,6 +183,16 @@ public sealed class RequestContext : IResponse, IValueTaskSource
         return ok;
     }
 
+    /// <summary>Answers a long or int route value of <paramref name="endpoint"/> that didn't bind: the endpoint's own
+    /// reply, else the app's <see cref="HttpAppErrors.InvalidRouteValue"/>, else its <see cref="HttpAppErrors.NotFound"/>.</summary>
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public ValueTask RejectRouteValue(Endpoint endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        HttpAppErrors e = _app.Errors;
+        return (endpoint.InvalidRouteValue ?? e.InvalidRouteValue ?? e.NotFound).WriteAsync(this);
+    }
+
     /// <summary>The query string, for a <c>[FromQuery]</c> binder.</summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
     public QuerySource Query => new(_x.RequestBuffer, _x.QueryOffset, _x.QueryLength, _arena);

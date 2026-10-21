@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel.DataAnnotations;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -430,6 +431,126 @@ public class SpecOptionsTests
         Assert.Equal((true, SpecErrors.Malformed, (ErrorReply?)null), (t.IsEmpty, t.MalformedBody, t.MissingBody));
     }
 
+    // ---- route values ----
+
+    static readonly ErrorReply InvalidPostId = new(400, """{"error":"invalid post id"}"""u8);
+    static readonly ErrorReply InvalidUserId = new(400, """{"error":"invalid user id"}"""u8);
+
+    static HttpApp RouteApp(Action<HttpAppErrors> errors)
+    {
+        HttpAppBuilder b = Builder(Feed());
+        errors(b.Errors);
+        HttpApp app = b.Build();
+        app.MapGet("/posts/{id}", static ([Range(1, long.MaxValue)] long id) => Reply.Ok(new Numbered(id)));
+        app.MapGet("/any/{id}", static (long id) => Reply.Ok(new Numbered(id)));
+        app.MapGet("/pages/{n}", static ([Range(1, 100)] int n) => Reply.Ok(new Numbered(n)));
+        app.MapGet("/users/{id}", static ([Range(1, long.MaxValue)] long id) => Reply.Ok(new Numbered(id))).WithInvalidRouteValue(InvalidUserId);
+        app.MapPost("/posts/{id}/like", static ([Range(1, long.MaxValue)] long id, Viewer v) => Reply.Created(new Numbered(id))).AuthRequired();
+        app.Start();
+        return app;
+    }
+
+    [Theory]
+    [InlineData("/posts/1", 1L)]
+    [InlineData("/posts/007", 7L)]
+    [InlineData("/posts/%31", 1L)]                       // the path is decoded first
+    [InlineData("/posts/9223372036854775807", long.MaxValue)]
+    [InlineData("/posts/0", null)]
+    [InlineData("/posts/-1", null)]
+    [InlineData("/posts/abc", null)]
+    [InlineData("/posts/1.5", null)]
+    [InlineData("/posts/+1", null)]
+    [InlineData("/posts/1e3", null)]
+    [InlineData("/posts/0x10", null)]
+    [InlineData("/posts/%201", null)]
+    [InlineData("/posts/1%20", null)]
+    [InlineData("/posts/9223372036854775808", null)]   // past a long
+    [InlineData("/posts/99999999999999999999999", null)]
+    [InlineData("/posts/%D9%A1", null)]                 // an Arabic-Indic one
+    [InlineData("/posts/%EF%BC%91", null)]              // a fullwidth one
+    [InlineData("/any/0", 0L)]                           // no [Range]: any digits that fit
+    [InlineData("/any/abc", null)]
+    [InlineData("/pages/1", 1L)]
+    [InlineData("/pages/100", 100L)]
+    [InlineData("/pages/0", null)]
+    [InlineData("/pages/101", null)]
+    [InlineData("/pages/2147483648", null)]
+    public async Task ARouteValueThatDoesntBindGetsTheAppsReply(string path, long? id)
+    {
+        await using HttpApp app = RouteApp(e => e.InvalidRouteValue = InvalidPostId);
+        await using var check = new AppCheck(app);
+        Response r = await Send(app, "GET", path);
+        Assert.Equal(id is { } n ? (200, $$"""{"id":{{n}}}""") : (400, """{"error":"invalid post id"}"""), (r.Status, r.Text));
+    }
+
+    [Theory]
+    [InlineData("/posts/0")]
+    [InlineData("/posts/abc")]
+    [InlineData("/any/abc")]
+    [InlineData("/pages/101")]
+    public async Task UnsetARouteValueThatDoesntBindIsANotFoundAsBefore(string path)
+    {
+        await using HttpApp app = RouteApp(_ => { });
+        await using var check = new AppCheck(app);
+        Assert.Null(app.Errors.InvalidRouteValue);
+        Response r = await Send(app, "GET", path);
+        Assert.Equal((404, """{"error":"not found"}"""), (r.Status, r.Text));
+        await using HttpApp own = RouteApp(e => e.NotFound = new ErrorReply(404, """{"e":"nothing"}"""u8));
+        await using var check2 = new AppCheck(own);
+        Response o = await Send(own, "GET", path);
+        Assert.Equal((404, """{"e":"nothing"}"""), (o.Status, o.Text));
+    }
+
+    [Theory]
+    [InlineData(null, "/posts/abc/like", 401, """{"error":"missing bearer token"}""")]
+    [InlineData("Bearer x", "/posts/abc/like", 401, """{"error":"invalid or expired token"}""")]
+    [InlineData("{t}", "/posts/abc/like", 400, """{"error":"invalid post id"}""")]
+    [InlineData("{t}", "/posts/0/like", 400, """{"error":"invalid post id"}""")]
+    [InlineData(null, "/posts/5/like", 401, """{"error":"missing bearer token"}""")]
+    [InlineData("{t}", "/posts/5/like", 201, """{"id":5}""")]
+    public async Task AuthIsCheckedBeforeTheRouteValue(string? auth, string path, int status, string text)
+    {
+        await using HttpApp app = RouteApp(e =>
+        {
+            e.InvalidRouteValue = InvalidPostId;
+            e.MissingToken = Missing;
+            e.InvalidToken = Invalid;
+        });
+        await using var check = new AppCheck(app);
+        Response r = await Send(app, "POST", path, auth?.Replace("{t}", "Bearer " + FeedToken(), StringComparison.Ordinal), body: "");
+        Assert.Equal((status, text), (r.Status, r.Text));
+    }
+
+    [Fact]
+    public async Task AnEndpointCanNameItsOwnReply()
+    {
+        await using HttpApp app = RouteApp(e => e.InvalidRouteValue = InvalidPostId);
+        await using var check = new AppCheck(app);
+        Response user = await Send(app, "GET", "/users/0");
+        Assert.Equal((400, """{"error":"invalid user id"}"""), (user.Status, user.Text));
+        Response post = await Send(app, "GET", "/posts/0");
+        Assert.Equal((400, """{"error":"invalid post id"}"""), (post.Status, post.Text));
+        await using HttpApp unset = RouteApp(_ => { });
+        await using var check2 = new AppCheck(unset);
+        Response alone = await Send(unset, "GET", "/users/x");
+        Assert.Equal((400, """{"error":"invalid user id"}"""), (alone.Status, alone.Text));
+    }
+
+    [Fact]
+    public async Task AnEndpointsReplyIsCheckedWhenItIsSet()
+    {
+        HttpApp app = Builder().Build();
+        EndpointBuilder e = app.MapGet("/a/{id}", static (long id) => Reply.NoContent());
+        Assert.Throws<ArgumentNullException>(() => e.WithInvalidRouteValue(null!));
+        Assert.Same(e, e.WithInvalidRouteValue(InvalidUserId));
+        await using (app)
+        {
+            await using var check = new AppCheck(app);
+            app.Start();
+            Assert.Throws<InvalidOperationException>(() => e.WithInvalidRouteValue(InvalidPostId));
+        }
+    }
+
     [Fact]
     public void AViewerMadeByHandHasNoClaims()
     {
@@ -449,6 +570,8 @@ internal readonly record struct Has(bool Found, Utf8 Username);
 internal readonly record struct Issued(Utf8 Token);
 
 internal readonly record struct PostEcho(Utf8 Body);
+
+internal readonly record struct Numbered(long Id);
 
 internal static class SpecErrors
 {

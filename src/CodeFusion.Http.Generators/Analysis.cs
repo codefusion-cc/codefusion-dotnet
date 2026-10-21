@@ -226,9 +226,13 @@ internal sealed class Analysis(KnownTypes known)
             Report(Diagnostics.StringParameter, at, p.Name);
             return null;
         }
-        if (KnownTypes.Is(t, known.Utf8)) return new(p.Name, ParameterKind.RouteText, type);
-        if (t.SpecialType == SpecialType.System_Int64) return new(p.Name, ParameterKind.RouteInt64, type);
-        if (t.SpecialType == SpecialType.System_Int32) return new(p.Name, ParameterKind.RouteInt32, type);
+        if (KnownTypes.Is(t, known.Utf8))
+        {
+            if (Attribute(p, known.Range) is null) return new(p.Name, ParameterKind.RouteText, type);
+            Report(Diagnostics.BadParameter, at, $"The handler's parameter '{p.Name}' is a Utf8 route value: [Range] is for long and int ones");
+            return null;
+        }
+        if (t.SpecialType is SpecialType.System_Int64 or SpecialType.System_Int32) return RouteNumber(p, at, type, t.SpecialType == SpecialType.System_Int32);
         if (KnownTypes.Is(t, known.Viewer)) return new(p.Name, ParameterKind.Viewer, type);
         if (KnownTypes.Is(t, known.IResponse) || KnownTypes.Is(t, known.RequestContext)) return new(p.Name, ParameterKind.Response, type);
         if (KnownTypes.Is(t, known.HttpExchange)) return new(p.Name, ParameterKind.Exchange, type);
@@ -267,6 +271,21 @@ internal sealed class Analysis(KnownTypes known)
         Report(Diagnostics.BadParameter, at,
             $"The handler's parameter '{p.Name}' is a {t.ToDisplayString(Short)}, which can't be bound: route values are Utf8, long or int; the query and the body are read into structs");
         return null;
+    }
+
+    /// <summary>A long or int route value, with the bounds of its [Range]: only digits are read, so nothing is below 0,
+    /// and the type's own top needs no check.</summary>
+    ParameterModel? RouteNumber(IParameterSymbol p, Location at, string type, bool int32)
+    {
+        if (!RangeOf(p, $"The handler's parameter '{p.Name}'", Diagnostics.BadParameter, at, out RangeEnds? range)) return null;
+        long top = int32 ? int.MaxValue : long.MaxValue;
+        if (Whole(range, 0, top) is not { } bounds)
+        {
+            Report(Diagnostics.BadParameter, at, $"The handler's parameter '{p.Name}''s [Range] leaves no {(int32 ? "int" : "long")} of digits");
+            return null;
+        }
+        return new(p.Name, int32 ? ParameterKind.RouteInt32 : ParameterKind.RouteInt64, type,
+            bounds.Lo == 0 ? null : Literal(bounds.Lo), bounds.Hi == top ? null : Literal(bounds.Hi));
     }
 
     static bool IsFramework(INamedTypeSymbol t)
@@ -484,7 +503,11 @@ internal sealed class Analysis(KnownTypes known)
 
     /// <summary>The member's [Range] in any of its forms, null when it has none; false (reported) when it can't be
     /// read. The string form's numbers are read in the invariant culture, as the generator has no other.</summary>
-    bool RangeOf(ISymbol m, string owner, Location at, out RangeEnds? range)
+    bool RangeOf(ISymbol m, string owner, Location at, out RangeEnds? range) =>
+        RangeOf(m, $"'{owner}.{m.Name}'", Diagnostics.BadMember, at, out range);
+
+    /// <summary>The same, for <paramref name="what"/> (how the message names it), reported as <paramref name="rule"/>.</summary>
+    bool RangeOf(ISymbol m, string what, DiagnosticDescriptor rule, Location at, out RangeEnds? range)
     {
         range = null;
         if (Attribute(m, known.Range) is not { } a) return true;
@@ -503,7 +526,7 @@ internal sealed class Analysis(KnownTypes known)
         }
         if (min is null || max is null)
         {
-            Report(Diagnostics.BadMember, at, $"'{owner}.{m.Name}''s [Range] isn't one the generator can read: write [Range(min, max)] with numbers, or [Range(typeof(long), \"min\", \"max\")] with a number type and numbers written as in C#");
+            Report(rule, at, $"{what}'s [Range] isn't one the generator can read: write [Range(min, max)] with numbers, or [Range(typeof(long), \"min\", \"max\")] with a number type and numbers written as in C#");
             return false;
         }
         bool Set(string name) => a.NamedArguments.Any(x => x.Key == name && x.Value.Value is true);

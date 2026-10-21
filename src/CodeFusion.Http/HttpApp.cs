@@ -319,6 +319,11 @@ public sealed class HttpAppErrors
     /// <summary>No route matches the method and path. 404 by default.</summary>
     public ErrorReply NotFound { get; set; } = Make(404, "not found");
 
+    /// <summary>A long or int route value that isn't digits, doesn't fit, or is outside the parameter's [Range], such
+    /// as a post id of 0 or "abc": checked after auth. An endpoint's own <c>.WithInvalidRouteValue(error)</c> wins over it.
+    /// Null, the default, answers with <see cref="NotFound"/>.</summary>
+    public ErrorReply? InvalidRouteValue { get; set; }
+
     /// <summary>A missing or invalid token on an endpoint that needs one, or an invalid one on any endpoint that reads
     /// it, for each reason <see cref="MissingToken"/>, <see cref="InvalidToken"/> and <see cref="InvalidTokenPayload"/>
     /// leave unset. 401 by default.</summary>

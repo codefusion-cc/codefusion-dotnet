@@ -119,6 +119,18 @@ A null `MissingBody` answers as `MalformedBody` does, and a null `MalformedBody`
 `static ErrorReply InvalidBody`, then `Errors.InvalidBody`. A reason the app sets wins over a struct's own reply,
 which keeps answering the bodies of another shape.
 
+A `long` or `int` route value is ASCII digits that fit its type, within its `[Range]` if it has one. One that isn't
+gets `Errors.InvalidRouteValue`, or the endpoint's own reply, and `Errors.NotFound` when neither is set. It is checked
+after auth, so a request with no token gets the 401 whatever its route holds:
+
+```csharp
+builder.Errors.InvalidRouteValue = Errors.InvalidPostId;  // 400 "invalid post id"
+app.MapPost("/posts/{id}/like", static ([Range(1, long.MaxValue)] long id, Viewer viewer, Likes likes) => likes.Add(viewer.Id, id))
+   .AuthRequired();
+app.MapGet("/users/{id}", static ([Range(1, long.MaxValue)] long id, Users users) => users.Find(id))
+   .WithInvalidRouteValue(Errors.InvalidUserId);
+```
+
 A body or `[FromQuery]` struct is bound through its public fields and its public properties with a public setter,
 and nothing else, so a request can't set a member the struct keeps to itself. A number's `[Range]` holds in the body
 as in the query, in each of the attribute's forms, exclusive ends included.
@@ -132,7 +144,7 @@ These are build errors (CFH0109 a warning), from the package's analyzers, in eve
 | CFH0003 | a reply the generator can't send, such as `Task<T>` or a type with no JSON form |
 | CFH0004 | a `Utf8` (or `RawJson`, `Utf8List`, `Viewer`, `ArenaBytes`) kept by a class: in a field, an auto-property, or a primary-constructor parameter one of its members uses; or by a struct's static field or auto-property. A type that only takes one in, such as `Func<Utf8, bool>` or `IEqualityComparer<Utf8>`, keeps none. A CodeFusion.Data entity's instance members are exempt, since it is never built: a class a data context has a `Table<T>` for, and its base classes, or one marked `[Table]` in an assembly that references CodeFusion.Data and has no data context. A class that derives from one without being an entity is reported for what it inherits |
 | CFH0005 | LINQ inside a handler |
-| CFH01xx | a Map call the generator can't compile: a route that isn't a literal template, a parameter it can't bind, a struct that isn't `partial`, a required member its binder can't set, a handler held as a delegate it can't name (more than 16 parameters, a default value or `params`), a call it can't intercept |
+| CFH01xx | a Map call the generator can't compile: a route that isn't a literal template, a parameter it can't bind (a `[Range]` on a `Utf8` route value, or one that leaves a `long` or `int` route value nothing), a struct that isn't `partial`, a required member its binder can't set, a handler held as a delegate it can't name (more than 16 parameters, a default value or `params`), a call it can't intercept |
 | CFH0109 | an internal field or settable auto-property of a body or `[FromQuery]` struct, which the binder leaves at its default: make it public to bind it, or private or `[JsonIgnore]` to say it isn't. Silence one at the member with `#pragma warning disable CFH0109` or `[SuppressMessage("CodeFusion", "CFH0109")]`, or all with `NoWarn` |
 
 ## The server underneath

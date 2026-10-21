@@ -172,10 +172,10 @@ internal static class Emitter
                     w.Line($"{pm.Type} p{p} = c.RouteText(_route{p});");
                     break;
                 case ParameterKind.RouteInt64:
-                    w.Line($"if (!c.TryRouteInt64(_route{p}, out long p{p})) return c.Errors.NotFound.WriteAsync(c);");
+                    w.Line($"if (!c.TryRouteInt64(_route{p}, out long p{p}){Outside(pm, $"p{p}")}) return c.RejectRouteValue(this);");
                     break;
                 case ParameterKind.RouteInt32:
-                    w.Line($"if (!c.TryRouteInt32(_route{p}, out int p{p})) return c.Errors.NotFound.WriteAsync(c);");
+                    w.Line($"if (!c.TryRouteInt32(_route{p}, out int p{p}){Outside(pm, $"p{p}")}) return c.RejectRouteValue(this);");
                     break;
             }
         }
@@ -205,6 +205,10 @@ internal static class Emitter
         w.Close();
         w.Close();
     }
+
+    /// <summary>" || " and the condition that a route value is outside its [Range], or nothing when it has none.</summary>
+    static string Outside(ParameterModel pm, string value) =>
+        (pm.Min is null ? "" : $" || {value} < {pm.Min}") + (pm.Max is null ? "" : $" || {value} > {pm.Max}");
 
     static void Sender(Writer w, ReplyModel r, int i)
     {
