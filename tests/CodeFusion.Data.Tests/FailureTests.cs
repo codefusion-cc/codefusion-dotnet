@@ -58,6 +58,7 @@ public sealed class FailureTests(OpsFixture fixture)
     [Fact]
     public async Task ALockHeldTooLongIsBusyReportedAndTheWriteDoesNotHappen()
     {
+        TestDb.Require();
         var failures = new ConcurrentQueue<(string, DataResult)>();
         var settings = PgSettings.Parse(TestDb.ConnectionString!).Set("search_path", "cfdata_ops_w");
         var source = new PostgresDatabase(settings)
@@ -97,6 +98,7 @@ public sealed class FailureTests(OpsFixture fixture)
     [Fact]
     public async Task AStatementPastItsTimeoutIsBusyAndReported()
     {
+        TestDb.Require();
         var failures = new ConcurrentQueue<(string, DataResult)>();
         var settings = PgSettings.Parse(TestDb.ConnectionString!).Set("search_path", "cfdata_ops").Set("statement_timeout", "100ms");
         var source = new PostgresDatabase(settings) { OnFailure = (q, r) => failures.Enqueue((q, r)) }.Open(1, 1);
@@ -129,6 +131,7 @@ public sealed class FailureTests(OpsFixture fixture)
     [Fact]
     public async Task AnErrorOfTheDatabaseIsInternalAndReported()
     {
+        TestDb.Require();
         var failures = new ConcurrentQueue<(string, DataResult)>();
         var settings = PgSettings.Parse(TestDb.ConnectionString!).Set("search_path", "cfdata_ops");
         var source = new PostgresDatabase(settings) { OnFailure = (q, r) => failures.Enqueue((q, r)) }.Open(1, 1);
@@ -197,6 +200,7 @@ public sealed class FailureTests(OpsFixture fixture)
     [Fact]
     public async Task AStoppedSourceRunsNothing()
     {
+        TestDb.Require();
         var source = TestDb.Open("cfdata_ops");
         source.Stop();
         var db = Db(source);
