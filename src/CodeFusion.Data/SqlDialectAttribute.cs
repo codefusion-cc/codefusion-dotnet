@@ -145,19 +145,9 @@ public sealed class SqlDialectAttribute : Attribute
     /// collation than the default. {0} is the table written and {2} the tables the Select reads, each a string literal;
     /// {1} the columns the insert sets, rows of a VALUES of each one's name and the type it is bound as
     /// (<c>('legs', 'integer')</c>); {3} whether the write deletes and {4} whether a read is corrected, each a boolean.
-    /// The Postgres check reads the catalog by its indexes. Empty: such a Then is refused.
+    /// Null: the generator's check of the Postgres catalog, which reads it by its indexes. Empty: such a Then is refused.
     /// </summary>
-    public string ThenGuard { get; init; } =
-        "(SELECT CASE WHEN EXISTS (WITH RECURSIVE r(oid) AS (SELECT c.oid UNION SELECT k.conrelid FROM r JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass " +
-        "AND d.refobjid = r.oid AND d.classid = 'pg_constraint'::regclass JOIN pg_constraint k ON k.oid = d.objid " +
-        "WHERE {3} AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd')) " +
-        "SELECT 1 FROM r JOIN pg_class x ON x.oid = r.oid WHERE x.relhasrules OR EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = r.oid AND NOT g.tgisinternal) " +
-        "OR {3} AND EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = ANY (ARRAY[{2}]::regclass[]) AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd'))) " +
-        "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM (VALUES {1}) v(n, t) JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = v.n::name " +
-        "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid <> v.t::regtype)) " +
-        "THEN ('CodeFusion: the Select after Then can''t read ' || c.relname || ' as the write left it (a rule, a trigger, row security, a foreign key that cascades " +
-        "into a table it reads, or a column that may store another value than the one written)')::int ELSE 0 END FROM pg_class c WHERE c.oid = {0}::regclass) = 0";
-
+    public string? ThenGuard { get; init; }
 
     /// <summary>Whether a subquery in FROM may refer to the rows before it (<c>CROSS JOIN LATERAL</c>). False (SQLite): a
     /// page of the newest rows per group (<c>SelectMany</c> before <c>Page</c>) is refused.</summary>

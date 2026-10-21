@@ -103,6 +103,24 @@ public sealed class ShapeGeneratorTests
         Assert.Contains("a NUL, which SQL text can't hold", Message(d), System.StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void TheThenGuardIsOneTextTheGeneratorKeeps()
+    {
+        // the attribute leaves it to the generator, which keeps the one copy: what a Postgres statement after Then runs
+        Assert.Null(new SqlDialectAttribute("postgres").ThenGuard);
+        Assert.Equal(
+            "(SELECT CASE WHEN EXISTS (WITH RECURSIVE r(oid) AS (SELECT c.oid UNION SELECT k.conrelid FROM r JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass " +
+            "AND d.refobjid = r.oid AND d.classid = 'pg_constraint'::regclass JOIN pg_constraint k ON k.oid = d.objid " +
+            "WHERE {3} AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd')) " +
+            "SELECT 1 FROM r JOIN pg_class x ON x.oid = r.oid WHERE x.relhasrules OR EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = r.oid AND NOT g.tgisinternal) " +
+            "OR {3} AND EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = ANY (ARRAY[{2}]::regclass[]) AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd'))) " +
+            "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM (VALUES {1}) v(n, t) JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = v.n::name " +
+            "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid <> v.t::regtype)) " +
+            "THEN ('CodeFusion: the Select after Then can''t read ' || c.relname || ' as the write left it (a rule, a trigger, row security, a foreign key that cascades " +
+            "into a table it reads, or a column that may store another value than the one written or compare it otherwise)')::int ELSE 0 END FROM pg_class c WHERE c.oid = {0}::regclass) = 0",
+            CodeFusion.Data.Generator.Dialect.ThenGuardOfPostgres);
+    }
+
     // ---------- an insert of a list's texts ----------
 
     [Fact]

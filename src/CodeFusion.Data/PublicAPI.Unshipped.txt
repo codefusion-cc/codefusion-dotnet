@@ -289,7 +289,7 @@ CodeFusion.Data.SqlDialectAttribute.Returning.init -> void
 CodeFusion.Data.SqlDialectAttribute.SelectsConditions.get -> bool
 CodeFusion.Data.SqlDialectAttribute.SelectsConditions.init -> void
 CodeFusion.Data.SqlDialectAttribute.SqlDialectAttribute(string! name) -> void
-CodeFusion.Data.SqlDialectAttribute.ThenGuard.get -> string!
+CodeFusion.Data.SqlDialectAttribute.ThenGuard.get -> string?
 CodeFusion.Data.SqlDialectAttribute.ThenGuard.init -> void
 CodeFusion.Data.SqlDialectAttribute.Trim.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Trim.init -> void

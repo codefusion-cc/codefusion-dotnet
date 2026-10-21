@@ -35,7 +35,7 @@ sealed class Dialect
         "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM (VALUES {1}) v(n, t) JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = v.n::name " +
         "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid <> v.t::regtype)) " +
         "THEN ('CodeFusion: the Select after Then can''t read ' || c.relname || ' as the write left it (a rule, a trigger, row security, a foreign key that cascades " +
-        "into a table it reads, or a column that may store another value than the one written)')::int ELSE 0 END FROM pg_class c WHERE c.oid = {0}::regclass) = 0";
+        "into a table it reads, or a column that may store another value than the one written or compare it otherwise)')::int ELSE 0 END FROM pg_class c WHERE c.oid = {0}::regclass) = 0";
 
     /// <summary>The Postgres type a column's value is bound as (the parameter types of
     /// <see cref="ParamList"/>), which the Then guard compares with the column's: a column of another type may store
@@ -87,7 +87,7 @@ sealed class Dialect
                 case "InArray": d.InArray = (string)v!; break;
                 case "ListRows": d.ListRows = (string)v!; break;
                 case "AnyOfQuery": d.AnyOfQuery = (string)v!; break;
-                case "ThenGuard": d.ThenGuard = (string)v!; break;
+                case "ThenGuard": d.ThenGuard = (string?)v ?? ThenGuardOfPostgres; break;
                 case "NullSafeEqual": d.NullSafeEqual = (string)v!; break;
                 case "Now": d.Now = (string)v!; break;
                 case "Concat": d.Concat = (string)v!; break;

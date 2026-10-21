@@ -944,7 +944,8 @@ What the fixes decided:
   nothing, as its CASE takes NULL as no.
 - Only the table the write names is corrected. After a delete, a read of a table whose rows lead to it by a
   navigation is refused at build time; for the rest the statement checks the catalog first
-  (`SqlDialectAttribute.ThenGuard`, a scalar subquery the final SELECT's WHERE compares with 0, as
+  (the generator's `Dialect.ThenGuardOfPostgres`, its one copy, which `SqlDialectAttribute.ThenGuard` replaces for
+  another dialect: a scalar subquery the final SELECT's WHERE compares with 0, as
   perf/data-batched-updates' merged updates check their table): a rule or non-internal trigger on the table written,
   or on any table a delete reaches from it key after key (a recursive CTE over the foreign keys that cascade, set
   NULL or set a default, found through pg_depend's index), such a foreign key into a table the Select reads (the
