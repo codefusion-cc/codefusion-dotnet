@@ -114,12 +114,10 @@ public sealed class ShapeGeneratorTests
             "FROM pg_inherits i JOIN pg_class h ON h.oid = i.inhrelid WHERE r.sub AND i.inhparent = r.oid " +
             "UNION ALL SELECT k.conrelid, r.upd OR k.confdeltype <> 'c', true, h.relhassubclass, h.relhasrules FROM pg_depend d JOIN pg_constraint k ON k.oid = d.objid " +
             "JOIN pg_class h ON h.oid = k.conrelid WHERE {3} AND d.refclassid = 'pg_class'::regclass AND d.refobjid = r.oid AND d.classid = 'pg_constraint'::regclass " +
-            "AND k.contype = 'f' AND k.confrelid = r.oid AND CASE WHEN r.upd THEN k.confupdtype ELSE k.confdeltype END IN ('c', 'n', 'd') OFFSET 0) n), " +
-            "q(oid, sub, found) AS (SELECT x.oid, x.relhassubclass, x.oid = {5}::regclass FROM pg_class x WHERE x.oid = ANY (ARRAY[{2}]::regclass[]) " +
-            "UNION SELECT n.* FROM q CROSS JOIN LATERAL (SELECT i.inhrelid, h.relhassubclass, q.found FROM pg_inherits i JOIN pg_class h ON h.oid = i.inhrelid " +
-            "WHERE q.sub AND i.inhparent = q.oid OFFSET 0) n) " +
+            "AND k.contype = 'f' AND k.confrelid = r.oid AND CASE WHEN r.upd THEN k.confupdtype ELSE k.confdeltype END IN ('c', 'n', 'd') OFFSET 0) n) " +
             "SELECT 1 FROM r WHERE r.rules OR (SELECT true FROM pg_trigger g WHERE g.tgrelid = r.oid AND NOT g.tgisinternal LIMIT 1) " +
-            "OR r.reached AND r.oid IN (SELECT q.oid FROM q) OR NOT r.reached AND r.oid IN (SELECT q.oid FROM q WHERE q.found)) " +
+            "OR EXISTS (WITH RECURSIVE u(oid) AS (SELECT r.oid UNION SELECT n.oid FROM u CROSS JOIN LATERAL (SELECT i.inhparent FROM pg_inherits i " +
+            "WHERE i.inhrelid = u.oid OFFSET 0) n(oid)) SELECT 1 FROM u WHERE CASE WHEN r.reached THEN u.oid = ANY (ARRAY[{2}]::regclass[]) ELSE u.oid = {5}::regclass END)) " +
             "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM (VALUES {1}) v(n, t) JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = v.n::name " +
             "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid::regtype <> ALL (v.t))) " +
             "THEN ('CodeFusion: the Select after Then can''t read ' || c.relname || ' as the write left it (a rule, a trigger, row security, a foreign key that cascades " +
