@@ -838,11 +838,13 @@ Postgres 18 with CODEFUSION_TEST_DB and the four CODEFUSION_TEST_PG_* logins set
 
 ## The SQLite provider (tests/CodeFusion.Data.Sqlite.Tests)
 
-132 tests, nothing to set up. 48 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked
-unchanged: the same Conduit queries, seed and expected replies as on Postgres. 50 are the operator tests ported: each
+146 tests, nothing to set up. 48 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked
+unchanged: the same Conduit queries, seed and expected replies as on Postgres. 51 are the operator tests ported: each
 query's SQL in SQLite's dialect, checked as text, and the same results on the same seed. The rest are the provider's
-own: group commit (9), reads and snapshots (8), migrations (4), the one-connection `Exclusive` mode (8), and crash
-recovery (4: a child process killed mid-group and after a commit, each with `synchronous` NORMAL and FULL). Every test that stops a source checks that the writer
+own: group commit (9), reads and snapshots (8), migrations (4), the one-connection `Exclusive` mode (7), one
+transaction per event-loop wake-up (9), where e_sqlite3 is loaded from (3), the allocations of those two modes (2, in a
+collection that runs alone), and crash recovery (4: a child process killed mid-group and after a commit, each with
+`synchronous` NORMAL and FULL). Every test that stops a source checks that the writer
 caught nothing unexpected and, in Debug builds, that every job it rented is back in the pool (`SqliteChecks`).
 
 The schema and LINQ queries both providers run live in `tests/Shared/Conduit` and `tests/Shared/Ops`; each provider's
@@ -871,6 +873,13 @@ SQL.
 | Exclusive: a read keeps the last group's time for `cf_now()` | `NowInAReadIsTheTimeOfTheRead` |
 | Exclusive: Stop closes the writer before the reads stop | the run hung or crashed, with no summary |
 | a cancelled write completed inside the transaction | `AContinuationOnTheWritersThreadReadsAndWrites` (with `CompleteOnWriterThread`, its continuation read on the held connection) |
+| Batches: a write completed before the batch's COMMIT | `AWakeUpsWritesCommitTogetherAndCompleteOnlyAfterTheCommit` |
+| Batches: a failed write not rolled back to its savepoint | `AFailingWriteFailsAloneAndAUnitIsUndoneWhole` |
+| Batches: the end commits one batch, not those its completions open | `AWriteMadeByACompletionIsCommittedBeforeTheBatchEnds` |
+| Batches: the batch doesn't take the connection from other threads | `AnotherThreadsReadWaitsForTheBatchAndThenSeesAllOfIt`, `AWriteOffTheLoopGoesToTheWriterAndWaitsForTheBatch` |
+| Batches: a read on the loop waits for the connection its own batch holds | `AReadOnTheLoopSeesItsBatchsWrites` (its 30 s timeout) |
+| Batches: AddDatabase doesn't register the batch's end | `AddDatabaseHandsTheServerTheBatchsEnd` |
+| Batches: allowed without Exclusive | `BatchesNeedExclusiveMode` |
 
 The crash tests can't be made red by breaking the provider: what they check (nothing of an open group survives, every
 completed write does) is SQLite's WAL recovery, which a kill can't get past. They check that the provider keeps to it:

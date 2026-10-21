@@ -85,6 +85,7 @@ sealed class FirstColumn : IRowReader
 | `CompleteOnWriterThread` | off | a write's caller continues on the writer's thread: one thread switch less, but it must never wait on another write there |
 | `LeaderCommit` | off | a write that finds the writer idle commits on its caller's thread |
 | `Exclusive` | off | one connection for every read and write, the file locked to this process: for one or two cores (below) |
+| `EventLoopBatches` | off | with `Exclusive`, behind CodeFusion.Http's event loops: one transaction per loop wake-up (below) |
 
 ## One core
 
@@ -104,6 +105,12 @@ CPU of a Colima VM, linux-arm64; three rounds alternating the two, two with `Ful
 each waiting for at most one of the other's. On more cores it costs: reads no longer run beside each other, so 4
 threads on an 8-core Mac read 1.2 to 1.8 M/s where the default reads 6.4 M/s. The runs, and the ones before them,
 are in [docs/benchmarks](../../docs/benchmarks/README.md).
+
+Behind CodeFusion.Http's event loops (`HttpTransport.EventLoop`), `EventLoopBatches = true` goes one step further: a
+write made on a loop runs there at once, inside one transaction per loop wake-up, and every write of the wake-up commits
+together when the server has handled its events. Each write completes after that COMMIT, on the loop, so its answer goes
+out with the wake-up's others. A write has a savepoint of its own, so one that fails fails alone. `AddDatabase` hands the
+server the batch's end; nothing else to wire. Writes off a loop still go to the writer thread.
 
 ## Failures
 
