@@ -3,6 +3,7 @@
     <Project Path="benchmarks/CodeFusion.Benchmarks/CodeFusion.Benchmarks.csproj" />
     <Project Path="benchmarks/CodeFusion.Data.Sqlite.Throughput/CodeFusion.Data.Sqlite.Throughput.csproj" />
     <Project Path="benchmarks/CodeFusion.Security.Bcrypt.Benchmarks/CodeFusion.Security.Bcrypt.Benchmarks.csproj" />
+    <Project Path="benchmarks/CodeFusion.TechEmpower/CodeFusion.TechEmpower.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/CodeFusion.Core/CodeFusion.Core.csproj" />
@@ -27,5 +28,6 @@
     <Project Path="tests/CodeFusion.Http.SampleApp/CodeFusion.Http.SampleApp.csproj" />
     <Project Path="tests/CodeFusion.Http.Tests/CodeFusion.Http.Tests.csproj" />
     <Project Path="tests/CodeFusion.Security.Bcrypt.Tests/CodeFusion.Security.Bcrypt.Tests.csproj" />
+    <Project Path="tests/CodeFusion.TechEmpower.Tests/CodeFusion.TechEmpower.Tests.csproj" />
   </Folder>
 </Solution>

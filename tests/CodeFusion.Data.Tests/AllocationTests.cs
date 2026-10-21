@@ -40,14 +40,14 @@ public sealed class AllocationTests(ConduitFixture fixture)
     static readonly Utf8List KnownTags = Texts.List("training", "dragons", "dragons");
     static readonly Utf8 Dave = U("dave");
 
-    /// <summary>One request of each kind a connection serves, the reads as replies and awaited.</summary>
+    /// <summary>One request of each kind a connection serves, the reads as replies and awaited (a row, a list, reads sent together).</summary>
     static async Task<long> Reads(Connection c, int requests)
     {
         long bad = 0;
         for (int i = 0; i < requests; i++)
         {
             c.Next();
-            switch (i % 8)
+            switch (i % 10)
             {
                 case 0:
                     await c.Db.ArticleBySlug(Slug, 1).WriteAsync(c.Response).ConfigureAwait(false);
@@ -78,6 +78,14 @@ public sealed class AllocationTests(ConduitFixture fixture)
                     await c.Db.Feed(1, new Paging(20, 0)).WriteAsync(c.Response).ConfigureAwait(false);
                     if (c.Response.Status != 200) bad++;
                     break;
+                case 7:
+                    var users = await c.Db.Each(3, static (db, i) => db.UserByEmail(Email));
+                    if (users.Failed || users.Count != 3 || users[2].Id != 2) bad++;
+                    break;
+                case 8:
+                    var comments = await c.Db.CommentsOf(Slug, 1);
+                    if (!comments.Found || comments.Count != 2 || comments[1].Body.Length != 6) bad++;
+                    break;
                 default:
                     var article = await c.Db.ArticleBySlug(Slug, 0);
                     if (!article.Found || article.Value.FavoritesCount != 2) bad++;
@@ -88,15 +96,15 @@ public sealed class AllocationTests(ConduitFixture fixture)
     }
 
     /// <summary>Writes that change nothing the other tests read: an update to the same values, a favorite toggled twice,
-    /// new articles of dave's, whose slugs no test reads, tags there already, and carol following dave and not again.
-    /// Seven kinds: the runs are multiples of seven, so each toggle ends as it began.</summary>
+    /// new articles of dave's, whose slugs no test reads, tags there already (alone and two at once), and carol
+    /// following dave and not again. Eight kinds: the runs are multiples of eight, so each toggle ends as it began.</summary>
     static async Task<long> Writes(Connection c, int requests)
     {
         long bad = 0;
         for (int i = 0; i < requests; i++)
         {
             c.Next();
-            switch (i % 7)
+            switch (i % 8)
             {
                 case 0:
                     await c.Db.UpdateUser(4, null, null, null, null, null).WriteAsync(c.Response).ConfigureAwait(false);
@@ -124,6 +132,11 @@ public sealed class AllocationTests(ConduitFixture fixture)
                     // a write from the row found, and the row given back
                     await c.Db.Follow(3, Dave).WriteAsync(c.Response).ConfigureAwait(false);
                     if (c.Response.Status != 200) bad++;
+                    break;
+                case 6:
+                    // writes started together: tags that are there already, so nothing changes
+                    var added = await c.Db.Each(2, 0, static (db, _, i) => db.AddTags(default));
+                    if (!added.IsOk) bad++;
                     break;
                 default:
                     var unfollowed = await c.Db.Unfollow(3, Dave);

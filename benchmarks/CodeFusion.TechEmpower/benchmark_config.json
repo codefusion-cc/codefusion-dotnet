@@ -1,0 +1,29 @@
+{
+  "framework": "codefusion",
+  "tests": [
+    {
+      "default": {
+        "plaintext_url": "/plaintext",
+        "json_url": "/json",
+        "db_url": "/db",
+        "query_url": "/queries?queries=",
+        "fortune_url": "/fortunes",
+        "update_url": "/updates?queries=",
+        "port": 8080,
+        "approach": "Realistic",
+        "classification": "Micro",
+        "database": "Postgres",
+        "framework": "codefusion",
+        "language": "C#",
+        "orm": "Micro",
+        "platform": ".NET",
+        "webserver": "CodeFusion.Http",
+        "os": "Linux",
+        "database_os": "Linux",
+        "display_name": "codefusion",
+        "notes": "",
+        "versus": "aspnetcore-minimal"
+      }
+    }
+  ]
+}

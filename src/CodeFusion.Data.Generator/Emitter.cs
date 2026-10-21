@@ -321,10 +321,10 @@ sealed class Emitter
         Line($"public override bool IsWrite => {(q.IsWrite ? "true" : "false")};");
         if (q.HasSource) Line("public override bool HasSource => true;");
         Line($"public override global::System.Threading.Tasks.ValueTask<{D}DataResult> RunJson(in {D}PendingCommand command, {D}RowState state, global::System.Threading.CancellationToken aborted) => {_provider}.Run<{id}Json>(command, state, aborted);");
-        if (q.Shape is Shape.One or Shape.WriteOf)
+        if (q.Shape is Shape.One or Shape.WriteOf or Shape.Many)
             Line($"public override global::System.Threading.Tasks.ValueTask<{D}DataResult> RunCopy(in {D}PendingCommand command, {D}RowState state, global::System.Threading.CancellationToken aborted) => {_provider}.Run<{id}Copy>(command, state, aborted);");
         else
-            Line($"public override global::System.Threading.Tasks.ValueTask<{D}DataResult> RunCopy(in {D}PendingCommand command, {D}RowState state, global::System.Threading.CancellationToken aborted) => throw new global::System.NotSupportedException(\"only One and Write results can be awaited\");");
+            Line($"public override global::System.Threading.Tasks.ValueTask<{D}DataResult> RunCopy(in {D}PendingCommand command, {D}RowState state, global::System.Threading.CancellationToken aborted) => throw new global::System.NotSupportedException(\"only One, Many and Write results can be awaited\");");
         Line($"public override void Discard(in {D}PendingCommand command) => {_provider}.Discard(command);");
         var begin = new List<string>();
         var end = new List<string>();
@@ -473,12 +473,21 @@ sealed class Emitter
 
     void CopyReader(Compiled q, string id)
     {
-        if (q.Shape is not (Shape.One or Shape.WriteOf)) return;
+        if (q.Shape is not (Shape.One or Shape.WriteOf or Shape.Many)) return;
         string t = Type(q.Row!);
         Open($"sealed class {id}Copy : global::CodeFusion.Data.IRowReader");
         Open(ReadSignature);
-        Line($"var slot = (global::CodeFusion.Data.RowSlot<{t}>)state!;");
-        Line("if (slot.HasValue) return 0; // the first row is the result");
+        if (q.Shape == Shape.Many)
+        {
+            // every row is the result, in a list the context keeps
+            Line($"var slot = (global::CodeFusion.Data.RowList<{t}>)state!;");
+            if (q.Marker == Marker.ChildKey) Line($"if (row.IsNull({q.MarkerColumn})) return 0; // the source row has no children");
+        }
+        else
+        {
+            Line($"var slot = (global::CodeFusion.Data.RowSlot<{t}>)state!;");
+            Line("if (slot.HasValue) return 0; // the first row is the result");
+        }
         if (q.Marker == Marker.Written) Line($"if (row.IsNull({q.MarkerColumn})) return global::CodeFusion.Data.RowState.Refused;");
         var texts = new List<(int Column, bool Json)>();
         Texts(q, texts);
@@ -487,7 +496,7 @@ sealed class Emitter
         Line("int at = 0;");
         int column = 0;
         string value = q.View is { } v ? Construct(v, ref column) : CopyScalar(q.Scalar!.Value, column);
-        Line($"slot.Set({value});");
+        Line(q.Shape == Shape.Many ? $"slot.Add({value});" : $"slot.Set({value});");
         Line("return 0;");
         Close();
         Close();

@@ -101,6 +101,7 @@ public class PartsTests
     {
         public int Status { get; set; } = 200;
         public int RetryAfter { get; set; }
+        public MediaType? ContentType { get; set; }
         public System.Text.Json.Utf8JsonWriter Json => throw new NotSupportedException();
         public System.Buffers.ArrayBufferWriter<byte> Written { get; } = new();
         public System.Buffers.IBufferWriter<byte> Body => Written;
@@ -109,6 +110,7 @@ public class PartsTests
             Written.ResetWrittenCount();
             Status = 200;
             RetryAfter = 0;
+            ContentType = null;
         }
         public IRequestArena Arena => throw new NotSupportedException();
         public System.Threading.CancellationToken Aborted => default;

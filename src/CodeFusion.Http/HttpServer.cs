@@ -24,6 +24,9 @@ public sealed class HttpServer : IAsyncDisposable
     internal readonly HttpHandler Handler;
     internal readonly BufferPool RequestBuffers, ResponseBuffers;
 
+    /// <summary>The Server header line every response carries, or none (<see cref="HttpServerOptions.ServerName"/>).</summary>
+    internal readonly byte[] ServerLine;
+
     /// <summary>Other pools the server's connections rent from on its loops (the app's arena chunks): each loop gets a
     /// stack of its own in them too. Set before Start.</summary>
     internal BufferPool[] LoopPools = [];
@@ -183,6 +186,7 @@ public sealed class HttpServer : IAsyncDisposable
         options.Validate();
         Options = options;
         Handler = handler;
+        ServerLine = options.ServerName is { } name ? System.Text.Encoding.ASCII.GetBytes("Server: " + name + "\r\n") : [];
         RequestBuffers = new BufferPool(options.RequestBufferSize, options.MaxPooledBuffers);
         ResponseBuffers = new BufferPool(options.ResponseBufferSize, options.MaxPooledBuffers);
         _pool = new HttpExchange[options.MaxPooledConnections];

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -18,6 +19,38 @@ public class AppTests
     internal sealed class Other : IRequestScoped
     {
         public void Bind(IResponse response) { }
+    }
+
+    /// <summary>Counts the requests it was bound to and the ones that ended.</summary>
+    internal sealed class Counting : IRequestScoped
+    {
+        public int Bound, Ended;
+
+        public void Bind(IResponse response) => Bound++;
+
+        public void Unbind() => Ended++;
+    }
+
+    /// <summary>Records how much of the reply's body was written when its request ended.</summary>
+    internal sealed class BodyAtEnd : IRequestScoped
+    {
+        RequestContext? _request;
+        public int Written = -1;
+
+        public void Bind(IResponse response) => _request = (RequestContext)response;
+
+        public void Unbind()
+        {
+            if (Written < 0) Written = _request!.Exchange.BodyLength; // the first end it hears
+        }
+    }
+
+    /// <summary>A service whose end throws.</summary>
+    internal sealed class FailingEnd : IRequestScoped
+    {
+        public void Bind(IResponse response) { }
+
+        public void Unbind() => throw new InvalidOperationException("unbind failed");
     }
 
     static HttpAppBuilder Builder()
@@ -74,6 +107,77 @@ public class AppTests
         Assert.Throws<InvalidOperationException>(() => b.Build());
         Assert.Throws<InvalidOperationException>(() => b.AddSingleton("late"));
         Assert.Throws<InvalidOperationException>(() => b.OnStopping(() => { }));
+    }
+
+    // A per-connection service hears when its request has ended, so it can let go of what it lent the request (a
+    // data context's lists and arenas) instead of keeping it while the connection idles
+    [Fact]
+    public async Task APerConnectionServiceHearsItsRequestEnd()
+    {
+        HttpAppBuilder b = Builder();
+        Counting? seen = null;
+        b.AddPerConnection(() => seen = new Counting());
+        await using HttpApp app = b.Build();
+        await using var check = new AppCheck(app);
+        app.MapGet("/count", static (Counting c) => Reply.Ok(c.Bound * 10 + c.Ended));
+        app.Start();
+        using Client c = await Client.ConnectAsync(app.LocalEndPoint);
+        await c.SendAsync("GET /count HTTP/1.1\r\nHost: x\r\n\r\n");
+        Assert.Equal("10", (await c.ReadAsync()).Text);
+        await c.SendAsync("GET /count HTTP/1.1\r\nHost: x\r\n\r\n");
+        Assert.Equal("21", (await c.ReadAsync()).Text); // the first request ended before the second began
+        for (int i = 0; i < 100 && seen!.Ended < 2; i++) await Task.Delay(10, TestContext.Current.CancellationToken);
+        Assert.Equal((2, 2), (seen!.Bound, seen.Ended));
+    }
+
+    // The request ends once its reply is written: a reply serialized after its handler returned (as an endpoint's
+    // JSON is) is in the body before a service hears the end, so rows it lent are no longer read
+    [Fact]
+    public async Task AServiceHearsTheEndOnlyOnceTheReplyIsWritten()
+    {
+        HttpAppBuilder b = Builder();
+        BodyAtEnd? seen = null;
+        b.AddPerConnection(() => seen = new BodyAtEnd());
+        await using HttpApp app = b.Build();
+        await using var check = new AppCheck(app);
+        app.MapGet("/rows", static async (BodyAtEnd _) =>
+        {
+            await Task.Yield(); // the handler returns to the server before its reply is written
+            return Reply.Ok(new[] { 1, 2, 3 });
+        });
+        app.Start();
+        using Client c = await Client.ConnectAsync(app.LocalEndPoint);
+        await c.SendAsync("GET /rows HTTP/1.1\r\nHost: x\r\n\r\n");
+        Assert.Equal("[1,2,3]", (await c.ReadAsync()).Text);
+        for (int i = 0; i < 100 && seen!.Written < 0; i++) await Task.Delay(10, TestContext.Current.CancellationToken);
+        Assert.Equal(7, seen!.Written);
+    }
+
+    // A service whose end throws is logged as a handler's failure would be, and counted; the reply still goes out
+    // and the connection's other services still hear the end
+    [Fact]
+    public async Task AServiceWhoseEndThrowsIsLoggedAndTheOthersStillEnd()
+    {
+        HttpAppBuilder b = Builder();
+        var logged = new System.Collections.Generic.List<string>();
+        b.Errors.Log = (x, e) => { lock (logged) logged.Add(e.Message); };
+        Counting? seen = null;
+        b.AddPerConnection(() => new FailingEnd());
+        b.AddPerConnection(() => seen = new Counting());
+        await using HttpApp app = b.Build();
+        await using var check = new AppCheck(app);
+        app.MapGet("/count", static (FailingEnd _, Counting c) => Reply.Ok(c.Bound * 10 + c.Ended));
+        app.Start();
+        using Client c = await Client.ConnectAsync(app.LocalEndPoint);
+        await c.SendAsync("GET /count HTTP/1.1\r\nHost: x\r\n\r\n");
+        Response first = await c.ReadAsync();
+        Assert.Equal((200, "10"), (first.Status, first.Text));
+        await c.SendAsync("GET /count HTTP/1.1\r\nHost: x\r\n\r\n");
+        Assert.Equal("21", (await c.ReadAsync()).Text); // the connection lives on, and the other service ended
+        for (int i = 0; i < 100 && seen!.Ended < 2; i++) await Task.Delay(10, TestContext.Current.CancellationToken);
+        Assert.Equal(2, seen!.Ended);
+        lock (logged) Assert.Equal(["unbind failed", "unbind failed"], logged);
+        Assert.Equal(2, Interlocked.Exchange(ref app.Server!.CallbackFailures, 0));
     }
 
     [Fact]

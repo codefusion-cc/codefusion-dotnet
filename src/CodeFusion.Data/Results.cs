@@ -7,7 +7,7 @@ namespace CodeFusion.Data;
 
 // What a query method returns. Each is a reply (IReply) that runs its command when it is written: the rows go from
 // the provider's receive buffer straight into the response's JSON. One and Write can be awaited instead, for the
-// first row copied into the request's arena. A result runs once, in the request that made it.
+// first row copied into the request's arena, and Many for all of them. A result runs once, in the request that made it.
 
 /// <summary>The query a result runs: its context, its held command, the compiled query, and the replies it was given.</summary>
 readonly struct QueryCall
@@ -43,6 +43,8 @@ readonly struct QueryCall
     public ValueTask Reply(IResponse response) => Context.Reply(response, _command, _ops!, Options);
 
     public RowAwaiter<T> Await<T>() where T : struct => Context.Await<T>(_command, _ops!, Options);
+
+    public RowsAwaiter<T> AwaitRows<T>() => Context.AwaitRows<T>(_command, _ops!, Options);
 
     public ValueTask<DataResult> Run() => Context.Run(_command, _ops!);
 
@@ -106,6 +108,9 @@ public readonly struct Many<T> : IReply
 
     /// <inheritdoc/>
     public ValueTask WriteAsync<TResponse>(TResponse response) where TResponse : IResponse => _call.Reply(response);
+
+    /// <summary>Runs the query for every row, copied into the bound request's arena.</summary>
+    public RowsAwaiter<T> GetAwaiter() => _call.AwaitRows<T>();
 
     // ---------- inside query definitions, as an entity's navigation ----------
 
@@ -318,30 +323,163 @@ public readonly struct RowAwaiter<T> : ICriticalNotifyCompletion where T : struc
     public void UnsafeOnCompleted(Action continuation) => _run.GetAwaiter().UnsafeOnCompleted(continuation);
 
     /// <summary>The outcome and the row.</summary>
-    public Row<T> GetResult()
+    public Row<T> GetResult() => GetResult(out _);
+
+    /// <summary>The query's name, for a failure's report.</summary>
+    internal string Name => _ops.Name;
+
+    /// <summary>As <see cref="GetResult()"/>, with the outcome as the provider gave it. A read of an Each leaves its
+    /// failure for the Each to report once.</summary>
+    internal Row<T> GetResult(out DataResult r)
     {
-        DataResult r;
         try
         {
             r = _run.GetAwaiter().GetResult();
         }
         catch
         {
-            _slot.Take();
-            _context.ReturnSlot(_slot);
+            Finish(keep: false);
             throw;
         }
         bool has = _slot.HasValue;
-        T value = _slot.Take();
-        _context.ReturnSlot(_slot);
+        T value = Finish(keep: true);
         if (r.Status != DataStatus.Ok)
         {
             // as a reply reports it: not for a client that left
-            if (DataSource.Reports(r.Status) && _context.Response?.Aborted.IsCancellationRequested != true)
+            if (!_slot.Pooled && DataSource.Reports(r.Status) && _context.Response?.Aborted.IsCancellationRequested != true)
                 _context.Source.OnFailure?.Invoke(_ops.Name, r);
             return new Row<T>(r.Status, false, false, default, _context.Source.Errors.For(r.Status, _ops.IsWrite, _options.Conflict));
         }
         bool refused = r.Rows > 0 && r.Value == RowState.Refused;
         return new Row<T>(DataStatus.Ok, has && !refused, refused, has && !refused ? value : default, null);
+    }
+
+    /// <summary>The slot's row, and the slot back to the context; a read of an Each's slot goes back to the Each pool
+    /// with the Each's others, once they are all gathered (its row's text is in the Each's arena, not in the slot).</summary>
+    T Finish(bool keep)
+    {
+        T value = _slot.Take();
+        if (!_slot.Pooled) _context.ReturnSlot(_slot);
+        return keep ? value : default;
+    }
+}
+
+
+/// <summary>
+/// An awaited list: its status, and its rows. The rows' text lives in the request's arena and the rows themselves
+/// in a list the context keeps: both are valid until the response has been sent.
+/// </summary>
+public readonly struct Rows<T>
+{
+    readonly T[]? _items;
+    readonly int _count;
+#if DEBUG
+    // the list goes back to a pool when the request ends: a Debug build of CodeFusion.Data checks it wasn't lent again since
+    readonly RowList<T>? _list;
+    readonly int _lease;
+#endif
+
+    internal Rows(DataStatus status, bool found, T[]? items, int count, ErrorReply? error)
+    {
+        Status = status;
+        Found = found;
+        _items = items;
+        _count = count;
+        Error = error;
+    }
+
+    /// <summary>The rows <paramref name="list"/> holds, until its request ends.</summary>
+    internal Rows(RowList<T> list) : this(DataStatus.Ok, true, list.Items, list.Count, null)
+    {
+#if DEBUG
+        _list = list;
+        _lease = list.Lease;
+#endif
+    }
+
+    /// <summary>How the command ended.</summary>
+    public DataStatus Status { get; }
+
+    /// <summary>The command didn't run to its end: <see cref="Error"/> is the reply for it.</summary>
+    public bool Failed => Status != DataStatus.Ok;
+
+    /// <summary>The query ran, and for a list of a row's children (<c>SelectMany</c>), that row exists.</summary>
+    public bool Found { get; }
+
+    /// <summary>The reply for a failure, or for a missing source row (<see cref="Many{T}.OrNotFound"/>'s); null
+    /// when the list was found.</summary>
+    public ErrorReply? Error { get; }
+
+    /// <summary>How many rows there are.</summary>
+    public int Count => _count;
+
+    /// <summary>The rows. They are the request's: the lists they are in go back to pools when it ends.</summary>
+    public ReadOnlySpan<T> Span
+    {
+        get
+        {
+#if DEBUG
+            if (_list is not null && _list.Lease != _lease)
+                throw new InvalidOperationException("the rows outlived their request: copy what a later request needs");
+#endif
+            return new(_items, 0, _count);
+        }
+    }
+
+    /// <summary>The row at <paramref name="index"/>.</summary>
+    public ref readonly T this[int index] => ref Span[index];
+
+    /// <summary>For <c>foreach</c>.</summary>
+    public ReadOnlySpan<T>.Enumerator GetEnumerator() => Span.GetEnumerator();
+}
+
+/// <summary>Awaits a <see cref="Many{T}"/>.</summary>
+public readonly struct RowsAwaiter<T> : ICriticalNotifyCompletion
+{
+    readonly DataContext _context;
+    readonly RowList<T> _list;
+    readonly QueryOps _ops;
+    readonly ReplyOptions _options;
+    readonly ValueTask<DataResult> _run;
+
+    internal RowsAwaiter(DataContext context, RowList<T> list, QueryOps ops, in ReplyOptions options, ValueTask<DataResult> run)
+    {
+        _context = context;
+        _list = list;
+        _ops = ops;
+        _options = options;
+        _run = run;
+    }
+
+    /// <summary>Whether the rows are there already.</summary>
+    public bool IsCompleted => _run.IsCompleted;
+
+    /// <inheritdoc/>
+    public void OnCompleted(Action continuation) => _run.GetAwaiter().OnCompleted(continuation);
+
+    /// <inheritdoc/>
+    public void UnsafeOnCompleted(Action continuation) => _run.GetAwaiter().UnsafeOnCompleted(continuation);
+
+    /// <summary>The outcome and the rows.</summary>
+    public Rows<T> GetResult()
+    {
+        // the run has ended, so the provider no longer adds to the list: the context may reuse it after this request
+        DataResult r;
+        try
+        {
+            r = _run.GetAwaiter().GetResult();
+        }
+        finally
+        {
+            _list.Taken = true;
+        }
+        if (r.Status != DataStatus.Ok)
+        {
+            if (DataSource.Reports(r.Status) && _context.Response?.Aborted.IsCancellationRequested != true)
+                _context.Source.OnFailure?.Invoke(_ops.Name, r);
+            return new Rows<T>(r.Status, false, null, 0, _context.Source.Errors.For(r.Status, _ops.IsWrite, _options.Conflict));
+        }
+        if (r.Rows == 0 && _ops.HasSource) return new Rows<T>(DataStatus.Ok, false, null, 0, _options.Empty ?? _context.Source.Errors.NotFound);
+        return new Rows<T>(_list);
     }
 }

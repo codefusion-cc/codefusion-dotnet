@@ -492,6 +492,13 @@ static CodeFusion.Http.Reply<T>.implicit operator CodeFusion.Http.Reply<T>(CodeF
 static CodeFusion.Http.Reply<T>.implicit operator CodeFusion.Http.Reply<T>(CodeFusion.Http.Reply reply) -> CodeFusion.Http.Reply<T>
 virtual CodeFusion.Http.HttpHandler.Invoke(CodeFusion.Http.HttpExchange! exchange) -> System.Threading.Tasks.ValueTask
 virtual CodeFusion.Http.HttpRejectBody.Invoke(int status) -> System.ReadOnlySpan<byte>
+CodeFusion.Http.HttpExchange.ContentType.get -> CodeFusion.MediaType?
+CodeFusion.Http.HttpExchange.ContentType.set -> void
+CodeFusion.Http.HttpServerOptions.ServerName.get -> string?
+CodeFusion.Http.HttpServerOptions.ServerName.set -> void
+CodeFusion.Http.RequestContext.ContentType.get -> CodeFusion.MediaType?
+CodeFusion.Http.RequestContext.ContentType.set -> void
+const CodeFusion.Http.HttpServerOptions.MaxServerNameLength = 48 -> int
 CodeFusion.Http.HttpServerOptions.EventLoops.get -> int
 CodeFusion.Http.HttpServerOptions.EventLoops.set -> void
 CodeFusion.Http.HttpServerOptions.Transport.get -> CodeFusion.Http.HttpTransport

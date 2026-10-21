@@ -429,6 +429,7 @@ public sealed class JwtClaimTests
         public void Reset() { }
         public IRequestArena Arena => Counted;
         public System.Threading.CancellationToken Aborted => default;
+        public MediaType? ContentType { get; set; }
     }
 
     // Found in review: the arena was asked for six times a value's length before the value was checked, so a request

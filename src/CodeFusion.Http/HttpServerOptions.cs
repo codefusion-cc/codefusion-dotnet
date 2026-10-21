@@ -69,6 +69,13 @@ public sealed class HttpServerOptions
     /// it has sent, whatever its Content-Length says.</summary>
     public int RequestBufferSize { get; set; } = 4 * 1024;
 
+    /// <summary>The longest <see cref="ServerName"/>.</summary>
+    public const int MaxServerNameLength = 48;
+
+    /// <summary>A Server header for every response, such as <c>CodeFusion</c>; null (the default) sends none.
+    /// Visible ASCII and spaces, at most <see cref="MaxServerNameLength"/> characters.</summary>
+    public string? ServerName { get; set; }
+
     /// <summary>What a response starts with; a larger body grows it.</summary>
     public int ResponseBufferSize { get; set; } = 16 * 1024;
 
@@ -145,6 +152,16 @@ public sealed class HttpServerOptions
             throw new ArgumentException("an HttpServerOptions value is out of range");
         if (Transport == HttpTransport.EventLoop && !EventLoop.Supported)
             throw new PlatformNotSupportedException("HttpTransport.EventLoop runs on Linux and macOS");
+        if (ServerName is { } name && !IsHeaderValue(name, MaxServerNameLength))
+            throw new ArgumentException($"ServerName is 1 to {MaxServerNameLength} visible ASCII characters and spaces, not starting or ending with a space");
+    }
+
+    static bool IsHeaderValue(string value, int maxLength)
+    {
+        if (value.Length is 0 || value.Length > maxLength || value[0] == ' ' || value[^1] == ' ') return false;
+        foreach (char c in value)
+            if (c is < ' ' or > '~') return false;
+        return true;
     }
 }
 

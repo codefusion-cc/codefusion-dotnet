@@ -19,9 +19,10 @@ public class RepliesTests
         public FakeResponse() => Json = new Utf8JsonWriter(Buffer, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
         public int Status { get; set; } = 200;
         public int RetryAfter { get; set; }
+        public MediaType? ContentType { get; set; }
         public Utf8JsonWriter Json { get; }
         public IBufferWriter<byte> Body => Buffer;
-        public void Reset() { Resets++; Json.Reset(Buffer); Buffer.ResetWrittenCount(); Status = 200; RetryAfter = 0; }
+        public void Reset() { Resets++; Json.Reset(Buffer); Buffer.ResetWrittenCount(); Status = 200; RetryAfter = 0; ContentType = null; }
         public IRequestArena Arena => throw new NotSupportedException();
         public CancellationToken Aborted => default;
         public string Text => Encoding.UTF8.GetString(Buffer.WrittenSpan);
@@ -148,4 +149,89 @@ public class RepliesTests
     [InlineData(6, 6)]
     public void TextOutsideTheArenaBytesIsRefused(int offset, int length) =>
         Assert.Throws<ArgumentOutOfRangeException>(() => new ArenaBytes(new byte[15], 2, 11).Text(offset, length));
+
+    [Fact]
+    public async Task AContentReplyReplacesWhatWasBegunWithItsTypeStatusAndBytes()
+    {
+        var hello = new ContentReply(MediaType.PlainText, "Hello, World!"u8);
+        var response = new FakeResponse { RetryAfter = 5 };
+        response.Buffer.Write("""{"half":"""u8);
+        response.Status = 404;
+        await hello.WriteAsync(response);
+        Assert.Equal(1, response.Resets);
+        Assert.Equal(200, response.Status);
+        Assert.Equal(0, response.RetryAfter);
+        Assert.Same(MediaType.PlainText, response.ContentType);
+        Assert.Equal("Hello, World!", response.Text);
+        // made once, written again and again: the same bytes each time
+        await hello.WriteAsync(response);
+        Assert.Equal("Hello, World!", response.Text);
+        Assert.Equal(418, (await Written(new ContentReply(MediaType.Html, "<p>tea</p>"u8, 418))).Status);
+    }
+
+    static async Task<FakeResponse> Written(ContentReply reply)
+    {
+        var response = new FakeResponse();
+        await reply.WriteAsync(response);
+        return response;
+    }
+
+    [Fact]
+    public async Task AContentReplyRefusesWhatHttpCantSend()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ContentReply(MediaType.PlainText, "x"u8, 199));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ContentReply(MediaType.PlainText, "x"u8, 1000));
+        Assert.Throws<ArgumentException>(() => new ContentReply(MediaType.PlainText, "x"u8, 204));
+        Assert.Throws<ArgumentNullException>(() => new ContentReply(null!, "x"u8));
+        Assert.Equal(204, (await Written(new ContentReply(MediaType.PlainText, default, 204))).Status);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await default(ContentReply).WriteAsync(new FakeResponse()));
+    }
+
+    [Theory]
+    [InlineData("application/json", "Content-Type: application/json\r\n")]
+    [InlineData("text/html; charset=utf-8", "Content-Type: text/html; charset=utf-8\r\n")]
+    [InlineData("a/b", "Content-Type: a/b\r\n")]
+    public void AMediaTypeIsItsHeaderLine(string value, string line)
+    {
+        var type = new MediaType(value);
+        Assert.Equal(value, type.Value);
+        Assert.Equal(value, type.ToString());
+        Assert.Equal(line, Encoding.ASCII.GetString(type.HeaderLine));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" text/plain")]
+    [InlineData("text/plain ")]
+    [InlineData("text/plain\r\nSet-Cookie: a=b")]
+    [InlineData("text/plain\n")]
+    [InlineData("text/plän")]
+    [InlineData("text/\u007f")]
+    public void AMediaTypeThatWouldBreakTheHeadIsRefused(string value) =>
+        Assert.Throws<ArgumentException>(() => new MediaType(value));
+
+    [Fact]
+    public void AMediaTypeIsAtMostMaxLengthCharacters()
+    {
+        Assert.Equal(MediaType.MaxLength, new MediaType(new string('a', MediaType.MaxLength)).Value.Length);
+        Assert.Throws<ArgumentException>(() => new MediaType(new string('a', MediaType.MaxLength + 1)));
+        Assert.Throws<ArgumentNullException>(() => new MediaType(null!));
+    }
+
+    [Fact]
+    public void TheWellKnownTypesAreMadeOnce()
+    {
+        Assert.Same(MediaType.Json, MediaType.Json);
+        Assert.Equal("application/json", MediaType.Json.Value);
+        Assert.Equal("text/plain", MediaType.PlainText.Value);
+        Assert.Equal("text/html; charset=utf-8", MediaType.Html.Value);
+    }
+
+    [Fact]
+    public async Task AnErrorReplySetsTheTypeBackToJson()
+    {
+        var response = new FakeResponse { ContentType = MediaType.Html };
+        await new ErrorReply(404, "{}"u8).WriteAsync(response);
+        Assert.Null(response.ContentType);
+    }
 }

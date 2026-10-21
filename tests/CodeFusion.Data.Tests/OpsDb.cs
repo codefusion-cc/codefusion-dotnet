@@ -158,6 +158,8 @@ public sealed partial class OpsDb : DataContext<Postgres>
 
     public One<long> Sleep(double seconds) => Sql<long>($"SELECT 1::bigint FROM pg_sleep({seconds})").One();
 
+    public Many<long> Sleeps(double seconds) => Sql<long>($"SELECT 1::bigint FROM pg_sleep({seconds})").Many();
+
     public One<long> Divide(long by) => Sql<long>($"SELECT 1 / {by}").One();
 
     /// <summary>Columns that aren't a Name's: the reader fails on the id.</summary>

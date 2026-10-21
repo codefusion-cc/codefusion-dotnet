@@ -54,6 +54,9 @@ out of file descriptors past 65,535.
 - **The database tests' last allocations,** 16-67 KB a minute (at most 0.013 B per request): partly the job pool
   growing at a peak. Pre-sizing per loop went into perf/pg-pipelining (8e5d421); trace what is left
   (dotnet-trace gc-verbose).
+- **More writers on updates.** The TechEmpower app runs one writer loop by default. With a group's updates now one
+  statement (#22), measure 2 and 4 writers (`DB_WRITERS`) on the updates test: before #22, concurrent groups over
+  the same rows deadlocked (docs/benchmarks/2026-10-21-tfb-pg-loops.md).
 - **The catalog checks** feat/data-linq-shapes adds to Follow, Favorite and the other write-then-read statements cost
   a few catalog index lookups per call. Measure them on the contest's multicore workload, and cache per connection
   if they show.

@@ -49,6 +49,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     byte[]? _out;
     int _sendStart, _sendEnd, _bodyStart, _bodyEnd;
     int _status, _retryAfter;
+    MediaType? _contentType;
 
     // The zero-byte receive that says the socket is readable: Idle, Pending, Waiting (the loop awaits it) or Signaled.
     // With an event loop it is the loop's next edge instead (Arm).
@@ -226,6 +227,13 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         set => _retryAfter = value >= 0 ? value : throw new ArgumentOutOfRangeException(nameof(value));
     }
 
+    /// <summary>The body's media type; null is application/json. A response without a body has no Content-Type.</summary>
+    public MediaType? ContentType
+    {
+        get => _contentType;
+        set => _contentType = value;
+    }
+
     /// <summary>How many body bytes the handler has written so far.</summary>
     public int BodyLength => _bodyEnd - _bodyStart;
 
@@ -236,6 +244,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         _bodyEnd = _bodyStart;
         _status = 200;
         _retryAfter = 0;
+        _contentType = null;
     }
 
     /// <summary>Commits <paramref name="count"/> bytes written to the last <see cref="GetSpan"/> or <see cref="GetMemory"/> to the body.</summary>
@@ -643,6 +652,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         if (_bodyStart > _out.Length) { _bodyEnd = _sendEnd; GrowOut(_bodyStart + 1024); _bodyEnd = _bodyStart; }
         _status = 200;
         _retryAfter = 0;
+        _contentType = null;
         CheckInvariants();
     }
 
@@ -675,7 +685,8 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         bool bodyless = _status is 204 or 304;
         int bodyLength = bodyless ? 0 : _bodyEnd - _bodyStart;
         Span<byte> head = stackalloc byte[ResponseHead.Reserve];
-        int h = ResponseHead.Write(head, _status, bodyless ? -1 : bodyLength, bodyLength > 0, _retryAfter, close,
+        int h = ResponseHead.Write(head, _status, bodyless ? -1 : bodyLength,
+            bodyLength > 0 ? (_contentType ?? MediaType.Json).HeaderLine : default, _server.ServerLine, _retryAfter, close,
             keepAlive: !_req.Http11);
         int start = _bodyStart - h;
         head[..h].CopyTo(_out.AsSpan(start));

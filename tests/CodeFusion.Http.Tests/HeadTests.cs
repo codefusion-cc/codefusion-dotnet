@@ -30,7 +30,7 @@ public class HeadTests
     public void AStatusWithoutAReasonPhraseGoesOutWithAnEmptyOne(int status)
     {
         var d = new byte[ResponseHead.Reserve];
-        int n = ResponseHead.Write(d, status, -1, json: false, retryAfter: 0, close: false, keepAlive: false);
+        int n = ResponseHead.Write(d, status, -1, default, default, retryAfter: 0, close: false, keepAlive: false);
         string head = Encoding.ASCII.GetString(d, 0, n);
         Assert.StartsWith($"HTTP/1.1 {status} \r\nDate: ", head, StringComparison.Ordinal);
         Assert.EndsWith(" GMT\r\n\r\n", head, StringComparison.Ordinal);

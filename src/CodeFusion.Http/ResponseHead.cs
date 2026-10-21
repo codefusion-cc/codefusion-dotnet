@@ -6,13 +6,16 @@ namespace CodeFusion.Http;
 /// <summary>The status line and headers of a response, written from constants and the cached Date line.</summary>
 internal static class ResponseHead
 {
-    /// <summary>Room left in front of each body for its head: the longest head below is about 200 bytes.</summary>
-    public const int Reserve = 256;
+    /// <summary>Room left in front of each body for its head: the longest head below is about 300 bytes, with the
+    /// longest media type (<see cref="MediaType.MaxLength"/>) and server name (<see cref="HttpServerOptions.MaxServerNameLength"/>).</summary>
+    public const int Reserve = 320;
 
-    public static int Write(Span<byte> d, int status, int contentLength, bool json, int retryAfter, bool close, bool keepAlive)
+    /// <summary>The head; <paramref name="contentType"/> and <paramref name="server"/> are whole header lines, or empty for none.</summary>
+    public static int Write(Span<byte> d, int status, int contentLength, ReadOnlySpan<byte> contentType, ReadOnlySpan<byte> server,
+        int retryAfter, bool close, bool keepAlive)
     {
         int n = StatusLine(d, status);
-        if (json) n += Copy("Content-Type: application/json\r\n"u8, d[n..]);
+        n += Copy(contentType, d[n..]);
         if (contentLength >= 0)
         {
             n += Copy("Content-Length: "u8, d[n..]);
@@ -29,6 +32,7 @@ internal static class ResponseHead
         }
         if (close) n += Copy("Connection: close\r\n"u8, d[n..]);
         else if (keepAlive) n += Copy("Connection: keep-alive\r\n"u8, d[n..]);
+        n += Copy(server, d[n..]);
         n += Copy(HttpDate.Line, d[n..]);
         n += Copy("\r\n"u8, d[n..]);
         return n;
