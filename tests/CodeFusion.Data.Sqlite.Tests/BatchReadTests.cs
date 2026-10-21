@@ -287,7 +287,7 @@ public sealed class BatchReadTests : IDisposable
     }
 
     static readonly SqliteStatement Mixed = new(
-        "SELECT max(v), 'x' || 12, '12abc', 3.75, -7, NULL, '' FROM kv WHERE k = 'none'");
+        "SELECT max(v), 'x' || 12, '12abc', 3.75, -7, NULL, '', 9223372036854775807, -9223372036854775808, 0, 1e20, 0.1 FROM kv WHERE k = 'none'");
 
     /// <summary>A read answers the same whether it runs alone or joins a batch (it keeps its rows till the COMMIT): every
     /// column, asked for as a number, a double, a flag or text, NULL and the crossovers between text and numbers included.</summary>

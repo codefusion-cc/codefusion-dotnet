@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Buffers.Text;
 using System.Diagnostics;
 using System.Text;
 using System.Threading;
@@ -221,23 +222,47 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
         EnsureSaved(4);
         BinaryPrimitives.WriteInt32LittleEndian(Saved.AsSpan(SavedLen), n);
         SavedLen += 4;
+        Span<byte> digits = stackalloc byte[20]; // a long in decimal
         for (int c = 0; c < n; c++)
         {
-            // what each of SQLite's column calls returns, in an order none changes the next: the type, the integer, the
-            // double, then the text (which turns a number into text in place). A SavedRow hands back exactly these, so a
-            // row read after the COMMIT reads as it would have live (SqliteRow), conversions and NULLs alike.
+            // what each of SQLite's column calls returns for the column, so a SavedRow answers exactly as SqliteRow does,
+            // conversions and NULLs alike; got as cheaply as SQLite allows. An integer's double is the integer cast, and
+            // its text is "%lld", written here (asking SQLite for it allocates and formats a string in the row); NULL
+            // is 0, 0.0 and no text. A real's integer and text come from SQLite (its own rounding and formatting), and
+            // so do text's number conversions (its own parsing), integer and double before the text.
             int type = Sqlite3.ColumnType(stmt, c);
-            long integer = Sqlite3.ColumnInt64(stmt, c);
-            double real = Sqlite3.ColumnDouble(stmt, c);
-            byte* text = Sqlite3.ColumnText(stmt, c);
-            int len = text is null ? -1 : Sqlite3.ColumnBytes(stmt, c);
+            long integer = 0;
+            double real = 0;
+            byte* text = null;
+            int len = -1;
+            switch (type)
+            {
+                case Sqlite3.TypeInteger:
+                    integer = Sqlite3.ColumnInt64(stmt, c);
+                    real = integer;
+                    _ = Utf8Formatter.TryFormat(integer, digits, out len);
+                    break;
+                case Sqlite3.TypeFloat:
+                    real = Sqlite3.ColumnDouble(stmt, c);
+                    integer = Sqlite3.ColumnInt64(stmt, c);
+                    text = Sqlite3.ColumnText(stmt, c);
+                    len = Sqlite3.ColumnBytes(stmt, c);
+                    break;
+                case Sqlite3.TypeText or Sqlite3.TypeBlob:
+                    integer = Sqlite3.ColumnInt64(stmt, c);
+                    real = Sqlite3.ColumnDouble(stmt, c);
+                    text = Sqlite3.ColumnText(stmt, c);
+                    len = text is null ? -1 : Sqlite3.ColumnBytes(stmt, c);
+                    break;
+            }
             EnsureSaved(SavedColumn + Math.Max(len, 0));
             var into = Saved.AsSpan(SavedLen);
             into[0] = (byte)type;
             BinaryPrimitives.WriteInt64LittleEndian(into[1..], integer);
             BinaryPrimitives.WriteDoubleLittleEndian(into[9..], real);
             BinaryPrimitives.WriteInt32LittleEndian(into[17..], len);
-            if (len > 0) new ReadOnlySpan<byte>(text, len).CopyTo(into[SavedColumn..]);
+            if (type == Sqlite3.TypeInteger) digits[..len].CopyTo(into[SavedColumn..]);
+            else if (len > 0) new ReadOnlySpan<byte>(text, len).CopyTo(into[SavedColumn..]);
             SavedLen += SavedColumn + Math.Max(len, 0);
         }
         SavedRows++;
