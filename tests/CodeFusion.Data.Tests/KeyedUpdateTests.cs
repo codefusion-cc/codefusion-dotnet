@@ -33,7 +33,7 @@ public sealed class KeyedUpdateTests(OpsFixture fixture) : IAsyncLifetime
             "DELETE FROM audited; INSERT INTO audited SELECT i, 0 FROM generate_series(1, 5) AS g(i); " +
             "DELETE FROM ruled; INSERT INTO ruled SELECT i, 0 FROM generate_series(1, 5) AS g(i); TRUNCATE audit_log; " +
             "DELETE FROM counters WHERE id BETWEEN 800 AND 899; INSERT INTO counters (id, n) SELECT i, 0 FROM generate_series(800, 899) AS g(i); " +
-            "DELETE FROM parted; INSERT INTO parted VALUES (1, 'part-1'), (2, 'part-2'); ALTER SEQUENCE once_seq RESTART");
+            "DELETE FROM parted; INSERT INTO parted VALUES (1, 'part-1'), (2, 'part-2'); ALTER SEQUENCE once_seq RESTART; TRUNCATE deferred_keys");
     }
 
     public ValueTask DisposeAsync() => default;
@@ -322,8 +322,67 @@ public sealed class KeyedUpdateTests(OpsFixture fixture) : IAsyncLifetime
         for (int i = 0; i < 100; i++) Assert.Equal(i == 60 ? DataStatus.Failed : DataStatus.Ok, results[i].Status);
         Assert.Equal(0, await Count(860));
         Assert.Equal(1099, await Count(899));
-        // the pause's group and the group's one transaction: one commit per write would be a hundred
-        Assert.Equal(2, counters.Commits - commits);
+        // the pause's group and the group's transactions, in rounds of at most 64 writes (more would overflow the
+        // backend's cache of subtransactions): one commit per write would be a hundred
+        Assert.Equal(3, counters.Commits - commits);
+    }
+
+    [Fact]
+    public async Task ACommitThatFailsInTheFallbackCommitsNothingAndEachWriteGetsItsOwnOutcome()
+    {
+        // the merged run fails (a CHECK), so the group goes again in savepoints; there the two inserts of one deferred
+        // key both run, and the COMMIT fails: nothing of that transaction committed, so each write runs again alone
+        var results = await Group(db => db.SetCount(702, -1), db => db.SetCount(703, 1), db => db.InsertDeferred(1, 5), db => db.InsertDeferred(2, 5));
+        Assert.Equal(
+            [(DataStatus.Failed, "23514"), (DataStatus.Ok, null), (DataStatus.Ok, null), (DataStatus.UniqueViolation, "23505")],
+            results.Select(r => (r.Status, r.NativeCode)));
+        Assert.Equal(1, await Count(703));
+        Assert.Equal(1L, await Scalar("SELECT count(*) FROM deferred_keys"));
+    }
+
+    [Fact]
+    public async Task AWriteWhoseStatementFailsToParseInTheFallbackLeavesTheNextWriteItsParse()
+    {
+        var source = FreshSource();
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            var bad = new PgStatement("SELECT 1 FROM no_such_table WHERE $1::bigint > 0", PgType.Int8); // fails at Parse
+            var touch = new PgStatement("UPDATE counters SET note = 'parsed' WHERE id = $1", PgType.Int8);
+            var pause = Run(db.Pause());
+            await Task.Delay(30);
+            var failing = Run(db.SetCount(702, -1));
+            var good = Run(db.SetCount(703, 1));
+            var both = source.Writer.Command(bad).Int8(1).Then(touch).Int8(704).Run(NoRows, null).AsTask();
+            var after = source.Writer.Command(touch).Int8(705).Run(NoRows, null).AsTask();
+            Assert.True((await pause).IsOk);
+            Assert.Equal(DataStatus.Failed, (await failing).Status);
+            Assert.Equal(DataStatus.Ok, (await good).Status);
+            Assert.Equal("42P01", (await both).SqlState);
+            var last = await after;
+            Assert.True(last.Status == PgStatus.Ok, $"{last.Status} {last.SqlState} {last.Exception?.Message}");
+            Assert.Equal("parsed", await Scalar("SELECT note FROM counters WHERE id = 705"));
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
+    }
+
+    [Fact]
+    public async Task AMergedRunThatAnotherTransactionFailedRunsAgainAndStaysMerged()
+    {
+        // the merged update fails once with a serialization failure (the table's CHECK), as a deadlock or a lock
+        // wait would: no write was at fault, but neither was merging, so the statement keeps merging
+        long unmerged = fixture.Writes.Writer.Counters.Unmerged, merged = Merged;
+        var results = await Group(db => db.SetFlaky(1, 5), db => db.SetFlaky(2, 6));
+        Assert.All(results, r => Assert.Equal(DataStatus.Ok, r.Status));
+        // the writes complete before their loop has decided about the statement: a write after them waits for it
+        Assert.True((await Run(_db.SetCount(719, 1))).IsOk);
+        Assert.Equal(2, Merged - merged);
+        Assert.Equal(0, fixture.Writes.Writer.Counters.Unmerged - unmerged);
+        Assert.Equal((5, 6), ((int)(await Scalar("SELECT n FROM flaky WHERE id = 1"))!, (int)(await Scalar("SELECT n FROM flaky WHERE id = 2"))!));
     }
 
     [Fact]

@@ -36,6 +36,10 @@ public sealed class OpsFixture : IAsyncLifetime
         CREATE TABLE parted (id bigint NOT NULL, name text NOT NULL, PRIMARY KEY (id)) PARTITION BY RANGE (id);
         CREATE TABLE parted_1 PARTITION OF parted FOR VALUES FROM (0) TO (1000);
         CREATE UNIQUE INDEX parted_1_name ON parted_1 (name);
+        CREATE TABLE deferred_keys (id bigint PRIMARY KEY, k int NOT NULL, CONSTRAINT deferred_k UNIQUE (k) DEFERRABLE INITIALLY DEFERRED);
+        CREATE TABLE flaky (id bigint PRIMARY KEY, n int NOT NULL);
+        INSERT INTO flaky VALUES (1, 0), (2, 0);
+        ALTER TABLE flaky ADD CONSTRAINT flaky_once CHECK (fail_once()) NOT VALID;
         """;
 
     /// <summary>

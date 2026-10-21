@@ -916,12 +916,17 @@ outcome is what running the writes one by one gives:
   again, so a trigger dropped later doesn't cost merging until a restart. So does one whose merged run failed with no
   write at fault in the fallback (a permission on the catalog, a statement_timeout only the merged statement runs
   into). `PgCounters.Unmerged` counts each time.
-- **A failed merged run goes once more unmerged, in one transaction and one round trip**, each write in a savepoint of
+- **A failed merged run goes once more unmerged, in one transaction per 64 writes** (more savepoints would overflow
+  the backend's cache of subtransactions, which every other session's snapshot pays for), each write in a savepoint of
   its own: `ROLLBACK TO SAVEPOINT cf` (which undoes the write before only if it failed: after a write that ran, the
   savepoint is set again), the write, `RELEASE SAVEPOINT cf`, `SAVEPOINT cf`, and a Sync, so an error skips nothing of
   the writes after it. Then `ROLLBACK TO SAVEPOINT cf` (the last write, if it failed) and `COMMIT`. Each write gets
-  its own outcome and they commit together: one commit and one more round trip, where one transaction per write cost
-  a commit each. A row locked elsewhere costs one more lock timeout, not one per write. A deadlock or serialization
+  its own outcome and they commit together: the writes in one round trip, the commit in a second, where one
+  transaction per write cost a commit each. A failed commit (a deferred constraint) committed nothing: each write runs
+  again alone. A merged run that failed with no write at fault stops merging for a while, unless another transaction
+  failed it (a deadlock, a serialization failure, a lock or statement timeout): then it just runs again. A write
+  binding a statement whose Parse an earlier write of the round carries waits for that write's replies, so a failed
+  Parse there goes again with it. A row locked elsewhere costs one more lock timeout, not one per write. A deadlock or serialization
   failure there rolls the transaction back: the writes before it run as a group, it runs alone, then the rest, so the
   order holds. Every Parse a write needs goes before its first Bind, so a write's own failure can't skip a Parse that
   a later write in the round binds.
@@ -942,6 +947,10 @@ Each test was red on the code before its fix:
 | (N2) one commit per write after a merged failure | `AFaultyWriteInAMergedRunCostsAFewCommitsNotOnePerWrite` (`PgCounters.Commits`: 2) | 220 commits on the server for 100 writes (before the counter) |
 | (N4) a write retried after 40001 came after later writes | `AWriteRetriedAfterASerializationFailureStillComesBeforeTheWritesQueuedAfterIt` | the row ended 5, not 9 |
 | (N5) a partitioned table merged | `APartitionedTableIsNeverMerged` | [Ok, Ok] for a write in-order refuses |
+| (check H1) a failed COMMIT in the fallback read as success: every write Ok, nothing committed | `ACommitThatFailsInTheFallbackCommitsNothingAndEachWriteGetsItsOwnOutcome` (a deferred unique key) | the second insert Ok, no row committed |
+| (check L1) a deadlock or lock wait in a merged run stopped merging | `AMergedRunThatAnotherTransactionFailedRunsAgainAndStaysMerged` (a CHECK failing once with 40001) | `Unmerged` 1 |
+| (check L2) a failed Parse skipped a later write's Parse in the round | `AWriteWhoseStatementFailsToParseInTheFallbackLeavesTheNextWriteItsParse` | 26000 |
+| (check L3) one savepoint round for 100 writes | `AFaultyWriteInAMergedRunCostsAFewCommitsNotOnePerWrite` (rounds of 64: 3 commits) | 2 commits |
 | (N7) unmerged until a restart, and invisible | `AStatementThatStoppedMergingIsTriedMergedAgainLater`, the trigger test's `Unmerged` | 0 merged after the trigger went; 0 counted |
 
 Not red: `RunsAloneTests.AKeyedUpdateMarkedRunsAloneRunsAloneAndIsNeverMerged`. An alone loop runs one command at a

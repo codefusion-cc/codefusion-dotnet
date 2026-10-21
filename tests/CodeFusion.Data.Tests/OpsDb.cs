@@ -98,6 +98,14 @@ public sealed class Parted
     public Utf8 Name { get; init; }
 }
 
+/// <summary>A table whose CHECK fails with a serialization failure the first time once_seq is used.</summary>
+[Table("flaky")]
+public sealed class Flaky
+{
+    public long Id { get; init; }
+    public int N { get; init; }
+}
+
 /// <summary>A table of another schema, whose name the search path's schema has too.</summary>
 [Table("items", Schema = "cfdata_ops_tenant")]
 public sealed class TenantItem
@@ -204,6 +212,7 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Table<Audited> Audits => Table<Audited>();
     public Table<Ruled> Ruled => Table<Ruled>();
     public Table<Parted> Parts => Table<Parted>();
+    public Table<Flaky> Flakies => Table<Flaky>();
 
     // ---------- Where ----------
 
@@ -394,6 +403,11 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Write SetRuled(long id, int n) => Ruled.Where(r => r.Id == id).Update(r => new Ruled { N = n });
 
     public Write SetPartedName(long id, Utf8 name) => Parts.Where(x => x.Id == id).Update(x => new Parted { Name = name });
+
+    public Write SetFlaky(long id, int n) => Flakies.Where(f => f.Id == id).Update(f => new Flaky { N = n });
+
+    /// <summary>A key whose uniqueness is checked at commit (a deferred constraint).</summary>
+    public Write InsertDeferred(long id, int k) => Sql($"INSERT INTO deferred_keys (id, k) VALUES ({id}, {k})");
 
     /// <summary>Fails with a serialization failure (40001) the first time once_seq is used after its restart.</summary>
     public Write SetCountFailingOnce(long id, int n) => Sql($"UPDATE counters SET n = {n} WHERE id = {id} AND fail_once()");

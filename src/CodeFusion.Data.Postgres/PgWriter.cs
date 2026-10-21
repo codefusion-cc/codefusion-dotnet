@@ -63,9 +63,15 @@ public sealed class PgWriter : PgLoops
                 // the table refused merging (its check, or Postgres: a rule on it can't take an update in a WITH)
                 bool refused = error is not null && (error.SqlState == "0A000" || error.Message.Contains(Postgres.NotMergedMarker, StringComparison.Ordinal));
                 if (refused) Unmerge(statement);
-                // and a merged run that failed with no write at fault failed for the merging itself (a permission,
-                // a statement_timeout the merged statement alone runs into): it stops merging too
-                if (EachInASavepoint(conn, group, from, to) == 0 && !refused) Unmerge(statement);
+                // and a merged run that failed with no write at fault failed for the merging itself (a permission on
+                // the catalog, say): it stops merging too. Not one that another transaction failed (a deadlock, a
+                // serialization failure, a lock or statement timeout): its writes just go again
+                bool others = error is not null && (Transient(error) || error.SqlState is PgErrorCodes.LockNotAvailable or "57014");
+                int failures = 0;
+                // rounds of at most RoundMax writes: each write's savepoint takes a subtransaction, and past 64 of them
+                // the backend's cache of them overflows, which every other session's snapshot pays for
+                for (int at = from; at < to; at += RoundMax) failures += EachInASavepoint(conn, group, at, Math.Min(at + RoundMax, to));
+                if (failures == 0 && !refused && !others) Unmerge(statement);
                 return;
             }
             if (failed == to)
@@ -82,6 +88,9 @@ public sealed class PgWriter : PgLoops
         }
     }
 
+    /// <summary>The most writes a fallback round runs in one transaction (see <see cref="EachInASavepoint"/>).</summary>
+    const int RoundMax = 64;
+
     /// <summary>A keyed update's statement goes unmerged for <see cref="UnmergedFor"/>, and is counted.</summary>
     void Unmerge(PgStatement statement)
     {
@@ -90,21 +99,45 @@ public sealed class PgWriter : PgLoops
     }
 
     /// <summary>
-    /// Runs writes <paramref name="from"/> to <paramref name="to"/> (exclusive) unmerged, in one transaction and one
-    /// round trip, each in a savepoint of its own: <c>ROLLBACK TO SAVEPOINT</c> (undoing the write before only if it
-    /// failed: after a write that ran, the savepoint is set again), the write, <c>RELEASE</c> and <c>SAVEPOINT</c>, then
-    /// a Sync, so an error skips nothing of the writes after it. Each gets its own outcome, as running them one by one
-    /// would give, and they commit together: one commit, one more round trip. A row locked elsewhere costs its write
-    /// one lock timeout and no other write any. A write that fails on a deadlock or serialization failure (another
-    /// loop's locks, not its own error) rolls the transaction back: the writes before it run as a group, it runs
-    /// alone, then the rest, so the order holds. Returns how many writes failed.
+    /// Runs writes <paramref name="from"/> to <paramref name="to"/> (exclusive, at most <see cref="RoundMax"/>)
+    /// unmerged in one transaction, each in a savepoint of its own: <c>ROLLBACK TO SAVEPOINT</c> (undoing the write
+    /// before only if it failed: after a write that ran, the savepoint is set again), the write, <c>RELEASE</c> and
+    /// <c>SAVEPOINT</c>, then a Sync, so an error skips nothing of the writes after it. The writes go in one round trip
+    /// (two when a write binds a statement whose Parse an earlier write of the round carries: that one's replies are
+    /// read first), the commit in another. Each gets its own outcome, as running them one by one would give, and they
+    /// commit together. A row locked elsewhere costs its write one lock timeout and no other write any. A failed commit
+    /// (a deferred constraint) committed nothing: each write runs again alone. A write that fails on a deadlock or
+    /// serialization failure (another loop's locks, not its own error) rolls the transaction back: the writes before
+    /// it run as a group, it runs alone, then the rest, so the order holds. Returns how many writes failed.
     /// </summary>
     int EachInASavepoint(PgConnection conn, PgJob?[] group, int from, int to)
     {
         Interlocked.Increment(ref Counters.Reruns);
+        int transient = -1, failures = 0, read = from;
+        var errors = conn.Errors;
+        void ReadUpTo(int end)
+        {
+            for (; read < end; read++)
+            {
+                int failed = conn.ReadReplies(group, keep: true, inTransaction: true, out var error);
+                if (failed == PgConnection.CommitFailed) throw new PgConnectionException("a savepoint failed: " + error?.Message, error);
+                errors[read] = failed >= 0 ? error : null;
+                if (failed < 0) continue;
+                failures++;
+                if (transient < 0 && error is not null && Transient(error)) transient = read;
+            }
+        }
         conn.Begin();
         for (int j = from; j < to; j++)
         {
+            // a statement whose Parse went out with an earlier write of this round: that write's failure may have
+            // skipped it, so its replies are read first (and the Parse goes again if it was skipped)
+            if (j > read && conn.BindsPendingParse(group, j, j + 1))
+            {
+                conn.SendSealed();
+                ReadUpTo(j);
+                conn.Begin();
+            }
             group[j]!.Restart();
             if (j == from)
             {
@@ -118,23 +151,13 @@ public sealed class PgWriter : PgLoops
             conn.Seal();
         }
         conn.SendSealed();
-        int transient = -1, failures = 0;
-        var errors = conn.Errors;
-        for (int j = from; j < to; j++)
-        {
-            int failed = conn.ReadReplies(group, keep: true, inTransaction: true, out var error);
-            if (failed == PgConnection.CommitFailed) throw new PgConnectionException("a savepoint failed: " + error?.Message, error);
-            errors[j] = failed >= 0 ? error : null;
-            if (failed < 0) continue;
-            failures++;
-            if (transient < 0 && error is not null && Transient(error)) transient = j;
-        }
+        ReadUpTo(to);
         conn.Begin();
         if (transient >= 0)
         {
             conn.AddControl(PgConnection.Controls.Rollback, from);
             conn.Flush();
-            if (conn.ReadReplies(group, keep: true, out var rolledBack) >= 0) throw new PgConnectionException("ROLLBACK failed: " + rolledBack?.Message, rolledBack);
+            if (conn.ReadReplies(group, keep: true, out var rolledBack) != -1) throw new PgConnectionException("ROLLBACK failed: " + rolledBack?.Message, rolledBack);
             Array.Clear(errors, from, to - from);
             // in order: the writes before it together, it alone, then the rest
             if (transient > from) Run(conn, group, from, transient, rerun: true);
@@ -145,7 +168,8 @@ public sealed class PgWriter : PgLoops
         conn.AddControl(PgConnection.Controls.RollbackTo, from); // undoes the last write if it failed
         conn.AddControl(PgConnection.Controls.Commit, from);
         conn.Flush();
-        if (conn.ReadReplies(group, keep: true, out var commitError) >= 0)
+        // -1: committed; anything else (CommitFailed for the COMMIT, a deferred constraint) committed nothing
+        if (conn.ReadReplies(group, keep: true, out _) != -1)
         {
             // the commit itself failed (a deferred constraint): nothing committed, and no write to blame
             Array.Clear(errors, from, to - from);
