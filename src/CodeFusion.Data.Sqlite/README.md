@@ -103,9 +103,9 @@ instead of reading beside it. On one core, where they take turns anyway, that is
 
 (`benchmarks/CodeFusion.Data.Sqlite.Throughput`: 100,000 rows, reads and updates by key, in a container pinned to one
 CPU of a Colima VM, linux-arm64; three rounds alternating the two, two with `Full`.) Reads and the writer take turns,
-each waiting for at most one of the other's. On more cores it costs: reads no longer run beside each other, so 4
-threads on an 8-core Mac read 1.2 to 1.8 M/s where the default reads 6.4 M/s. The runs, and the ones before them,
-are in [docs/benchmarks](../../docs/benchmarks/README.md).
+each waiting for at most one of the other's, however long the writer waits for a CPU. On more cores it costs: reads no
+longer run beside each other, so 4 threads on an 8-core Mac read 1.2 to 1.8 M/s where the default reads 6.4 M/s. The
+runs, and the ones before them, are in [docs/benchmarks](../../docs/benchmarks/README.md).
 
 Behind CodeFusion.Http's event loops (`HttpTransport.EventLoop`), `EventLoopBatches = true` goes one step further: a
 write made on a loop runs there at once, inside one transaction per loop wake-up, and every write of the wake-up commits
@@ -120,7 +120,8 @@ writes is what SQLite reports as it prepares it (triggers, foreign-key actions a
 generated SQL does. So a wake-up commits once (unless an error makes SQLite roll its transaction back, which fails every
 write it held), and no answer goes out with a write its COMMIT then loses. A handler that reads a written table and then
 writes waits for the read, so its write joins the batch the completions open: one more COMMIT for the wake-up, not one
-per request. While a batch holds the connection, other threads waiting for it park instead of spinning.
+per request. A thread waiting for the connection spins for 50 µs, then parks until it is given back, so a long hold
+(a batch, a large scan) doesn't spend the CPU its holder needs where more threads wait than there are cores.
 
 ## The SQLite build
 

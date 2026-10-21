@@ -68,6 +68,7 @@ Two things the table leaves out:
 | 2026-10-21 | [2026-10-21-body-syntax-check.md](2026-10-21-body-syntax-check.md) | body binding: before the spec options, with the syntax check first, and binding first | check first: valid bodies 65-75% slower, malformed 0 B; binding first: valid within 2-8% of the base, malformed back to one 1,192 B exception |
 | 2026-10-21 | [2026-10-21-body-syntax-check.md](2026-10-21-body-syntax-check.md#second-iteration-one-reader-that-binds-and-checks-in-a-single-pass) | body binding through one non-throwing reader in a single pass, against the three above | 7-20% faster than the base on valid and bad-field bodies; malformed 0.1-0.25 µs, 0 B, no exception |
 | 2026-10-21 | [2026-10-21-body-syntax-check.md](2026-10-21-body-syntax-check.md#third-iteration-realistic-bodies-three-rounds-median) | the single pass on realistic bodies (to 2 KB, numbers, nested, skipped keys), early and late malformation, three rounds | valid and bad-field bodies within noise to 35% faster than the base; malformed 23 ns to 1.4 µs, 0 B |
+| 2026-10-21 | [sqlite-waiters-park](2026-10-21-sqlite-waiters-park.md) | SQLite: every waiter parks after 50 µs, and reads stop for a writer in line; the turn tests under the loaded suite | entry on one CPU +12% (parking) and +11% (final, noisier); Mac 16-caller mix -25%; turn test green 9 of 9, red against three mutants; kept |
 
 ## Template
 

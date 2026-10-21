@@ -82,32 +82,46 @@ public sealed class ExclusiveTests : IDisposable
     }
 
     [Fact(Timeout = 60_000)]
-    public async Task ReadsAndWritesThatNeverStopTakeTurns()
+    public Task ReadsAndWritesThatNeverStopTakeTurns() => TakeTurns(readers: 4);
+
+    /// <summary>More readers than cores: waiters that only spun would take the CPU the read holding the connection, and
+    /// the writer woken for its turn, need; and a writer waiting for a CPU must still not be overtaken.</summary>
+    [Fact(Timeout = 60_000)]
+    public Task ReadsAndWritesThatNeverStopTakeTurnsWithMoreReadersThanCores() => TakeTurns(Environment.ProcessorCount + 4);
+
+    async Task TakeTurns(int readers)
     {
         var s = _db.Open(_db.Database(exclusive: true));
         Assert.True((await Kv.WriteMany(s, "seed", 20_000)).IsOk);
+        // the same work alone: 200 writes, and a read (the median of five), each a scan of 20,000 rows
         var alone = Stopwatch.StartNew();
         for (int i = 0; i < 200; i++) Assert.True((await Kv.Write(s, "a" + i, i)).IsOk);
         alone.Stop();
-        long readsBeside = 0, readTicks = 0;
-        int writing = 0;
-        using var stop = new CancellationTokenSource();
-        var readers = new Task[4];
-        for (int t = 0; t < readers.Length; t++)
-            readers[t] = Task.Run(() =>
+        var reads = new double[5];
+        for (int k = 0; k < reads.Length; k++)
+        {
+            long start = Stopwatch.GetTimestamp();
+            Kv.Count(s, "seed%");
+            reads[k] = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+        }
+        Array.Sort(reads);
+        double read = reads[reads.Length / 2];
+        long readsBeside = 0;
+        int writing = 0, stop = 0;
+        // threads of their own, reading back to back: blocked pool threads would hold back the writes' continuations
+        var threads = new Thread[readers];
+        for (int t = 0; t < threads.Length; t++)
+        {
+            threads[t] = new Thread(() =>
             {
-                // each read a scan of 20,000 rows, back to back
-                while (!stop.IsCancellationRequested)
+                while (Volatile.Read(ref stop) == 0)
                 {
-                    long start = Stopwatch.GetTimestamp();
                     Kv.Count(s, "seed%");
-                    if (Volatile.Read(ref writing) != 0)
-                    {
-                        Interlocked.Add(ref readTicks, Stopwatch.GetTimestamp() - start);
-                        Interlocked.Increment(ref readsBeside);
-                    }
+                    if (Volatile.Read(ref writing) != 0) Interlocked.Increment(ref readsBeside);
                 }
-            }, TestContext.Current.CancellationToken);
+            }) { IsBackground = true };
+            threads[t].Start();
+        }
         // the writer is first in line: a write waits for the read running, not for every read that starts after it
         await Task.Delay(100, TestContext.Current.CancellationToken); // the readers are reading
         Volatile.Write(ref writing, 1);
@@ -115,14 +129,17 @@ public sealed class ExclusiveTests : IDisposable
         for (int i = 0; i < 200; i++) Assert.True((await Kv.Write(s, "w" + i, i)).IsOk);
         took.Stop();
         Volatile.Write(ref writing, 0);
-        stop.Cancel();
-        await Task.WhenAll(readers);
-        // Bounded by the same writes alone and the reads beside them rather than a fixed time, so a slow machine slows
-        // both sides alike: a write waits about one read (its turn comes after the one running), while a writer that
-        // every new read overtakes waits until the readers stop.
-        double read = Stopwatch.GetElapsedTime(0, readTicks).TotalMilliseconds / Math.Max(1, readsBeside);
-        Assert.True(took.Elapsed.TotalMilliseconds < 2 * alone.Elapsed.TotalMilliseconds + 200 * 3 * read + 200,
-            $"200 writes took {took.Elapsed.TotalMilliseconds:F0} ms beside reads of {read:F2} ms each, {alone.Elapsed.TotalMilliseconds:F0} ms alone");
+        Volatile.Write(ref stop, 1);
+        foreach (var t in threads) t.Join();
+#if DEBUG
+        // the turns: while a write waits, at most two reads start, one that took the connection as the writer came and
+        // one let through after it, however long the writer waits for a CPU
+        int most = s.Readers.MostReadsBeforeAWrite;
+        Assert.True(most <= 2, $"{readers} readers: {most} reads started while one write waited");
+#endif
+        // and nobody waits for ever: a write waits for about two reads, and time on a shared machine is only a guard
+        Assert.True(took.Elapsed.TotalMilliseconds < 10 * (2 * alone.Elapsed.TotalMilliseconds + 200 * 6 * read + 200),
+            $"{readers} readers: 200 writes took {took.Elapsed.TotalMilliseconds:F0} ms, beside reads of {read:F2} ms alone; {alone.Elapsed.TotalMilliseconds:F0} ms alone");
         // and the reads go on beside the writes: a group lets a waiting read through before the next one
         Assert.True(readsBeside >= 100, $"{readsBeside} reads beside 200 writes");
     }

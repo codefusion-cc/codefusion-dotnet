@@ -219,31 +219,74 @@ internal sealed class SqliteReaders : IDisposable
     {
         // turns: a read that waited goes before the next group, and no read starts while the writer waits, so neither
         // side waits for more than one of the other's
-        if (Volatile.Read(ref _readersWaiting) > 0)
+        bool inLine = Volatile.Read(ref _readersWaiting) > 0;
+        if (inLine)
         {
             long seen = Volatile.Read(ref _readsDone);
+            // the reads see the writer in line: once one has gone, no other starts, whether or not the writer is on a
+            // CPU to say so (on a busy machine a woken writer can wait milliseconds for one, and reads overtook it)
+            Interlocked.Exchange(ref _writerQueued, seen + 1);
+            WaitStarts();
             SpinWait turn = default;
             long since = 0;
             while (!ReadWent(this, seen))
             {
-                if (GaveUp()) return false;
-                Pause(ref turn, ref since, ReadWent, seen);
+                if (GaveUp())
+                {
+                    Interlocked.Exchange(ref _writerQueued, 0);
+                    WakeParked();
+                    WaitEnded();
+                    return false;
+                }
+                Pause(ref turn, ref since, ReadWent, seen, writer: true);
             }
         }
         Volatile.Write(ref _writerWaits, 1);
+        Interlocked.Exchange(ref _writerQueued, 0);
+        if (!inLine) WaitStarts();
         SpinWait spin = default;
         long waited = 0;
         while (Interlocked.CompareExchange(ref _taken[0], 1, 0) != 0)
         {
             if (GaveUp())
             {
-                Volatile.Write(ref _writerWaits, 0);
+                Interlocked.Exchange(ref _writerWaits, 0);
+                WakeParked();
+                WaitEnded();
                 return false;
             }
-            Pause(ref spin, ref waited, Free, 0);
+            Pause(ref spin, ref waited, Free, 0, writer: true);
         }
         Volatile.Write(ref _writerWaits, 0);
+        WaitEnded();
         return true;
+    }
+
+    /// <summary>Debug, tests: the most reads that started while one wait in <see cref="Enter"/> lasted, counted from when
+    /// the reads can see the writer (in line, or waiting); a read already running doesn't count. For one writer: a loop's
+    /// batch entering beside the writer's group shares the count.</summary>
+    internal int MostReadsBeforeAWrite;
+    int _writerWaiting, _readsStartedThisWait;
+
+    [Conditional("DEBUG")]
+    void WaitStarts()
+    {
+        Volatile.Write(ref _readsStartedThisWait, 0);
+        Interlocked.Exchange(ref _writerWaiting, 1);
+    }
+
+    [Conditional("DEBUG")]
+    void WaitEnded()
+    {
+        Volatile.Write(ref _writerWaiting, 0);
+        int started = Volatile.Read(ref _readsStartedThisWait);
+        if (started > MostReadsBeforeAWrite) MostReadsBeforeAWrite = started;
+    }
+
+    [Conditional("DEBUG")]
+    void ReadStarted()
+    {
+        if (Volatile.Read(ref _writerWaiting) != 0) Interlocked.Increment(ref _readsStartedThisWait);
     }
 
     /// <summary>Exclusive mode: the connection is to close as soon as nothing holds it (<see cref="CloseWhenFree"/>).</summary>
@@ -270,31 +313,35 @@ internal sealed class SqliteReaders : IDisposable
     static readonly Func<SqliteReaders, long, bool> ReadWent =
         static (r, seen) => Volatile.Read(ref r._readsDone) != seen || Volatile.Read(ref r._readersWaiting) == 0;
     static readonly Func<SqliteReaders, long, bool> Free = static (r, _) => Volatile.Read(ref r._taken[0]) == 0;
+    static readonly Func<SqliteReaders, long, bool> AnyFree = static (r, _) =>
+    {
+        if (Volatile.Read(ref r._stopped) != 0) return true;
+        for (int i = 0; i < r._conns.Length; i++)
+            if (Volatile.Read(ref r._taken[i * Stride]) == 0) return true;
+        return false;
+    };
     static readonly Func<SqliteReaders, long, bool> FreeForARead = static (r, _) =>
-        Volatile.Read(ref r._stopped) != 0 || (Volatile.Read(ref r._writerWaits) == 0 && Volatile.Read(ref r._taken[0]) == 0);
+        Volatile.Read(ref r._stopped) != 0 || (!r.WritersTurn() && Volatile.Read(ref r._taken[0]) == 0);
 
-    /// <summary>Exclusive mode: threads parked while a loop's batch holds the connection, on <see cref="_gate"/>.</summary>
-    int _parked;
-    readonly object _gate = new();
-    /// <summary>How long a waiter spins while a loop's batch holds the connection before it parks: 50 µs. A batch holds
-    /// it for its loop's whole wake-up, and nothing spins that long. A read or a group holds it for microseconds, and
-    /// waiters spin for those as before: parking for them too cut the mixed load to a quarter. (No 1 ms sleeps either: a
-    /// group a millisecond late would pay it at every commit.)</summary>
+    /// <summary>Waiters parked: reads on <see cref="_readGate"/>, the writer (Exclusive mode) on <see cref="_writeGate"/>,
+    /// so a wake-up meant for one side never lands on the other.</summary>
+    int _readersParked, _writerParked;
+    readonly object _readGate = new(), _writeGate = new();
+    /// <summary>How long a waiter spins before it parks: 50 µs, longer than a read or a group usually holds the
+    /// connection. A longer hold (a loop's batch, a large scan) parks its waiters: spinning through it takes the CPU the
+    /// holder needs wherever more threads wait than there are cores, which on Linux starved the writer. Parking has a
+    /// price where many callers contend and holders get preempted: the 16-caller 9:1 mix on a busy Mac lost about a
+    /// quarter (docs/benchmarks/2026-10-21-sqlite-waiters-park.md). (No 1 ms sleeps: a group a millisecond late would
+    /// pay it at every commit.)</summary>
     static readonly long SpinTicks = Stopwatch.Frequency / 20_000;
     /// <summary>A parked thread looks again after this even unwoken: a missed wake-up costs a second, not a hang.</summary>
     const int ParkedMs = 1000;
 
-    /// <summary>Exclusive mode: one wait for <paramref name="ready"/>: a spin; or while a loop's batch holds the
-    /// connection, once <see cref="SpinTicks"/> passed <paramref name="since"/> (0: from now), parked until the batch
-    /// gives it back (<see cref="Exit"/> wakes it).</summary>
-    void Pause(ref SpinWait spin, ref long since, Func<SqliteReaders, long, bool> ready, long arg)
+    /// <summary>One wait for <paramref name="ready"/>: a spin until <see cref="SpinTicks"/> passed
+    /// <paramref name="since"/> (0: from now), then parked until whoever gives the connection back wakes it
+    /// (<see cref="WakeNext"/>, <see cref="WakeParked"/>). A thread woken spins again before it parks again.</summary>
+    void Pause(ref SpinWait spin, ref long since, Func<SqliteReaders, long, bool> ready, long arg, bool writer)
     {
-        if (Volatile.Read(ref _owner) == 0)
-        {
-            since = 0;
-            spin.SpinOnce(sleep1Threshold: -1);
-            return;
-        }
         long now = Stopwatch.GetTimestamp();
         if (since == 0) since = now;
         if (now - since < SpinTicks)
@@ -302,23 +349,52 @@ internal sealed class SqliteReaders : IDisposable
             spin.SpinOnce(sleep1Threshold: -1);
             return;
         }
-        // counted first, then checked under the gate: a batch that ended before Exit saw the count, the check sees it
-        // ended; one whose Exit saw it pulses after the check, or before the lock is taken and the check sees it ended
-        Interlocked.Increment(ref _parked);
-        lock (_gate)
-            if (Volatile.Read(ref _owner) != 0 && !ready(this, arg)) Monitor.Wait(_gate, ParkedMs);
-        Interlocked.Decrement(ref _parked);
+        // counted first, then checked under the gate: a give-back that came before the count, the check sees; one
+        // whose wake saw the count pulses after the check, or before the lock is taken and the check sees it
+        ref int parked = ref writer ? ref _writerParked : ref _readersParked;
+        object gate = writer ? _writeGate : _readGate;
+        Interlocked.Increment(ref parked);
+        lock (gate)
+            if (!ready(this, arg)) Monitor.Wait(gate, ParkedMs);
+        Interlocked.Decrement(ref parked);
+        since = 0;
+        spin = default;
     }
 
-    /// <summary>Exclusive mode: wakes the parked threads, after a full fence that follows the change they wait for.</summary>
+    /// <summary>A read gave the connection back, after a full fence: wakes the writer if it is parked (its turn comes
+    /// first), or else one parked read. Each read wakes the next as it ends, so they don't all wake for one connection.</summary>
+    void WakeNext()
+    {
+        if (Volatile.Read(ref _writerParked) != 0)
+        {
+            lock (_writeGate) Monitor.Pulse(_writeGate);
+            return;
+        }
+        if (Volatile.Read(ref _readersParked) != 0) lock (_readGate) Monitor.Pulse(_readGate);
+    }
+
+    /// <summary>Wakes every parked thread, after a full fence that follows the change they wait for: the writer's group
+    /// or a loop's batch ended, the writer gave up, or the source stops.</summary>
     void WakeParked()
     {
-        if (Volatile.Read(ref _parked) == 0) return;
-        lock (_gate) Monitor.PulseAll(_gate);
+        if (Volatile.Read(ref _writerParked) != 0) lock (_writeGate) Monitor.PulseAll(_writeGate);
+        if (Volatile.Read(ref _readersParked) != 0) lock (_readGate) Monitor.PulseAll(_readGate);
     }
 
     /// <summary>Exclusive mode: the writer wants the connection; reads wait to start.</summary>
     int _writerWaits;
+
+    /// <summary>Exclusive mode: the writer is in line behind one read, 1 + <see cref="_readsDone"/> as it came; 0 when
+    /// not. Reads start only until one has gone after it.</summary>
+    long _writerQueued;
+
+    /// <summary>Exclusive mode: a read may not start, the writer's turn having come.</summary>
+    bool WritersTurn()
+    {
+        if (Volatile.Read(ref _writerWaits) != 0) return true;
+        long queued = Volatile.Read(ref _writerQueued);
+        return queued != 0 && Volatile.Read(ref _readsDone) != queued - 1;
+    }
 
     /// <summary>Exclusive mode: reads waiting for the connection, and reads done; the writer lets one through after a
     /// group.</summary>
@@ -335,13 +411,26 @@ internal sealed class SqliteReaders : IDisposable
         {
             while (true)
             {
-                if (Volatile.Read(ref _writerWaits) == 0 && Volatile.Read(ref _taken[0]) == 0 && Interlocked.CompareExchange(ref _taken[0], 1, 0) == 0)
+                if (!WritersTurn() && Volatile.Read(ref _taken[0]) == 0 && Interlocked.CompareExchange(ref _taken[0], 1, 0) == 0)
                 {
-                    if (Volatile.Read(ref _stopped) == 0) return 0;
+                    // checked again after the take's full fence: a read that ended before it counted itself first
+                    if (WritersTurn() && Volatile.Read(ref _stopped) == 0)
+                    {
+                        Interlocked.Exchange(ref _taken[0], 0);
+                        WakeNext();
+                        Released();
+                        continue;
+                    }
+                    if (Volatile.Read(ref _stopped) == 0)
+                    {
+                        ReadStarted();
+                        return 0;
+                    }
 #if DEBUG
                     StoppedRead?.Invoke();
 #endif
                     Interlocked.Exchange(ref _taken[0], 0);
+                    WakeNext();
                     Released();
                     return -1;
                 }
@@ -351,7 +440,7 @@ internal sealed class SqliteReaders : IDisposable
                     Interlocked.Increment(ref _readersWaiting);
                     counted = true;
                 }
-                Pause(ref spin, ref since, FreeForARead, 0);
+                Pause(ref spin, ref since, FreeForARead, 0, writer: false);
             }
         }
         finally
@@ -409,6 +498,7 @@ internal sealed class SqliteReaders : IDisposable
         int n = _conns.Length;
         int start = (int)((uint)Environment.CurrentManagedThreadId % (uint)n);
         SpinWait spin = default;
+        long since = 0;
         while (true)
         {
             for (int k = 0; k < n; k++)
@@ -418,12 +508,12 @@ internal sealed class SqliteReaders : IDisposable
                 if (Volatile.Read(ref _taken[i * Stride]) == 0 && (!_shared || Volatile.Read(ref _writerWaits) == 0) && Interlocked.CompareExchange(ref _taken[i * Stride], 1, 0) == 0)
                 {
                     if (Volatile.Read(ref _stopped) == 0) return i;
-                    Volatile.Write(ref _taken[i * Stride], 0);
+                    GiveBack(i);
                     return -1;
                 }
             }
             if (Volatile.Read(ref _stopped) != 0) return -1;
-            spin.SpinOnce(); // more reads running than connections: one is free soon (SpinWait yields at once on one core)
+            Pause(ref spin, ref since, AnyFree, 0, writer: false); // more reads running than connections
         }
     }
 
@@ -486,12 +576,14 @@ internal sealed class SqliteReaders : IDisposable
             conn.Ended();
             if (!own)
             {
-                Volatile.Write(ref _taken[i * Stride], 0);
                 if (_shared)
                 {
-                    Interlocked.Increment(ref _readsDone); // the full fence Released reads after
+                    Interlocked.Increment(ref _readsDone); // counted before the give-back: a read that takes it sees the count
+                    Interlocked.Exchange(ref _taken[i * Stride], 0); // the full fence WakeNext and Released read after
+                    WakeNext();
                     Released();
                 }
+                else GiveBack(i);
             }
         }
     }
@@ -515,19 +607,26 @@ internal sealed class SqliteReaders : IDisposable
                 _ = _conns[i].Once(_end);
                 _snapshot[i] = -1;
             }
-            Volatile.Write(ref _taken[i * Stride], 0);
+            GiveBack(i);
         }
+    }
+
+    /// <summary>The reader pool: gives connection <paramref name="i"/> back, and wakes one parked read for it.</summary>
+    void GiveBack(int i)
+    {
+        Interlocked.Exchange(ref _taken[i * Stride], 0); // a full fence before the parked count is read
+        if (Volatile.Read(ref _readersParked) != 0) lock (_readGate) Monitor.Pulse(_readGate);
     }
 
     /// <summary>Takes no more reads, waits for those running, closes the connections.</summary>
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
+        // Exclusive mode: waits for the connection give up from now on, the writer's for its last groups too
+        if (_shared) Volatile.Write(ref _giveUpAt, Stopwatch.GetTimestamp() + (long)(StopWait.TotalSeconds * Stopwatch.Frequency));
+        WakeParked(); // threads parked for a connection see the stop
         if (_shared)
         {
-            // waits for the connection give up from now on: the writer's for its last groups too
-            Volatile.Write(ref _giveUpAt, Stopwatch.GetTimestamp() + (long)(StopWait.TotalSeconds * Stopwatch.Frequency));
-            WakeParked(); // reads parked for the connection see the stop
             // the writer's connection, which it closes after its last group: only the read running is waited for, and a
             // loop's batch holding it isn't waited for long (its end closes the connection then)
             if (TryEnter(StopWait)) Exit();
