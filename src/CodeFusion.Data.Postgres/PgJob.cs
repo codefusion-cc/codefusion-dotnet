@@ -541,21 +541,18 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
         }
     }
 
-    /// <summary>Under the pool's lock: onto the top of the shared stack; gone if the loops have no room for it. Past the
-    /// budget a job grown past <see cref="SmallBuffer"/> goes (a job grown for one large command keeps its buffers through
-    /// every small one after, so letting those go is what brings the pool back under it, and costs no allocation); a
-    /// small one takes the place of the least recently pooled.</summary>
+    /// <summary>Under the pool's lock: onto the top of the shared stack, the least recently pooled job going if it is
+    /// full, so the job just returned (the warm one) is the next taken. Past the budget a job grown past
+    /// <see cref="SmallBuffer"/> goes itself (a job grown for one large command keeps its buffers through every small
+    /// one after, so letting those go is what brings the pool back under it, and costs no allocation); a small one
+    /// takes the place of the least recently pooled.</summary>
     static void Push(PgJob job)
     {
-        if (_pooled >= Math.Min(_capacity, MaxPooled)) return;
+        int room = Math.Min(_capacity, MaxPooled);
         long bytes = job.Footprint;
-        if (_pooledBytes + bytes > Budget)
-        {
-            // a job grown for a large command goes, buffers and all (shrinking them would allocate on a return); a
-            // small one takes the place of the least recently used
-            if (job.Buf.Length > SmallBuffer || job.Saved is { Length: > SmallBuffer } || bytes > Budget) return;
-            while (_pooledBytes + bytes > Budget) DropBottom();
-        }
+        if (room == 0 || _pooledBytes + bytes > Budget && (job.Buf.Length > SmallBuffer || job.Saved is { Length: > SmallBuffer } || bytes > Budget)) return;
+        if (_pooled >= room) DropBottom();
+        while (_pooledBytes + bytes > Budget) DropBottom();
         _pool ??= new PgJob?[MaxPooled];
         _pool[(_bottom + _pooled++) % MaxPooled] = job;
         _pooledBytes += job._kept = bytes;
