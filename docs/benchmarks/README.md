@@ -37,7 +37,9 @@ Name the file `YYYY-MM-DD-<short-slug>.md` and add a row to the table above.
 - **Code:** the commit or branch of each side (and of codefusion-dotnet, for a contest entry).
 - **Machine:** the hardware or VM shape, OS, .NET SDK, Postgres or SQLite version, and what else was running.
 - **Method:** the tool and its settings (BenchmarkDotNet job, load generator and users, the contest's scoring steps),
-  the rounds and their order, and how the result was picked (best of, median of).
+  the rounds and their order, and how the result was picked (best of, median of). Alternate the order (A B B A, or
+  rotate it each round): on a shared VM a build's place in the run moved results by ±5%, more than the change measured
+  (2026-10-21-mix-bisect.md).
 
 | Case | Before | After | Change |
 |---|---|---|---|
