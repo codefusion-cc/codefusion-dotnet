@@ -267,10 +267,15 @@ public sealed class HttpAppBuilder : IServiceRegistry
     public HttpAppBuilder AddJwtAuth(string secret) => AddJwtAuth(secret, TimeSpan.FromDays(30));
 
     /// <summary><see cref="AddJwtAuth(string)"/>, with tokens issued for <paramref name="lifetime"/> instead of 30 days.</summary>
-    public HttpAppBuilder AddJwtAuth(string secret, TimeSpan lifetime)
+    public HttpAppBuilder AddJwtAuth(string secret, TimeSpan lifetime) => AddJwtAuth(secret, lifetime, false);
+
+    /// <summary><see cref="AddJwtAuth(string, TimeSpan)"/>, and with <paramref name="allowShortSecret"/> a secret
+    /// shorter than <see cref="Jwt.MinSecretBytes"/> too, for a deployment handed a fixed one: see
+    /// <see cref="Jwt.Jwt(string, TimeSpan, bool)"/> for the risk.</summary>
+    public HttpAppBuilder AddJwtAuth(string secret, TimeSpan lifetime, bool allowShortSecret)
     {
         if (JwtPrototype is not null) throw new InvalidOperationException("AddJwtAuth was called already");
-        var jwt = new Jwt(secret, lifetime);
+        var jwt = new Jwt(secret, lifetime, allowShortSecret);
         AddPerConnection(jwt.Copy);
         JwtPrototype = jwt;
         return this;

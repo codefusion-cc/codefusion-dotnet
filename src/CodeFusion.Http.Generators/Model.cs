@@ -44,7 +44,12 @@ internal static class EquatableArray
 /// <summary>A place in source, without holding on to the syntax tree.</summary>
 internal sealed record LocationInfo(string Path, TextSpan Span, LinePositionSpan Lines)
 {
-    public Location ToLocation() => Location.Create(Path, Span, Lines);
+    /// <summary>The place in its tree of <paramref name="trees"/> (by path), where a #pragma reaches it; outside the
+    /// trees if none has the path (or the span).</summary>
+    public Location ToLocation(IReadOnlyDictionary<string, SyntaxTree> trees) =>
+        trees.TryGetValue(Path, out SyntaxTree? tree) && Span.End <= tree.Length
+            ? Location.Create(tree, Span)
+            : Location.Create(Path, Span, Lines);
 
     public static LocationInfo? From(Location? location) =>
         location is null || location.SourceTree is null ? null
@@ -53,8 +58,8 @@ internal sealed record LocationInfo(string Path, TextSpan Span, LinePositionSpan
 
 internal sealed record DiagnosticInfo(string Id, LocationInfo? Location, EquatableArray<string> Args)
 {
-    public Diagnostic ToDiagnostic() =>
-        Diagnostic.Create(Diagnostics.ById[Id], Location?.ToLocation(), Args.Cast<object>().ToArray());
+    public Diagnostic ToDiagnostic(IReadOnlyDictionary<string, SyntaxTree> trees) =>
+        Diagnostic.Create(Diagnostics.ById[Id], Location?.ToLocation(trees), Args.Cast<object>().ToArray());
 }
 
 /// <summary>What one Map call compiles to, or why it can't be.</summary>

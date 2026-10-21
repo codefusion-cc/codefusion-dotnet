@@ -107,6 +107,17 @@ public static class Keys
 
     public static long Calls => System.Threading.Interlocked.Read(ref _next) - 7000;
 
+    static long _huge;
+
+    /// <summary>Keys past 2^53, which a double can't hold: 2^53 + 1, 2^53 + 3 and on.</summary>
+    public static long Huge()
+    {
+        long n = System.Threading.Interlocked.Increment(ref _huge);
+        return (1L << 53) + 2 * n - 1;
+    }
+
+    public static long HugeCalls => System.Threading.Interlocked.Read(ref _huge);
+
     /// <summary>A new label each call, drawn from the same keys.</summary>
     public static Utf8 Label()
     {
@@ -254,6 +265,8 @@ public sealed partial class OpsDb : DataContext<Postgres>
 
     public One<RawJson> NamesAsJson() => People.OrderBy(p => p.Name).Select(p => p.Name).AsJson();
 
+    public One<RawJson> NamesOverAgeAsJson(int age) => People.Where(p => p.Age > age).OrderBy(p => p.Name).Select(p => p.Name).AsJson();
+
     public One<int> AgeOf(long id) => People.Where(p => p.Id == id).Select(p => p.Age).One();
 
     public One<Utf8> NickOf(long id) => People.Where(p => p.Id == id).Select(p => p.Nick ?? p.Name).One();
@@ -330,6 +343,20 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Write<Name> AddLabelled() =>
         Insert(People, new Person { Name = Keys.Label(), Nick = Keys.Label(), Age = 6, Active = true, Born = SqlFunctions.Now() })
             .ThenSelect(p => new Name(p.Id, p.Name));
+
+    // a key a double can't hold, compared as a double first and then written as the pet's key
+    public Write TouchBelow(long n, Utf8 name) => People.Where(p => p.Name == name && p.Age + 0.5 < n).Update(p => new Person { Active = true });
+    public Write AddHuge(long n, Utf8 name) => Insert(People, new Person { Name = name, Age = 9, Active = false, Born = SqlFunctions.Now() })
+        .Then(TouchBelow(n, name))
+        .Then(p => Insert(Pets, new Pet { Id = n, OwnerId = p.Id, Name = name, Legs = 4 }));
+    public Write AddHugeOf(Utf8 name) => AddHuge(Keys.Huge(), name);
+
+    // an argument the body doesn't use, and one it uses only under a ThenIf
+    public Write Audited(long audit, Utf8 name) => Insert(People, new Person { Name = name, Age = 7, Active = true, Born = SqlFunctions.Now() });
+    public Write AuditedOf(Utf8 name) => Audited(Keys.Next(), name);
+    public Write MaybePet(bool pet, long k, Utf8 name) => Insert(People, new Person { Name = name, Age = 8, Active = true, Born = SqlFunctions.Now() })
+        .ThenIf(pet, p => Insert(Pets, new Pet { Id = k, OwnerId = p.Id, Name = name, Legs = 1 }));
+    public Write MaybePetOf(bool pet, Utf8 name) => MaybePet(pet, Keys.Next(), name);
 
     public Write<Name> AddGadget(Utf8 name) => Insert(Gadgets, new Gadget { Name = name }).ThenSelect(g => new Name(g.Id, g.Name));
 

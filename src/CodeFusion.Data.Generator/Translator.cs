@@ -54,8 +54,9 @@ sealed class Host(string code, ITypeSymbol type, Func<string>? sqlForm = null) :
     public Func<string>? SqlForm { get; } = sqlForm;
 
     /// <summary>
-    /// Whether its C# reads the same value however often it runs, with nothing run on the way: a parameter, a
-    /// constant, a readonly field or a property without a setter or a body, and operators over those. Such a value
+    /// Whether its C# reads the same value however often it runs, with nothing run on the way: a parameter (in and ref
+    /// readonly too), a constant, a readonly field or a non-virtual property without a setter or a body, and
+    /// operators over those. Such a value
     /// written twice is one value; any other (a call, a settable member, a user-defined operator) is a value per
     /// place it is written, as C# runs it.
     /// </summary>
@@ -156,9 +157,15 @@ sealed class Env
     readonly Dictionary<ISymbol, Value> _values;
     public readonly Env? Parent;
 
-    public Env(Env? parent = null)
+    /// <summary>The inlined calls (a query method's, or a source method's one-expression body) this is the body of, as
+    /// <see cref="Translator.SiteOf"/>s: the operators of a body keep it, though the translator reaches a Then's
+    /// argument only after the call's own translation ended.</summary>
+    public readonly string Sites;
+
+    public Env(Env? parent = null, string? sites = null)
     {
         Parent = parent;
+        Sites = sites ?? parent?.Sites ?? "";
         _values = new Dictionary<ISymbol, Value>(SymbolEqualityComparer.Default);
     }
 
@@ -347,7 +354,7 @@ sealed partial class Translator
             // expression again (a lambda applied twice) is the same value, another written alike is another
             if (v is Host { Pure: false, Site: null } h)
             {
-                h.Site = string.Concat(_callSites) + SiteOf(op.Syntax);
+                h.Site = env.Sites + SiteOf(op.Syntax);
                 h.Where = op.Syntax.GetLocation();
             }
             return v;
@@ -368,7 +375,9 @@ sealed partial class Translator
         {
             case IParameterReferenceOperation p:
                 if (env.Find(p.Parameter) is { } bound) return bound;
-                if (_queryParameters.Contains(p.Parameter)) return new Host(Names.Identifier(p.Parameter.Name), p.Parameter.Type) { Pure = p.Parameter.RefKind == RefKind.None };
+                // an in or ref readonly parameter can't be assigned by the code that reads it: read twice, one value
+                if (_queryParameters.Contains(p.Parameter))
+                    return new Host(Names.Identifier(p.Parameter.Name), p.Parameter.Type) { Pure = p.Parameter.RefKind is RefKind.None or RefKind.In or RefKind.RefReadOnlyParameter };
                 throw new Refused(at, $"the parameter '{p.Parameter.Name}' here");
             case ILocalReferenceOperation l:
                 throw new Refused(at, $"the local '{l.Local.Name}' (a definition can use only the query method's parameters)");
@@ -462,24 +471,7 @@ sealed partial class Translator
         _ => null,
     };
 
-    /// <summary>The inlined calls (a query method's, or a source method's one-expression body) the translation is in.</summary>
-    readonly List<string> _callSites = new();
-
-    static string SiteOf(SyntaxNode s) => $"{s.SyntaxTree.FilePath}@{s.Span.Start}+{s.Span.Length};";
-
-    /// <summary>Translates <paramref name="body"/> as reached through the call at <paramref name="call"/>.</summary>
-    public T Through<T>(SyntaxNode call, Func<T> body)
-    {
-        _callSites.Add(SiteOf(call));
-        try
-        {
-            return body();
-        }
-        finally
-        {
-            _callSites.RemoveAt(_callSites.Count - 1);
-        }
-    }
+    public static string SiteOf(SyntaxNode s) => $"{s.SyntaxTree.FilePath}@{s.Span.Start}+{s.Span.Length};";
 
     /// <summary>C# over <paramref name="parts"/>: pure when it adds nothing that runs (<paramref name="pure"/>) and its
     /// parts are pure.</summary>
@@ -499,8 +491,9 @@ sealed partial class Translator
     }
 
     /// <summary>
-    /// Whether reading <paramref name="p"/> runs nothing and reads the same each time: a property without a setter
-    /// (or with init) and without a body (an auto-property, a record's positional one), or Nullable's Value and
+    /// Whether reading <paramref name="p"/> runs nothing and reads the same each time: a class's or struct's property
+    /// without a setter (or with init) and without a body (an auto-property, a record's positional one), that no
+    /// other code may stand in for (not an interface's, abstract, virtual or an override), or Nullable's Value and
     /// HasValue, a string's or an array's Length. A property of another assembly otherwise can't be seen to be one.
     /// </summary>
     static bool PureProperty(IPropertySymbol p)
@@ -509,6 +502,7 @@ sealed partial class Translator
         var type = p.ContainingType.OriginalDefinition;
         if (type.SpecialType == SpecialType.System_Nullable_T) return p.Name is "Value" or "HasValue";
         if (type.SpecialType is SpecialType.System_String or SpecialType.System_Array) return p.Name == "Length";
+        if (type.TypeKind is not (TypeKind.Class or TypeKind.Struct) || p.IsAbstract || p.IsVirtual || p.IsOverride) return false;
         var decl = p.OriginalDefinition.DeclaringSyntaxReferences;
         if (decl.Length == 0) return false;
         return decl.All(r => r.GetSyntax() switch

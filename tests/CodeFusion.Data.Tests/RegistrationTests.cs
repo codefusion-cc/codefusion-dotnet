@@ -63,6 +63,44 @@ public sealed class RegistrationTests(ConduitFixture fixture)
         Assert.Equal(500, response.Status); // stopped
     }
 
+    // An app that builds its source itself (its own loops, error replies or failure log) registers that one.
+    [Fact]
+    public async Task AddDatabaseTakesASourceTheAppBuiltItself()
+    {
+        _ = fixture;
+        TestDb.Require();
+        var settings = PgSettings.Parse(TestDb.ConnectionString!).Set("search_path", ConduitFixture.SchemaName);
+        var failures = new List<string>();
+        var source = new PgDataSource(new PgReader(settings), new PgWriter(settings.Clone())) { OnFailure = (name, _) => failures.Add(name) };
+        source.Reader.Start(1);
+        source.Writer.Start(1);
+        var registry = new Registry();
+        Assert.Same(source, registry.AddDatabase<ConduitDb>(source));
+
+        Assert.Same(source, Assert.Single(registry.Singletons));
+        var factory = Assert.Single(registry.PerConnection);
+        var first = (ConduitDb)factory();
+        Assert.NotSame(first, factory());
+        Assert.Same(source, first.Source);
+        var response = new FakeResponse();
+        first.Bind(response);
+        var bytes = Encoding.UTF8.GetBytes("bob");
+        await first.Profile(new Utf8(bytes, 0, bytes.Length), 0).WriteAsync(response);
+        Assert.Equal(200, response.Status);
+        Assert.StartsWith("""{"profile":{"username":"bob",""", response.Text, StringComparison.Ordinal);
+        Assert.Empty(failures);
+
+        Assert.Single(registry.Stopping)();
+        response.Next();
+        await first.Profile(new Utf8(bytes, 0, bytes.Length), 0).WriteAsync(response);
+        Assert.Equal(500, response.Status); // stopped
+        // stopping it again, as an app that also stops its own source would, is harmless
+        source.Stop();
+
+        Assert.Throws<ArgumentNullException>(() => registry.AddDatabase<ConduitDb>((PgDataSource)null!));
+        Assert.Throws<ArgumentNullException>(() => ((IServiceRegistry)null!).AddDatabase<ConduitDb>(source));
+    }
+
     [Fact]
     public void ASessionSettingOfTheCallersOwnIsKept()
     {

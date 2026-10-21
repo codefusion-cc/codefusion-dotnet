@@ -293,7 +293,9 @@ public sealed class PgWriterTests : IAsyncDisposable
         var stays = Run(w, "stays", leaving.Token);
         var failing = Run(w, "taken");
         w.Start(1);
-        while (w.Queued > 0) await Task.Delay(5);
+        // an empty queue only means the loop took the group; leave once Postgres is running it
+        while ((long)(await Sql("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state = 'active' AND query LIKE 'SELECT pg_sleep(0.5)%'"))! == 0)
+            await Task.Delay(5);
         leaving.Cancel();
 
         Assert.True((await sleep).IsOk);
@@ -545,6 +547,23 @@ public sealed class PgWriterTests : IAsyncDisposable
         var dropped = await w.Command(new PgStatement("DEALLOCATE ALL")).Run(Keep, new Box());
         Assert.Equal(PgStatus.Broken, dropped.Status);
         Assert.Equal("b", await Ok(Run(w, "b")));
+        Assert.Equal(["a", "b"], await Values());
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task AWriteThatDeallocatesTheAppsOwnStatementKeepsItsGroup()
+    {
+        var w = await NewWriter();
+        // queued together: one group, the DEALLOCATE between two inserts
+        var prepared = w.Command(new PgStatement("PREPARE apps AS SELECT 1")).Run(Keep, new Box()).AsTask();
+        var a = Run(w, "a");
+        var dropped = w.Command(new PgStatement("DEALLOCATE apps")).Run(Keep, new Box()).AsTask();
+        var b = Run(w, "b");
+        w.Start(1);
+        Assert.True((await prepared).IsOk);
+        Assert.Equal("a", await Ok(a));
+        Assert.True((await dropped).IsOk);
+        Assert.Equal("b", await Ok(b));
         Assert.Equal(["a", "b"], await Values());
     }
 

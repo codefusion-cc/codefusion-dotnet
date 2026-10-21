@@ -122,7 +122,8 @@ sealed record Param(string Code, ITypeSymbol Type, ParamType Kind, bool Nullable
 /// <summary>How a parameter is bound.</summary>
 enum ParamType { Int64, Int32, Boolean, Double, Text, String, Span, Timestamp, TextArray }
 
-/// <summary>One statement's parameters, numbered as they are first used; the same value is one parameter.</summary>
+/// <summary>One statement's parameters, numbered as they are first used; the same value bound the same way is one
+/// parameter (bound as a double and as a long, it is two: the long keeps every digit).</summary>
 sealed class ParamList
 {
     readonly Dialect _dialect;
@@ -138,7 +139,7 @@ sealed class ParamList
     public string Add(Param p)
     {
         for (int i = 0; i < Items.Count; i++)
-            if (Items[i].Key == p.Key)
+            if (Items[i].Key == p.Key && Items[i].Kind == p.Kind)
             {
                 Items[i].Origins.AddRange(p.Origins);
                 return _dialect.Param(i + 1);
@@ -227,6 +228,95 @@ static class Sql
 
     /// <summary>A string literal.</summary>
     public static string String(string s) => "'" + s.Replace("'", "''") + "'";
+
+    /// <summary>
+    /// <paramref name="sql"/> with what isn't SQL's own words blanked, at the same positions: comments become spaces,
+    /// and the inside of a string literal (dollar-quoted too) or a quoted name spaces between its quotes, so a keyword
+    /// or parenthesis in them is never read as one.
+    /// </summary>
+    public static string Code(string sql)
+    {
+        var b = new StringBuilder(sql);
+        int i = 0;
+        while (i < sql.Length)
+        {
+            char c = sql[i];
+            int end;
+            if (c == '-' && At(sql, i, "--"))
+            {
+                end = sql.IndexOf('\n', i);
+                end = end < 0 ? sql.Length : end;
+                Blank(b, i, end);
+            }
+            else if (c == '/' && At(sql, i, "/*"))
+            {
+                // Postgres's block comments nest
+                int depth = 0;
+                end = i;
+                while (end < sql.Length)
+                {
+                    if (At(sql, end, "/*"))
+                    {
+                        depth++;
+                        end += 2;
+                    }
+                    else if (At(sql, end, "*/"))
+                    {
+                        end += 2;
+                        if (--depth == 0) break;
+                    }
+                    else end++;
+                }
+                end = Math.Min(end, sql.Length);
+                Blank(b, i, end);
+            }
+            else if (c is '\'' or '"')
+            {
+                // a doubled quote is one in the text; E'...' takes backslash escapes
+                bool escapes = c == '\'' && i > 0 && sql[i - 1] is 'E' or 'e' && (i == 1 || !IsWord(sql[i - 2]));
+                for (end = i + 1; end < sql.Length; end++)
+                {
+                    if (escapes && sql[end] == '\\') end++;
+                    else if (sql[end] == c)
+                    {
+                        if (end + 1 < sql.Length && sql[end + 1] == c) end++;
+                        else break;
+                    }
+                }
+                Blank(b, i + 1, Math.Min(end, sql.Length));
+                end = Math.Min(end + 1, sql.Length);
+            }
+            else if (c == '$' && (i == 0 || !IsWord(sql[i - 1])) && DollarTag(sql, i) is { } tag)
+            {
+                int close = sql.IndexOf(tag, i + tag.Length, StringComparison.Ordinal);
+                end = close < 0 ? sql.Length : close + tag.Length;
+                Blank(b, i + tag.Length, close < 0 ? sql.Length : close);
+            }
+            else end = i + 1;
+            i = end;
+        }
+        return b.ToString();
+    }
+
+    static bool At(string s, int i, string what) => string.CompareOrdinal(s, i, what, 0, what.Length) == 0;
+
+    static bool IsWord(char c) => char.IsLetterOrDigit(c) || c is '_' or '$';
+
+    static void Blank(StringBuilder b, int from, int to)
+    {
+        for (int i = from; i < to; i++)
+            if (b[i] != '\n') b[i] = ' ';
+    }
+
+    /// <summary>The tag that opens a dollar-quoted string at <paramref name="i"/> (<c>$$</c>, <c>$x$</c>), if one does:
+    /// <c>$1</c> is a parameter.</summary>
+    static string? DollarTag(string sql, int i)
+    {
+        int j = i + 1;
+        if (j < sql.Length && (char.IsLetter(sql[j]) || sql[j] == '_'))
+            while (j < sql.Length && (char.IsLetterOrDigit(sql[j]) || sql[j] == '_')) j++;
+        return j < sql.Length && sql[j] == '$' ? sql.Substring(i, j - i + 1) : null;
+    }
 }
 
 /// <summary>Gives each table reference in a statement its own alias, preferring the lambda's parameter name.</summary>

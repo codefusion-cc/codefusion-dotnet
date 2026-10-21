@@ -55,7 +55,14 @@ Fixes go into the latest release only.
 - **Tokens** (`AddJwtAuth`, `Jwt`) are HS256 only, signed with a secret of at least 32 bytes, and carry only `sub`,
   `iat` and `exp`: no `iss`, `aud` or `jti`, so any app sharing the secret accepts them. Nothing revokes one before
   its `exp` except changing the secret, which ends every session. They live 30 days unless `AddJwtAuth(secret,
-  lifetime)` says otherwise. A signature has one spelling: base64url with nonzero spare bits is refused.
+  lifetime)` says otherwise. A signature has one spelling: base64url with nonzero spare bits is refused, and it is
+  compared in constant time.
+- **A short secret** is refused unless the app passes `allowShortSecret: true` (`AddJwtAuth(secret, lifetime, true)`
+  or the `Jwt` constructor), for a deployment handed a fixed one, such as the Conduit contest's 26 bytes. An empty
+  one is refused even then. The tokens are standard HMAC-SHA256 (a key shorter than the 64-byte block is padded with
+  zeros, RFC 2104), so they verify anywhere, but every token is an offline test of a guess: a secret short or
+  guessable enough to be found lets whoever finds it sign a token for any user, and no rate limit sees the guessing.
+  Use it only when the secret isn't yours to choose, and rotate it to 32 random bytes or more when it is.
 - **Buffers.** The server's own pooled request and response buffers are reused within the process without being
   wiped, for speed: a request's bytes (a token, a password) stay in memory until a later request overwrites them.
   Arrays that go back to `ArrayPool<byte>.Shared` (buffers grown past their pool's size, the arena's large chunks)

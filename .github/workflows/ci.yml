@@ -24,16 +24,26 @@ env:
   TESTINGPLATFORM_TELEMETRY_OPTOUT: 1
 
 jobs:
+  # Release, which ships, and Debug, whose invariant and pool checks only Debug builds run; side by side, so the wall
+  # time stays one run's.
   test:
-    name: Test (${{ matrix.arch }})
+    name: Test (${{ matrix.arch }}${{ matrix.configuration == 'Debug' && ', Debug' || '' }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-24.04
             arch: x64
+            configuration: Release
           - os: ubuntu-24.04-arm
             arch: arm64
+            configuration: Release
+          - os: ubuntu-24.04
+            arch: x64
+            configuration: Debug
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            configuration: Debug
     if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
     # The client's integration and allocation tests run against it; SCRAM is the image's default for TCP logins.
@@ -58,24 +68,25 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
-      - run: dotnet build -c Release
+      - run: dotnet build -c ${{ matrix.configuration }}
       # bcrypt runs in its own job, on every framework it supports.
       - name: Test
         run: |
           for t in CodeFusion.Core.Tests CodeFusion.Http.Tests CodeFusion.Http.Generators.Tests CodeFusion.Data.Postgres.Tests CodeFusion.Data.Tests CodeFusion.Fuzz; do
-            dotnet test --project tests/$t -c Release --no-build -- --max-threads 2 --timeout 10m
+            dotnet test --project tests/$t -c ${{ matrix.configuration }} --no-build -- --max-threads 2 --timeout 10m
           done
       # The server's tests again, every server on the epoll event loops (HttpTransport.EventLoop). The allocation
       # tests name their transport in each row, so they ran in full above.
       - name: Test the event loops
-        run: CODEFUSION_HTTP_TRANSPORT=EventLoop dotnet test --project tests/CodeFusion.Http.Tests -c Release --no-build -- --max-threads 2 --timeout 10m --filter-not-class CodeFusion.Http.Tests.AllocationTests CodeFusion.Http.Tests.AppAllocationTests
+        run: CODEFUSION_HTTP_TRANSPORT=EventLoop dotnet test --project tests/CodeFusion.Http.Tests -c ${{ matrix.configuration }} --no-build -- --max-threads 2 --timeout 10m --filter-not-class CodeFusion.Http.Tests.AllocationTests CodeFusion.Http.Tests.AppAllocationTests
       - name: Pack
+        if: matrix.configuration == 'Release'
         run: |
           for p in CodeFusion.Core CodeFusion.Http CodeFusion.Data CodeFusion.Data.Postgres; do
             dotnet pack src/$p -c Release --no-build -o artifacts
           done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: matrix.arch == 'x64'
+        if: matrix.arch == 'x64' && matrix.configuration == 'Release'
         with:
           name: packages
           path: artifacts/

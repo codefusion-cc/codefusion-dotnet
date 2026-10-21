@@ -409,14 +409,16 @@ What the fixes decided:
 - A send wait's deadline is `long.MaxValue` minus its number on the object, so no two share one, and `CheckSend` reads
   the wait's values between two reads of it (a seqlock: they are set before the deadline and kept until it is
   cleared). `Expire` never acts on one: they lie past any time.
-- Each byte pays for 1/rate seconds, in doubles and clamped, but never more than `RequestTimeout` (or the grace period,
-  if longer) past the moment it came. So the rate cuts no client the request timeout wouldn't keep while it is above
-  the rate between any two of its sends (or acknowledgments), and bytes sent early buy at most that much slack. The
-  grace period still counts from the first wait.
+- Each byte pays for 1/rate seconds, in doubles and clamped (and the sum kept in doubles since the next round), but
+  never more than `RequestTimeout` (or the grace period, if longer) past the moment it came. So the rate cuts no
+  client the request timeout wouldn't keep while it is above the rate between any two of its sends (or
+  acknowledgments), and bytes sent early buy at most that much slack. The grace period still counts from the first
+  wait.
 - A required member a binder can't set is CFH0105 at the Map call. An internal field or settable auto-property is
   CFH0109, a warning at the member, once however many Map calls bind it; a private one, a readonly one or one
-  marked `[JsonIgnore]` says it isn't data, quietly. `#pragma` doesn't silence a generator's diagnostic (tried: the
-  build failed with it in place), so `CodeFusion.Http.Tests` takes CFH0109 in its `NoWarn` for `BinderRuleTests`.
+  marked `[JsonIgnore]` says it isn't data, quietly. (This round said `#pragma` can't silence a generator's
+  diagnostic. Wrong: it couldn't silence this one because it was reported at a location outside the compilation's
+  trees, fixed in the next round.)
 - CFH0004: a struct's static fields and auto-properties are checked (its instance ones are held, and checked, where
   the struct is). An entity's exemption covers its instance members only. A class that derives from an entity or an
   entity's base without being one is reported at its declaration for each view it inherits (once, at the first such
@@ -590,20 +592,21 @@ What the fixes decided:
   ThenIf's condition is computed once for all the statements under it (a nested one only when the outer holds). A
   value computed under a ThenIf is reused only by statements under it or a ThenIf inside it. A pure value bound as
   another type is computed again (`BothOf`: an inlined method's parameter bound as a long and as an int); an impure
-  one is cast from its local.
-- A value is one value by its C# text only when that text is pure: a parameter, a constant, a readonly field, a
-  property without a setter (or with init) and without a body, Nullable's Value and HasValue, a string's or an
+  one is bound in one type only (see the second review below: an inlined call's argument is a local of its own type).
+- A value is one value by its C# text only when that text is pure: a parameter (`in` and `ref readonly` too), a
+  constant, a readonly field, a class's or struct's property without a setter (or with init) and without a body
+  that is neither an interface's, abstract, virtual nor an override, Nullable's Value and HasValue, a string's or an
   array's Length, and operators that aren't user-defined over those. Anything else (a call, a settable property, a
-  field that isn't readonly, a property of another assembly) is a value per place it is written: two `Ids.Next()`
+  field that isn't readonly, a property of another assembly, a `ref` parameter) is a value per place it is written: two `Ids.Next()`
   in one insert are two parameters and two calls (`TwoCallsWrittenAlikeInOneStatementAreTwoValues`,
   `TwoCallsWrittenAlikeInOneInsertAreTwoValues`; before, one call bound twice). Such a value is known by where it is
   written, within the inlined calls it was reached through, so a lambda translated twice is still one value and an
   inlined method's argument used twice is one call (`KeyedOnce`). A statement's new values are computed in the order
-  the translator made them, which is C#'s (with the order reversed, the name took the nick's label).
-- An impure value that would run twice is refused (CFDATA001): written into another value's C# as well as bound, or
-  into two (`k` and `k + 1` with `k` an inlined call's argument), or bound under two ThenIfs neither inside the
-  other (`AValueOfACallUsedInsideAnotherIsRefused`). Copying C# text can't reuse a local, so this is the one place
-  the rule refuses rather than computes.
+  the translator made them, which is C#'s (with the order reversed, the name took the nick's label), an inlined
+  call's arguments with them, at the call.
+- An impure value that would run twice is refused (CFDATA001): written into another value's C# as well as bound
+  (a `ref Paging`'s limit and offset), or bound inside a ThenIf and again outside it. An inlined call's argument is
+  no longer one of these: it is a local computed at the call (second review, finding 8).
 - A template's argument of the row an UPDATE or DELETE writes is qualified by its table's name (a CTE's row by the
   CTE's), as in the subqueries the translator writes. A template whose subquery takes an alias the statement uses
   (`t`, or the target table unaliased) still shadows it.
@@ -612,26 +615,117 @@ What the fixes decided:
   handles NULL. Unsound only for a template declaring a nullable parameter and a non-nullable result that passes NULL
   through.
 - A class declaring no query methods gets nothing generated and nothing asked of it: no partial, no provider, any
-  generics. A query method that implements an interface's method, implicitly or explicitly, is refused (CFDATA007).
+  generics. A query method that implements an interface's method, implicitly or explicitly, is refused (CFDATA007),
+  and so is one a base declares when a subclass adds the interface (reported on the subclass).
 - UpdateIf and DeleteIf give the rows written first, then the refused ones, each by key: One and Write&lt;T&gt; answer
   the written row with the smallest key, and Refused only when none was written (`ORDER BY ... IS NULL, key`, one
   sort of the rows found; PlanTests compares with the contest's statements plus the same ORDER BY).
 - A raw SQL write moves an earlier insert's sequence when it inserts, merges or copies into the table: a quoted name
   is matched as written, a bare one in any case, with any schema or none.
-- A constant string hole after ORDER BY, GROUP BY, FROM (not IS DISTINCT FROM), JOIN, INTO, UPDATE or TABLE, beside a
-  qualifier's dot, or as an item of a SELECT, RETURNING, ORDER BY or GROUP BY list or of an INSERT's column list is
-  CFDATA010, which names `[SqlTemplate]`. Only the clause the hole is in is read, not the SQL as a whole.
+- A constant string hole only where a parameter is a syntax error is CFDATA010, which names `[SqlTemplate]`: right
+  after FROM (a table's: not IS DISTINCT FROM, nor a function's as in `substring(x FROM y)` or `extract(epoch FROM
+  y)`, told by a SELECT, DELETE, UPDATE or COPY earlier in its parentheses), JOIN, INTO, UPDATE or TABLE, beside a
+  qualifier's dot, in an INSERT's column list, and in ORDER BY or GROUP BY only as a whole item (followed by `,`,
+  `)`, ASC, DESC, NULLS, LIMIT, OFFSET or the end: `ORDER BY $1` sorts by nothing, `ORDER BY $1 = name` is a value).
+  An item of a SELECT or RETURNING list is a value. Keywords in comments and string literals are skipped. Only the
+  clause the hole is in is read, not the SQL as a whole.
 - A view's setters and constructor must be reachable from the app's assembly (`IsSymbolAccessibleWithin`), and a
   view's errors are reported where it is used when its source is another assembly's.
 - `IDataCommand.Discard` gives a command back unrun; the binder calls it when a list throws while it is read (nothing
   when the builder threw, which gave it back already). Lists aren't copied first, so a binding allocates nothing more.
-- DEALLOCATE and DISCARD ALL end the connection as the transaction-control statements do: their group is Broken (a
-  write's outcome unknown) and the next connection parses afresh. Clearing the cache mid-batch would leave the later
-  statements of the batch bound by names the server forgot.
+- DEALLOCATE ALL, DISCARD ALL and a DEALLOCATE of one of the client's own statements end the connection as the
+  transaction-control statements do: their group is Broken (a write's outcome unknown) and the next connection
+  parses afresh. Clearing the cache mid-batch would leave the later statements of the batch bound by names the
+  server forgot. One DEALLOCATE's tag doesn't name the statement: the SQL the client sent does, so the app's own
+  `DEALLOCATE myplan` leaves the connection be, and SQL it can't read so counts as the client's. A DEALLOCATE that a
+  function or a `DO` block runs (`EXECUTE 'DEALLOCATE ALL'`) completes as `SELECT` or `DO` and isn't seen: the next
+  Bind of a dropped statement fails with 26000.
 - Without recv, a socket readable with nothing to read is looked at once more before it counts as closed.
 - The Postgres tests wait for a loop to sleep (`PgLoops.Sleeping`, for tests) instead of sleeping 50 ms, and the
   backoff test checks each wait from when its reads started and ended, which holds on any machine: four connects,
   each at least three quarters of 40 ms doubled each time after the one before, and more reads than connects.
+
+### Second review of the data layer fixes
+
+Each test was red on the code before its fix (Release), then green in Debug and Release. A test that pins behavior
+the code already had (no fix) was proven red by breaking that code on purpose, as noted.
+
+| Finding | Test | Red before |
+|---|---|---|
+| a query taking `in Paging` (or `ref readonly`) refused: an `in` parameter counted as impure, so its limit and offset "ran twice" | `GeneratorTests.InAndRefReadonlyParametersReadTheSameEachTime` | 2 CFDATA001 |
+| CFDATA010 refused values: a SELECT or RETURNING item, `substring(x FROM $1)`, `extract(epoch FROM $1)`, `ORDER BY $1 = name`, a keyword in a comment or a string literal before the hole | `AConstantStringWhereSqlExpectsANameIsRefused` (12 refused, 11 value places, IS [NOT] DISTINCT FROM among them) | 8 holes refused that are values |
+| an interface's, abstract, virtual or overriding property taken as pure: `seq.Next` written twice bound once | `APropertyAnOverrideOrAnImplementationMayComputeIsAValuePerPlace` | `VALUES ($1, $1, $2)` |
+| an impure value first bound as a double, then cast back to a long: 2^53 + 1 stored as 2^53; and one statement binding a value as both made one parameter of the first type | `AValueBoundAsADoubleAndAsALongKeepsEveryDigitOfTheLong`, `OperatorTests.AKeyPast2To53ComparedAsADoubleIsWrittenWithEveryDigit` | `(long)__v1_0` in the interceptor; 9007199254740992 for 9007199254740993 |
+| an overload's statements documented by its type suffix ("ById, statement Int64") | `AnOverloadsStatementsAreDocumentedByTheirNumber` | "Touch, statement Int64" |
+| DEALLOCATE of the app's own statement broke the connection and its group | `PgReaderTests.ADeallocateOfTheAppsOwnPreparedStatementKeepsTheConnection` (4 spellings), `PgWriterTests.AWriteThatDeallocatesTheAppsOwnStatementKeepsItsGroup`, `PgPropertyTests.ADeallocate*` | Broken |
+| a query method of a base implementing an interface a subclass adds wasn't refused | `AQueryMethodOfABaseImplementingAnInterfaceTheSubclassAddsIsRefused` | no error |
+| an inlined method's impure argument ran only where the body bound it: never when unused, only when a ThenIf held | `AnInlinedMethodsArgumentIsComputedAtTheCallLikeEveryArgumentInCSharp`, `OperatorTests.AnInlinedMethodsArgumentRunsOnceWhetherItsBodyUsesItOrNot` | 1 call for 3; `Keys.Calls` grew by 0 |
+| a value bound under an inner ThenIf, then under its outer one, refused, with a message saying "neither inside the other" | `AValueUnderAnInnerThenIfAndThenUnderItsOuterOneIsComputedOnce` | CFDATA001 |
+| the idle test's second half raced the 100 ms `idle_session_timeout` of its new connection | `PgReaderTests.AConnectionPostgresEndedWhileIdleIsReplacedAndTheNextReadSucceeds` | through a proxy delaying the server's bytes 60 ms and a 70 ms stall before the SET: Broken, FATAL 57P05, 3 runs of 3 (the new shape passed the same 3) |
+| the throwing-list test could fail only in Debug | `OperatorTests.AListThatThrowsWhileItIsReadGivesItsCommandBack` (the job given back is the next one rented, its generation 2 on) | with the binder's `Discard()` taken out: red in Release |
+| raw-SQL insert detection: no case for ONLY, `COPY (SELECT …) TO`, or another schema | `AnInsertedKeyThatIsntTheRowsIsRefused` (MERGE INTO ONLY, COPY out), `AnSqlInsertMovesTheKeyOfARowOfItsSchemaOnly` | each red with the code broken: ONLY dropped from the pattern, COPY's query read as its FROM's table, the schema compare skipped |
+| found on the way: a call in a query method inlined twice made once for both when it was in a later statement of its body (a Then's argument, an Update's Where): two pets given one key | `ACallInAMethodInlinedTwiceIsMadeOncePerInlining` | 1 call for 2 (red on the code before this round too) |
+
+What the fixes decided:
+
+- An `in` or `ref readonly` parameter is pure: the code that reads it can't assign it. A `ref` one stays impure.
+- A property is pure only when it is a non-virtual, non-abstract, non-override auto-property of a class or struct
+  declared in source (with no setter, or init).
+- An inlined method's impure argument (a query method's, or a static method's with an expression body) is computed
+  where the call is, under the call's ThenIf, in the order C# makes it, whether the body uses it or not: a local in
+  the argument's own type (`var`), which the body reads. So the body may use it under a ThenIf, after an inner one,
+  and inside other values (`k + 1`, which was refused before) and still run it once; each use converts from its own
+  type, so a long bound as a double too keeps every digit. Any other impure value is bound in one type only; bound
+  as two, it would be refused (CFDATA001) rather than rounded, though no query found reaches that.
+- One statement's parameters are one per value and wire type: the same value bound as a double and as a long is two
+  parameters (before, one parameter of the first type served both: a long bound as a double was rounded, and a
+  column read as the other type threw).
+- The QuerySql doc comment of a statement names its method and its number, as before the last round.
+- The inlined calls a value was reached through travel with the body's `Env`, not a stack the translator leaves when
+  the call's own translation ends: a Then's argument and an operator's lambda are translated later, and kept the
+  same site for every inlining of the method.
+
+### Last HTTP review, and gaps the Conduit port found
+
+Each test was red on the code before its fix (Release), then green in Debug and Release.
+
+| Finding | Test | Red before |
+|---|---|---|
+| `Paid` stored each sum back as a long, so a receive worth less than 1 ms earned nothing: at a configured rate over about 1000 B/s, a client sending small segments faster than the rate was cut | `SlowClientTests.BytesWorthLessThanAMillisecondEachStillAddUp` | 1000 one-byte receives at 0.5 ms each paid 0, not 500 |
+| CFH0109 (and every generator diagnostic) came with a location outside the compilation's trees, which `#pragma` and `[SuppressMessage]` can't reach | `EdgeTests.APragmaAtTheMemberSilencesItsWarning`; the build of `BinderRuleTests` with a `#pragma` and a `[SuppressMessage]` in place of the project's `NoWarn` | `SourceTree` null, not suppressed |
+| a secret under 32 bytes had no way in, though a deployment may be handed one (the contest's is 26) | `JwtTests.AShortSecretIsTakenOnlyWhenAllowed` (1, 26, 31), `EveryKeyLengthSignsAsTheStandardHmac` (1 to 200 bytes against `HMACSHA256.HashData`), `NoSecretIsTakenEmptyEvenWhenShortOnesAreAllowed` | `ArgumentException` with the opt-in |
+| `AddDatabase` took only a `PostgresDatabase`, so an app that built its `PgDataSource` (its own loops or failure log) couldn't register it | `RegistrationTests.AddDatabaseTakesASourceTheAppBuiltItself` | no overload (with one that registered nothing: no singleton) |
+| a lock timeout (55P03) or a statement timeout (57014) never reached `OnFailure`: only Broken, Failed and ReaderFailed did, in both the reply's path and the awaited row's | `FailureTests.ALockHeldTooLongIsBusyReportedAndTheWriteDoesNotHappen`, `AStatementPastItsTimeoutIsBusyAndReported` | nothing reported |
+
+Refuted: an aggregate of no rows came out as `null` (`{"tags":null}`). `array_agg` is NULL on zero rows, but the
+correlated form is `ARRAY(...)`, never NULL, and `RawJson` reads a NULL as `[]` in the reply (`RowValues.RawValue`)
+and in the awaited row (`RowValues.Raw`), as it has from the first commit. `OperatorTests.AsJsonOfNoRowsIsAnEmptyList`
+passed before any change and now pins it; with `RawValue` writing null it goes red. Only a `RawJson?` member reads
+NULL as null, as its type says.
+
+What the fixes decided:
+
+- `Paid` takes and returns doubles; `_bodyPaid` and `_sendPaid` are doubles, cast only where a deadline is made.
+- The generator reports its diagnostics from an output of their own, combined with the compilation, at
+  `Location.Create(tree, span)` of the tree with the member's path. The sources stay an output of their own, so an
+  edit that changes no endpoint still writes no source again. `CodeFusion.Http.Tests` dropped CFH0109 from its
+  `NoWarn`: `BinderRuleTests` silences `Signup.IsAdmin` with `#pragma` and `Search.Admin` with `[SuppressMessage]`
+  (taken out, the build fails with both).
+- `allowShortSecret` is a parameter of a third `Jwt` constructor and `AddJwtAuth` overload, never a default, and not
+  a minimum length: an app opts in by name, and an empty secret stays refused. The signature check is unchanged
+  (`FixedTimeEquals`). SECURITY.md says the risk.
+- `AddDatabase(source)` registers the source, a context per connection on it and its stop; the other overload opens
+  its database and calls it. Stopping a source twice is harmless.
+- `DataSource.Reports` is the one list of statuses `OnFailure` hears of, read by both paths: the timeouts are the
+  database's own trouble (contention, a slow plan) even when a client's load caused them, and an app logging only
+  its 500s missed its 503s. A request whose client left still reports nothing.
+- Timing: `AResponseReadFastAtFirstDoesNotBuyALongCrawl` has a 3 s request timeout (its fast part may pause 3 s), its
+  cut lands at about 7 s, and the bound is 11 s (before the fix the crawl kept it past 14 s).
+  `AResetAfterAFinStillAbandonsTheRequest` polls `IsAborted` for up to 5 s instead of waiting 300 ms.
+  `ACallbackThatBlocksWhenItsClientResetsDoesNotStallTheHeartbeat` moved to `BlockingCloseTests` in the `quiet`
+  collection, which runs alone, and waits for its 3 s callback to end before the next test there.
+- CI runs the test projects in Debug as well, as matrix entries beside Release on both architectures, so the Debug
+  invariant and pool checks run on Linux and the wall time stays one run's. Debug skips the pack.
 
 ### Release cost
 

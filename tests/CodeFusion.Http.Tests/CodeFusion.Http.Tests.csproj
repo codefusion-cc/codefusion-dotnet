@@ -13,8 +13,8 @@
     <IsPackable>false</IsPackable>
     <!-- Inline arrays read clearer in test data, and a handler's per-connection writer lives as long as its
          pooled connection, as in an app. Body and query structs are fields by design, and Reference/ is the
-         contest's code as it was. BinderRuleTests keeps internal members a body and a query must not set (CFH0109). -->
-    <NoWarn>$(NoWarn);CA1861;CA1001;CA1051;CA1805;CFH0109</NoWarn>
+         contest's code as it was. -->
+    <NoWarn>$(NoWarn);CA1861;CA1001;CA1051;CA1805</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

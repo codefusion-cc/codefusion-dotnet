@@ -60,6 +60,7 @@ CodeFusion.Http.HttpApp.StopAsync() -> System.Threading.Tasks.Task!
 CodeFusion.Http.HttpAppBuilder
 CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret) -> CodeFusion.Http.HttpAppBuilder!
 CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret, System.TimeSpan lifetime) -> CodeFusion.Http.HttpAppBuilder!
+CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret, System.TimeSpan lifetime, bool allowShortSecret) -> CodeFusion.Http.HttpAppBuilder!
 CodeFusion.Http.HttpAppBuilder.AddPerConnection<TService>(System.Func<TService!>! factory) -> void
 CodeFusion.Http.HttpAppBuilder.AddSingleton<TService>(TService! instance) -> void
 CodeFusion.Http.HttpAppBuilder.Build() -> CodeFusion.Http.HttpApp!
@@ -194,6 +195,7 @@ CodeFusion.Http.Jwt.Issue(long userId, long now, System.Span<byte> dest) -> int
 CodeFusion.Http.Jwt.Issue(long userId, System.Span<byte> dest) -> int
 CodeFusion.Http.Jwt.Jwt(string! secret) -> void
 CodeFusion.Http.Jwt.Jwt(string! secret, System.TimeSpan lifetime) -> void
+CodeFusion.Http.Jwt.Jwt(string! secret, System.TimeSpan lifetime, bool allowShortSecret) -> void
 CodeFusion.Http.Jwt.Lifetime.get -> System.TimeSpan
 CodeFusion.Http.Jwt.Verify(System.ReadOnlySpan<byte> token) -> long
 CodeFusion.Http.Jwt.Verify(System.ReadOnlySpan<byte> token, long nowMilliseconds) -> long
