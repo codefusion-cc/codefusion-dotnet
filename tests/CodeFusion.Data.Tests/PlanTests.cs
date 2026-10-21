@@ -68,14 +68,25 @@ public sealed class PlanTests
         ["DeleteArticle"] = (ConduitDb.QuerySql.DeleteArticle, ConduitDb.QuerySql.DeleteArticleParameters.ToArray(), Fixed(Sql.DeleteArticle,
             ("WHERE slug = $2)", "WHERE slug = $2 FOR UPDATE)"), ("WHERE id = (SELECT id FROM t WHERE author_id = $1))", "WHERE id IN (SELECT id FROM t WHERE author_id = $1) RETURNING id)"),
             ("SELECT author_id FROM t", "SELECT t.author_id, d.id FROM t LEFT JOIN d ON d.id = t.id ORDER BY d.id IS NULL, t.id")), ["int8", "text"]),
-        ["Favorite (Sql)"] = (ConduitDb.QuerySql.Favorite, ConduitDb.QuerySql.FavoriteParameters.ToArray(), Sql.Favorite, ["int8", "text"]),
-        ["Unfavorite (Sql)"] = (ConduitDb.QuerySql.Unfavorite, ConduitDb.QuerySql.UnfavoriteParameters.ToArray(), Sql.Unfavorite, ["int8", "text"]),
         ["CommentsOf"] = (ConduitDb.QuerySql.CommentsOf, ConduitDb.QuerySql.CommentsOfParameters.ToArray(), Sql.Comments, ["int8", "text"]),
         ["CreateComment"] = (ConduitDb.QuerySql.CreateComment, ConduitDb.QuerySql.CreateCommentParameters.ToArray(), Sql.CreateComment, ["int8", "text", "text"]),
         ["DeleteComment"] = (ConduitDb.QuerySql.DeleteComment, ConduitDb.QuerySql.DeleteCommentParameters.ToArray(), Fixed(Sql.DeleteComment,
             ("AND a.slug = $3)", "AND a.slug = $3 FOR UPDATE OF c)"), ("WHERE id = (SELECT id FROM c WHERE author_id = $1))", "WHERE id IN (SELECT id FROM c WHERE author_id = $1) RETURNING id)"),
             ("SELECT author_id FROM c", "SELECT c.author_id, d.id FROM c LEFT JOIN d ON d.id = c.id ORDER BY d.id IS NULL, c.id")), ["int8", "int8", "text"]),
         ["AllTags"] = (ConduitDb.QuerySql.AllTags, ConduitDb.QuerySql.AllTagsParameters.ToArray(), Sql.Tags, []),
+    };
+
+    /// <summary>
+    /// Compiled statements whose plan is another shape than the contest's, as their SQL is (the favorite toggles read
+    /// the article from the CTE of the row found, which the contest's reads again by its key): each reads no index
+    /// and no table the contest's doesn't, and no more often.
+    /// </summary>
+    public static readonly TheoryData<string> Fewer = new(FewerPairs.Keys);
+
+    static Dictionary<string, (string Sql, DataType[] Types, string Reference, string[] ReferenceTypes)> FewerPairs => new()
+    {
+        ["Favorite"] = (ConduitDb.QuerySql.Favorite, ConduitDb.QuerySql.FavoriteParameters.ToArray(), Sql.Favorite, ["int8", "text"]),
+        ["Unfavorite"] = (ConduitDb.QuerySql.Unfavorite, ConduitDb.QuerySql.UnfavoriteParameters.ToArray(), Sql.Unfavorite, ["int8", "text"]),
     };
 
     // The contest's statements with what the compiled ones do more: One reads one row (LIMIT 1); a conditional write
@@ -127,6 +138,42 @@ public sealed class PlanTests
         Assert.True(theirs == ours, $"{name}: the contest's plan\n{theirs}\nthe compiled one\n{ours}");
     }
 
+    [Theory]
+    [MemberData(nameof(Fewer))]
+    public async Task TheCompiledQueryReadsNoMoreThanTheHandWrittenOne(string name)
+    {
+        TestDb.Require();
+        await EnsureSeed();
+        var (sql, types, reference, referenceTypes) = FewerPairs[name];
+        var ours = Scans(await PlanJson(sql, types.Select(TypeName).ToArray()));
+        var theirs = Scans(await PlanJson(reference, referenceTypes));
+        string both = $"{name}: the contest's reads\n{string.Join("\n", theirs)}\nthe compiled one's\n{string.Join("\n", ours)}";
+        // no index or table read that theirs doesn't read (a delete may take another of their indexes, the primary key
+        // where theirs takes the article's and filters), and no more reads
+        foreach (var scan in ours) Assert.True(theirs.Any(t => Where(t) == Where(scan)), both);
+        Assert.True(ours.Count <= theirs.Count, both);
+        TestContext.Current.TestOutputHelper?.WriteLine(both);
+    }
+
+    /// <summary>A scan's relation and index, without the kind of scan.</summary>
+    static string Where(string scan) => scan.Substring(0, scan.IndexOf(" | ", StringComparison.Ordinal));
+
+    /// <summary>The scans of a plan, each as its relation, index (or none) and kind of scan.</summary>
+    static List<string> Scans(JsonElement node)
+    {
+        var all = new List<string>();
+        void Walk(JsonElement n)
+        {
+            if (n.TryGetProperty("Relation Name", out var rel))
+                all.Add($"{rel.GetString()} {(n.TryGetProperty("Index Name", out var ix) ? ix.GetString() : "-")} | {n.GetProperty("Node Type").GetString()}");
+            if (n.TryGetProperty("Plans", out var plans))
+                foreach (var p in plans.EnumerateArray()) Walk(p);
+        }
+        Walk(node);
+        all.Sort(StringComparer.Ordinal);
+        return all;
+    }
+
     /// <summary>A plan's shape.</summary>
     [Fact]
     public async Task ThePlanShapeTellsADifferentPlanApart()
@@ -165,6 +212,14 @@ public sealed class PlanTests
     /// <summary>The generic plan of <paramref name="sql"/>, as an indented outline of its shape.</summary>
     static async Task<string> Plan(string sql, string[] types)
     {
+        var b = new StringBuilder();
+        Outline(await PlanJson(sql, types), 0, b);
+        return b.ToString();
+    }
+
+    /// <summary>The generic plan of <paramref name="sql"/>, as EXPLAIN writes it.</summary>
+    static async Task<JsonElement> PlanJson(string sql, string[] types)
+    {
         await using var db = TestDb.Admin(Schema);
         await using var conn = await db.OpenConnectionAsync();
         foreach (var set in new[] { "SET plan_cache_mode = force_generic_plan", "SET jit = off", "SET max_parallel_workers_per_gather = 0" })
@@ -175,9 +230,7 @@ public sealed class PlanTests
         string json = (string)(await explain.ExecuteScalarAsync())!;
         await Run(conn, $"DEALLOCATE {name}");
         using var doc = JsonDocument.Parse(json);
-        var b = new StringBuilder();
-        Outline(doc.RootElement[0].GetProperty("Plan"), 0, b);
-        return b.ToString();
+        return doc.RootElement[0].GetProperty("Plan").Clone();
     }
 
     static async Task Run(NpgsqlConnection conn, string sql)

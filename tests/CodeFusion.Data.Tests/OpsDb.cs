@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
 using CodeFusion;
@@ -32,6 +33,9 @@ public sealed class Person
 
     [JoinTable("person_labels")]
     public Many<Label> Labels { get; init; }
+
+    /// <summary>The same labels, as the link table's own rows.</summary>
+    public Many<PersonLabel> Labelings { get; init; }
 }
 
 public sealed class Pet
@@ -51,9 +55,10 @@ public sealed class Label
 
 public sealed class PersonLabel
 {
-    public long PersonId { get; init; }
+    /// <summary>With LabelId, the key: [Key] on each.</summary>
+    [Key] public long PersonId { get; init; }
     public Person Person { get; init; } = null!;
-    public int LabelId { get; init; }
+    [Key] public int LabelId { get; init; }
     public Label Label { get; init; } = null!;
 }
 
@@ -146,6 +151,8 @@ public readonly record struct Settable
 }
 
 public readonly record struct Trimmed(Utf8 Both, Utf8 Start, Utf8 End);
+
+public readonly record struct Tally(long Id, long Count, bool Has);
 
 /// <summary>The spec's slug rule, in the functions of Utf8Operators: it runs as C# too.</summary>
 public static class Slugs
@@ -450,6 +457,33 @@ public sealed partial class OpsDb : DataContext<Postgres>
     /// <summary>Each person of this age a pet keyed by their own id; nothing given back.</summary>
     public Write PetsForAge(int age) =>
         People.Where(p => p.Age == age).Then(p => Insert(Pets, new Pet { Id = p.Id + 50000, OwnerId = p.Id, Name = p.Name, Legs = 1 }).OrIgnore());
+
+    // ---------- reads of the table written, as the write left it ----------
+
+    /// <summary>A label for the person, and their labels counted after it, in one statement: the snapshot's count
+    /// corrected by the label written (or there already).</summary>
+    public Write<Tally> GiveLabel(Utf8 name, int label) =>
+        People.Where(p => p.Name == name).Then(p => Insert(PersonLabels, new PersonLabel { PersonId = p.Id, LabelId = label }).OrIgnore())
+            .Select(p => new Tally(p.Id, p.Labelings.Count(), p.Labelings.Any(l => l.LabelId == label)));
+
+    /// <summary>A count of another label than the one written: it counts the row written only when the two are one.</summary>
+    public Write<Tally> GiveLabelCountOther(Utf8 name, int label, int other) =>
+        People.Where(p => p.Name == name).Then(p => Insert(PersonLabels, new PersonLabel { PersonId = p.Id, LabelId = label }).OrIgnore())
+            .Select(p => new Tally(p.Id, p.Labelings.Count(l => l.LabelId == other), p.Labelings.Where(l => l.LabelId == other).Any()));
+
+    public Write<Tally> TakeLabel(Utf8 name, int label) =>
+        People.Where(p => p.Name == name).Then(p => PersonLabels.Where(l => l.PersonId == p.Id && l.LabelId == label).Delete())
+            .Select(p => new Tally(p.Id, p.Labelings.Count(), p.Labelings.Any(l => l.LabelId == label)));
+
+    /// <summary>A delete of the labels above a number, which no key fixes: the rows gone are counted.</summary>
+    public Write<Tally> TakeLabelsAbove(Utf8 name, int above, int probe) =>
+        People.Where(p => p.Name == name).Then(p => PersonLabels.Where(l => l.PersonId == p.Id && l.LabelId > above).Delete())
+            .Select(p => new Tally(p.Id, p.Labelings.Count(), p.Labelings.Any(l => l.LabelId == probe)));
+
+    /// <summary>An insert without OrIgnore: the row written is the one more, whatever its columns.</summary>
+    public Write<Tally> AddPetCounted(Utf8 name, long id) =>
+        People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { Id = id, OwnerId = p.Id, Name = p.Name, Legs = 3 }))
+            .Select(p => new Tally(p.Id, p.Pets.Count(x => x.Legs > 2), p.Pets.Any(x => x.Name == p.Name)));
 
     // ---------- SQL ----------
 

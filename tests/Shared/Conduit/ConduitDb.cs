@@ -50,16 +50,16 @@ public sealed partial class ConduitDb : DataContext<Postgres>
     public One<ProfileView> Profile(Utf8 username, long viewer) =>
         Users.Where(u => u.Username == username).Select(u => ProfileView.Of(u, viewer)).One();
 
-    /// <summary>The follow written from the user found by name, in one statement; the profile as found, now followed.</summary>
+    /// <summary>The follow written from the user found by name, and the profile as the follow left it, in one statement.</summary>
     public Write<ProfileView> Follow(long viewer, Utf8 username) =>
         Users.Where(u => u.Username == username)
             .Then(u => Insert(Follows, new Follow { FollowerId = viewer, FolloweeId = u.Id }).OrIgnore())
-            .Select(u => new ProfileView(u.Username, u.Bio, u.Image, true));
+            .Select(u => ProfileView.Of(u, viewer));
 
     public Write<ProfileView> Unfollow(long viewer, Utf8 username) =>
         Users.Where(u => u.Username == username)
             .Then(u => Follows.Where(f => f.FollowerId == viewer && f.FolloweeId == u.Id).Delete())
-            .Select(u => new ProfileView(u.Username, u.Bio, u.Image, false));
+            .Select(u => ProfileView.Of(u, viewer));
 
     // ---------- article lists ----------
 
@@ -142,21 +142,18 @@ public sealed partial class ConduitDb : DataContext<Postgres>
     public One<long> DeleteArticle(Utf8 slug, long viewer) =>
         Articles.Where(a => a.Slug == slug).DeleteIf(a => a.AuthorId == viewer).Select(a => a.AuthorId).One();
 
-    public Write<ArticleView> Favorite(long viewer, Utf8 slug) => Sql<ArticleView>(
-        $"WITH t AS (SELECT id FROM articles WHERE slug = {slug}), " +
-        $"w AS (INSERT INTO favorites (user_id, article_id) SELECT {viewer}, id FROM t ON CONFLICT DO NOTHING) " +
-        $"SELECT a.slug, a.title, a.description, a.body, a.created_at, a.updated_at, {TagList()}, " +
-        $"({FavoritesCount()} + (NOT EXISTS (SELECT 1 FROM favorites f WHERE f.article_id = a.id AND f.user_id = {viewer}))::int), true, " +
-        $"u.username, u.bio, u.image, ({viewer} <> 0 AND EXISTS (SELECT 1 FROM follows fo WHERE fo.follower_id = {viewer} AND fo.followee_id = a.author_id)) " +
-        $"FROM articles a JOIN users u ON u.id = a.author_id WHERE a.id = (SELECT id FROM t)").Write();
+    /// <summary>The favorite written from the article found by slug, and the article as the favorite left it, in one
+    /// statement: its count is the snapshot's, corrected by the favorite (written now, there before, or by a concurrent
+    /// request), and favorited is known.</summary>
+    public Write<ArticleView> Favorite(long viewer, Utf8 slug) =>
+        Articles.Where(a => a.Slug == slug)
+            .Then(a => Insert(Favorites, new Favorite { UserId = viewer, ArticleId = a.Id }).OrIgnore())
+            .Select(a => ArticleView.Of(a, viewer));
 
-    public Write<ArticleView> Unfavorite(long viewer, Utf8 slug) => Sql<ArticleView>(
-        $"WITH t AS (SELECT id FROM articles WHERE slug = {slug}), " +
-        $"w AS (DELETE FROM favorites WHERE user_id = {viewer} AND article_id = (SELECT id FROM t)) " +
-        $"SELECT a.slug, a.title, a.description, a.body, a.created_at, a.updated_at, {TagList()}, " +
-        $"({FavoritesCount()} - (EXISTS (SELECT 1 FROM favorites f WHERE f.article_id = a.id AND f.user_id = {viewer}))::int), false, " +
-        $"u.username, u.bio, u.image, ({viewer} <> 0 AND EXISTS (SELECT 1 FROM follows fo WHERE fo.follower_id = {viewer} AND fo.followee_id = a.author_id)) " +
-        $"FROM articles a JOIN users u ON u.id = a.author_id WHERE a.id = (SELECT id FROM t)").Write();
+    public Write<ArticleView> Unfavorite(long viewer, Utf8 slug) =>
+        Articles.Where(a => a.Slug == slug)
+            .Then(a => Favorites.Where(f => f.UserId == viewer && f.ArticleId == a.Id).Delete())
+            .Select(a => ArticleView.Of(a, viewer));
 
     // ---------- comments ----------
 

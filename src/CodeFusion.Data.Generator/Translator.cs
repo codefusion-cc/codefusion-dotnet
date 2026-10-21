@@ -653,7 +653,8 @@ sealed partial class Translator
     }
 
     public ColumnInfo KeyOf(EntityInfo e, Location? at) =>
-        e.Key ?? throw new Refused(at, Diagnostics.BadEntity, e.Type.Name, "it has no key (an Id property or [Key]) for this query");
+        e.Key ?? throw new Refused(at, Diagnostics.BadEntity, e.Type.Name, e.KeyColumns.Count > 1
+            ? "its key is of several columns ([Key] on each), and this query needs a key of one" : "it has no key (an Id property or [Key]) for this query");
 
     /// <summary>The row a one-navigation leads to, joined into the row's select once.</summary>
     Row Navigate(Row row, OneNav nav, Location at)
@@ -801,6 +802,11 @@ sealed partial class Translator
 
     SqlValue Logic(string l, string r, string op, ITypeSymbol type, bool nullIsFalse)
     {
+        // a constant side decides, or leaves the other (true AND x is x, false OR x is x, whatever x is, NULL too)
+        string absorbs = op == " AND " ? D.False : D.True, neutral = op == " AND " ? D.True : D.False;
+        if (l == absorbs || r == absorbs) return new SqlValue(absorbs, type, false);
+        if (l == neutral) return new SqlValue(r, type, false, nullIsFalse);
+        if (r == neutral) return new SqlValue(l, type, false, nullIsFalse);
         // a AND b AND c stays flat; a mix gets parentheses
         string other = op == " AND " ? " OR " : " AND ";
         return new SqlValue(Sql.Wrap(l, other) + op + Sql.Wrap(r, other), type, false, nullIsFalse);
@@ -821,6 +827,9 @@ sealed partial class Translator
         // an operand that is itself a comparison or a condition needs its parentheses: SQL's comparisons don't chain
         string a = Sql.Group(Operand(l, at)), b = Sql.Group(Operand(r, at));
         bool ln = MayBeNull(l), rn = MayBeNull(r);
+        // the same column or parameter on both sides, never NULL: the answer is known (a row written from the row
+        // found holds its key, t.id = t.id)
+        if (a == b && !ln && !rn && Sql.Simple(a)) return new SqlValue(equal ? D.True : D.False, type, false);
         // C#'s == holds for two nulls and is false against one, where SQL's = is NULL: against one that can't be
         // NULL, = is false there as a condition (and an index serves it); two that can need the null-safe form
         if (equal && ln != rn) return new SqlValue($"{a} = {b}", type, false, nullIsFalse: true);

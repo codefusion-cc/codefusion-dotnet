@@ -817,11 +817,55 @@ What it decided:
 - Refused: operators before Then other than Where; an update, a conditional write, SQL, an insert of a query's rows
   or a unit as the write; a write to the table the rows are found in (UpdateIf and DeleteIf write those); Then in a
   unit; a dialect without writable CTEs (`SqlDialectAttribute.WritableCtes`, false for SQLite).
-- The statement reads one snapshot, from before the write, so the Select may not read the table written (a join, a
-  navigation's subquery or a `Single`): refused, as it would show the table as it was. Templates are SQL the
-  generator doesn't read and aren't checked.
+- The statement reads one snapshot, from before the write, so the Select reads the table written only by Count and
+  Any (below); a join, a navigation's subquery or a `Single` into it are refused, as they would show the table as it
+  was. Templates are SQL the generator doesn't read and aren't checked.
 - Of several rows found, each is written from and the reply is one of them, in no set order (the contest's has none).
-- The Conduit context's Follow and Unfollow are this LINQ, with `following` given as written.
+- The Conduit context's Follow and Unfollow are this LINQ.
+
+**A count corrected within the snapshot** (`Translator.Corrected`, `CorrectedReadTests`). The Select after Then may
+read the table its write changes through `Count` and `Any` (with or without a predicate, after Where) of a
+navigation: the snapshot's answer, corrected by what the write did to the rows counted, so
+`Articles.Where(...).Then(a => Insert(Favorites, ...).OrIgnore()).Select(a => ArticleView.Of(a, viewer))` gives the
+count with the favorite and `favorited` true, in one statement. Red before: such a Select refused (`a read of
+person_labels in the Select after Then`).
+
+| Write | Any of the rows P holds for | Count |
+|---|---|---|
+| insert of r | P(r) or any of the snapshot's | the snapshot's, and one if P(r) |
+| insert of r, OrIgnore (P reads r's key only) | P(r) or any of the snapshot's | the snapshot's, and one if P(r) and the snapshot holds no row of r's key |
+| delete of the rows D holds for | any of the snapshot's where D doesn't hold | the snapshot's less those D holds for (one at most when D fixes the key: an EXISTS) |
+
+| Test | What it pins |
+|---|---|
+| `ACountAfterAnInsertCountsTheRowOnceWhetherItWasThereOrNot` | a new row counted, one there before counted once, a third |
+| `ACountOfOtherRowsCountsTheRowWrittenOnlyWhenItIsOne` | `Count(l => l.LabelId == other)` and `Where(...).Any()`: one more only when the label written is the one counted |
+| `ACountAfterADeleteLeavesTheRowsDeletedOut` | the row deleted not counted, gone already, another |
+| `ADeleteNoKeyFixesCountsTheRowsGone` | `label_id > n` deletes several: counted and tested with NOT COALESCE(D) |
+| `AnInsertWithoutOrIgnoreIsTheOneMore` | a predicate on a column only a plain insert sets; a conflict is 409 |
+| `ConcurrentWritesOfTheSameRowAllCountItOnce` | 8 callers on two writer connections, 10 rounds, insert then delete: every reply counts the row once (or not at all), though a snapshot may miss the write that did it (counting the rows the write changed would give the others the count without it) |
+| `ShapeGeneratorTests`: Take before Count, a predicate on a column not of the key after OrIgnore, OrIgnore without the whole key, an insert that doesn't set the navigation's key | refused |
+
+What it decided:
+
+- P(r) is translated with the inserted row's values for the row's columns, and folded where it is known: the same
+  column or parameter on both sides of `=` (never NULL) is true (`t.id = t.id`, `$2 = $2`), and true or false on one
+  side of AND or OR decides it. So Follow's `following` is `$2 <> 0` (the LINQ's `viewer != 0 && ...`, where the
+  contest writes `true`), Unfollow's `false`, Favorite's count `count + CASE WHEN NOT EXISTS (...) THEN 1 ELSE 0 END`
+  (the contest's `(NOT EXISTS (...))::int`), Unfavorite's `count - CASE WHEN EXISTS (...)`.
+- With OrIgnore the row of r's key is there after the statement, r or another written before (a concurrent writer's
+  too: ON CONFLICT waits for it and skips), so P may read only r's key, which that row has alike; anything else is
+  refused. The key is `[Key]` on each of the entity's key columns (several make one key; `EntityInfo.KeyColumns`), and
+  the insert's conflict target is that key (`ON CONFLICT (user_id, article_id) DO NOTHING`), so a conflict on another
+  unique key is an error, not a skip the Select would count as the row. Without OrIgnore r is new, and P may read any
+  column it sets.
+- A delete's D is translated on the counted row: when every condition of D is one of P's, none is left (`false`, 0).
+- Only Count and Any of a navigation are corrected: Take before them, AsJson or a Select of the written table's rows,
+  a join or Single into it, and a navigation through it as a join table stay refused.
+- The Conduit context's Favorite and Unfavorite are this LINQ (`[Key]` on Follow's and Favorite's two columns), Follow
+  and Unfollow give `ProfileView.Of(u, viewer)`. Their plans (`PlanTests.TheCompiledQueryReadsNoMoreThanTheHandWrittenOne`)
+  read no index the contest's doesn't and fewer rows: the article from the CTE, where the contest's reads it again by
+  its key, and Unfavorite's delete by the whole primary key.
 
 ### Release cost
 

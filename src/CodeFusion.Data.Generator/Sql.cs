@@ -299,6 +299,10 @@ static class Sql
         }
         return false;
     }
+    /// <summary>Whether <paramref name="sql"/> is a column, a parameter or a number: the same text is the same value
+    /// wherever it is read in a statement (a call could be volatile, and isn't one).</summary>
+    public static bool Simple(string sql) => sql.Length > 0 && Atomic(sql) && sql.IndexOf('(') < 0 && sql.IndexOf('\'') < 0;
+
     /// <summary><paramref name="sql"/> in parentheses unless it is one term.</summary>
     public static string Group(string sql) => Atomic(sql) ? sql : "(" + sql + ")";
 

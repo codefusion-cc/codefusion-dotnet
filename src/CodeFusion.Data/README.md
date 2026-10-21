@@ -54,15 +54,19 @@ Select gives the rows back as found; a missing row is a 404 and writes nothing:
 public Write<ProfileView> Follow(long viewer, Utf8 username) =>
     Users.Where(u => u.Username == username)
         .Then(u => Insert(Follows, new Follow { FollowerId = viewer, FolloweeId = u.Id }).OrIgnore())
-        .Select(u => new ProfileView(u.Username, u.Bio, u.Image, true));
+        .Select(u => ProfileView.Of(u, viewer));
 // WITH t AS (SELECT u.id, u.username, u.bio, u.image FROM users u WHERE u.username = $1),
-//   w AS (INSERT INTO follows (follower_id, followee_id) SELECT $2, t.id FROM t ON CONFLICT DO NOTHING)
-// SELECT t.username, t.bio, t.image, true FROM t
+//   w AS (INSERT INTO follows (follower_id, followee_id) SELECT $2, t.id FROM t
+//     ON CONFLICT (follower_id, followee_id) DO NOTHING)
+// SELECT t.username, t.bio, t.image, ($2 <> 0) FROM t
 ```
 
 The write is an insert of `new T { ... }` or a delete (`Follows.Where(f => f.FolloweeId == u.Id).Delete()`, the
-followee one of the ids found). The statement reads the snapshot it started with, so the Select may not read the
-table the write changes.
+followee one of the ids found). The statement reads the snapshot it started with, from before the write, so the
+Select reads the table written only through `Count` and `Any` of a navigation, which the generator corrects by the
+write: `ProfileView.Of(u, viewer)` after the follow is followed, and an article's `Favorites.Count()` after a favorite
+is the snapshot's count and one if the snapshot held no favorite of that key (written now, or by a concurrent request
+the snapshot missed). After an insert with `OrIgnore` that needs the table's key, `[Key]` on each of its columns.
 
 Entities follow EF's conventions (snake_case names, `AuthorId` with `Author`, `Many<T>` for the other side, and EF's
 attributes) and are never built at run time. Views are `record struct`s of `Utf8`, `Utf8?`, `Timestamp`,

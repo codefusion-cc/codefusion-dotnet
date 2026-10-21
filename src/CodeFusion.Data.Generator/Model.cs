@@ -253,7 +253,10 @@ sealed class EntityInfo
     public readonly Dictionary<string, ColumnInfo> Columns = new();
     public readonly Dictionary<string, OneNav> Ones = new();
     public readonly Dictionary<string, ManyNav> Manys = new();
+    /// <summary>The key: its one column, or null when it has none or several (<see cref="KeyColumns"/>).</summary>
     public ColumnInfo? Key;
+    /// <summary>The key's columns: those with [Key] (several make one key), else Id.</summary>
+    public readonly List<ColumnInfo> KeyColumns = new();
 
     EntityInfo(INamedTypeSymbol type, string table, string? schema)
     {
@@ -267,6 +270,8 @@ sealed class EntityInfo
     {
         var e = new EntityInfo(type, table, schema);
         var props = new List<IPropertySymbol>();
+        var keyed = new List<ColumnInfo>();
+        ColumnInfo? id = null;
         for (var t = type; t is not null && t.SpecialType != SpecialType.System_Object; t = t.BaseType)
             props.InsertRange(0, t.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && !p.IsIndexer && p.DeclaredAccessibility == Accessibility.Public));
         foreach (var p in props)
@@ -297,13 +302,17 @@ sealed class EntityInfo
                 string name = Known.Attribute(p, k.ColumnAttribute)?.ConstructorArguments.FirstOrDefault().Value as string ?? Names.Snake(p.Name);
                 var col = new ColumnInfo(p, name, kind.Value);
                 e.Columns[p.Name] = col;
-                if (Known.Attribute(p, k.KeyAttribute) is not null || (p.Name == "Id" && e.Key is null)) e.Key = col;
+                if (Known.Attribute(p, k.KeyAttribute) is not null) keyed.Add(col);
+                else if (p.Name == "Id") id = col;
                 continue;
             }
             if (p.Type is INamedTypeSymbol { TypeKind: TypeKind.Class } nav && nav.SpecialType != SpecialType.System_String)
                 continue; // a one-navigation: resolved below, once every column is known
             problems.Add($"{p.Name}: type {p.Type.ToDisplayString()} can't be a column (mark it [NotMapped] if it isn't one)");
         }
+        // [Key] on one column, or on each of a key of several; else Id by convention
+        e.KeyColumns.AddRange(keyed.Count > 0 ? keyed : id is null ? [] : [id]);
+        e.Key = e.KeyColumns.Count == 1 ? e.KeyColumns[0] : null;
         foreach (var p in props)
         {
             if (Known.Attribute(p, k.NotMapped) is not null || Known.Is(p.Type, k.Many) || e.Columns.ContainsKey(p.Name)) continue;

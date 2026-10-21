@@ -182,8 +182,14 @@ public sealed class ShapeGeneratorTests
         "Pets.Where(x => x.Id == 1).Select(x => new Pet { OwnerId = p.Id })", "an insert in Then that isn't 'new Pet { ... }'")]
     [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { OwnerId = p.Id }).Then(Sql($"DELETE FROM pets"))).Select(p => new Name(p.Id, p.Name))""",
         "Insert(Pets, new Pet { OwnerId = p.Id }).Then(Sql($\"DELETE FROM pets\"))", "a unit of writes in Then")]
-    [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { OwnerId = p.Id })).Select(p => new Name(p.Pets.Count(), p.Name))""",
-        "p.Pets.Count()", "a read of pets in the Select after Then")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { OwnerId = p.Id })).Select(p => new Name(p.Pets.OrderBy(x => x.Id).Take(1).Count(), p.Name))""",
+        "p.Pets.OrderBy(x => x.Id).Take(1).Count()", "Count after Select or Take of pets")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { Id = 5, OwnerId = p.Id }).OrIgnore()).Select(p => new Name(p.Pets.Count(), p.Name))""",
+        "p.Pets.Count()", "or that isn't of its key")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { OwnerId = p.Id }).OrIgnore()).Select(p => new Name(p.Pets.Count(), p.Name))""",
+        "p.Pets.Count()", "an ignored insert that doesn't set its whole key")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { Id = 5 })).Select(p => new Name(p.Pets.Count(), p.Name))""",
+        "p.Pets.Count()", "a condition on a column the insert before the Select doesn't set")]
     [InlineData("""Pets.Where(x => x.Id > 1).Then(x => Insert(People, new Person { Name = x.Name })).Select(x => new Name(x.Id, x.Owner.Name))""",
         "x.Owner", "a read of people in the Select after Then")]
     [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { OwnerId = p.Id })).Select(p => new Name(p.Id, Pets.Single(x => x.Id == 1).Name))""",

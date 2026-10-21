@@ -238,6 +238,8 @@ sealed partial class Translator
         {
             case "Where" or "Select" or "OrderBy" or "OrderByDescending" or "ThenBy" or "ThenByDescending" or "Take":
                 return new ManyValue(inv.Type!, mv.Parent, mv.Nav, mv.Target, new List<Step>(mv.Steps) { new(name, inv, env) });
+            case "Any" or "Count" when _written is { } w && !mv.Nav.IsThrough && SameTable(mv.Target, w.Table):
+                return Corrected(mv, name, inv, env, w);
             case "Any" or "Count":
                 return Nested(() =>
                 {
@@ -305,8 +307,12 @@ sealed partial class Translator
         var sub = new Select();
         var parent = mv.Parent;
         var target = mv.Target;
-        Unwritten(target, at);
-        if (mv.Nav.IsThrough) Unwritten(mv.Nav.JoinTable!, null, at);
+        // the table the write before a Select changes is read only by the correction of a Count or Any of it
+        if (!ReferenceEquals(mv, _correcting))
+        {
+            Unwritten(target, at);
+            if (mv.Nav.IsThrough) Unwritten(mv.Nav.JoinTable!, null, at);
+        }
         string parentKey = Column(parent, KeyOf(parent.Entity, at), at);
         string? hint = mv.Steps.Select(s => Unwrap(s.Call.Arguments.LastOrDefault()?.Value ?? s.Call)).OfType<IAnonymousFunctionOperation>()
             .Select(f => f.Symbol.Parameters.FirstOrDefault()?.Name).FirstOrDefault(n => n is not null);
@@ -323,13 +329,8 @@ sealed partial class Translator
         else
         {
             child = FromTable(sub, target, hint);
-            var inverse = target.Ones.Values.Where(o => Known.Same(o.Target, parent.Entity.Type)
-                && (mv.Nav.InverseNavigation is null || o.Property.Name == mv.Nav.InverseNavigation)).ToList();
-            if (inverse.Count != 1)
-                throw new Refused(at, Diagnostics.BadEntity, parent.Entity.Type.Name, inverse.Count == 0
-                    ? $"'{mv.Nav.Property.Name}': {target.Type.Name} has no navigation back to {parent.Entity.Type.Name} (or name its join table with [JoinTable])"
-                    : $"'{mv.Nav.Property.Name}': {target.Type.Name} has several navigations to {parent.Entity.Type.Name}; name one with [InverseProperty]");
-            sub.Where.Add($"{Column(child, inverse[0].ForeignKey, at)} = {parentKey}");
+            var inverse = Inverse(mv, at);
+            sub.Where.Add($"{Column(child, inverse.ForeignKey, at)} = {parentKey}");
         }
         current = new RowValue(child);
         selected = false;
@@ -356,6 +357,19 @@ sealed partial class Translator
             }
         }
         return sub;
+    }
+
+    /// <summary>The one-navigation of a many-navigation's rows back to its parent, whose foreign key correlates them.</summary>
+    OneNav Inverse(ManyValue mv, Location at)
+    {
+        var parent = mv.Parent.Entity;
+        var inverse = mv.Target.Ones.Values.Where(o => Known.Same(o.Target, parent.Type)
+            && (mv.Nav.InverseNavigation is null || o.Property.Name == mv.Nav.InverseNavigation)).ToList();
+        if (inverse.Count != 1)
+            throw new Refused(at, Diagnostics.BadEntity, parent.Type.Name, inverse.Count == 0
+                ? $"'{mv.Nav.Property.Name}': {mv.Target.Type.Name} has no navigation back to {parent.Type.Name} (or name its join table with [JoinTable])"
+                : $"'{mv.Nav.Property.Name}': {mv.Target.Type.Name} has several navigations to {parent.Type.Name}; name one with [InverseProperty]");
+        return inverse[0];
     }
 
     // ---------- order, Take and Skip ----------
