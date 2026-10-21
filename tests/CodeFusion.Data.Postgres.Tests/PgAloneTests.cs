@@ -88,9 +88,11 @@ public sealed class PgAloneTests : IAsyncDisposable
         var r = _reader = new PgReader(PgTestDb.Settings());
         r.Start(1);
         long loop = (await Run(r, Pid)).ThrowIfFailed().Value;
-        long alone = (await Run(r, AlonePid)).ThrowIfFailed().Value;
-        Assert.NotEqual(loop, alone);
-        Assert.Equal(alone, (await Run(r, AlonePid)).ThrowIfFailed().Value);
+        var alone = new System.Collections.Generic.HashSet<long>();
+        for (int i = 0; i < 8; i++) alone.Add((await Run(r, AlonePid)).ThrowIfFailed().Value);
+        // the alone connections (two by default), whichever is free; never the loop's
+        Assert.InRange(alone.Count, 1, 2);
+        Assert.DoesNotContain(loop, alone);
     }
 
     [Fact(Timeout = 30_000)]
