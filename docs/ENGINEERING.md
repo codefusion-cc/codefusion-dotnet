@@ -911,8 +911,11 @@ What it decided:
   `Issue` writes every declared claim when it is given values, so it can't leave out one optional claim and keep
   another; that needs a way to tell an absent `Utf8` from an empty one.
 - `FeedApp` is the proof that the spec needs nothing app-specific: it reads no header and parses no id itself. What
-  it still does by hand is the spec's own: trimming the post and counting its characters, which copies the trimmed
-  text into the arena because `Utf8` has no slice.
+  it still does by hand is the spec's own: trimming the post and counting its characters. `Utf8.Trim()` and
+  `Utf8.Slice(start, length)` came for it: views of the same bytes, bounds-checked against the text and not its
+  buffer, so the trimmed post is no longer copied into the arena (`Utf8Tests`: edges, out-of-range starts and lengths
+  including `int.MaxValue`, JSON whitespace only, a property test against `Span.Trim`, no allocation; 21 of 48 red
+  on a stub).
 
 ## Fuzzing (tests/CodeFusion.Fuzz)
 

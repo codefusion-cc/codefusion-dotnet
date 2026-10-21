@@ -39,14 +39,12 @@ public static class FeedApp
         app.MapGet("/posts/{id}", static ([Range(1, long.MaxValue)] long id, Posts posts) =>
             posts.Find(id) is { } p ? Reply.Ok(p) : Reply.NotFound(FeedErrors.PostNotFound));
 
-        app.MapPost("/posts", static (NewFeedPost body, Viewer viewer, Posts posts, IResponse response) =>
+        app.MapPost("/posts", static (NewFeedPost body, Viewer viewer, Posts posts) =>
             {
-                ReadOnlySpan<byte> text = body.Body.Span.Trim(" \t\r\n"u8);
+                Utf8 text = body.Body.Trim(); // a view: nothing copied
                 if (text.IsEmpty) return Reply.Failed(FeedErrors.BodyRequired);
-                if (System.Text.Unicode.Utf8.IsValid(text) && Characters(text) > 500) return Reply.Failed(FeedErrors.BodyTooLong);
-                ArenaBytes trimmed = response.Arena.Allocate(text.Length); // Utf8 has no slice: the trimmed text is copied
-                text.CopyTo(trimmed.Span);
-                return Reply.Created(new PostView(posts.Next(), trimmed.Text(0, text.Length), Posts.CreatedAt, viewer.Claim("username"u8), 0));
+                if (Characters(text) > 500) return Reply.Failed(FeedErrors.BodyTooLong);
+                return Reply.Created(new PostView(posts.Next(), text, Posts.CreatedAt, viewer.Claim("username"u8), 0));
             })
            .AuthRequired();
 
