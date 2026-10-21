@@ -117,10 +117,10 @@ loop for another round, so it still ends in its wake-up. A read on the loop of a
 committed yet runs inside its transaction and sees the writes; it completes with them, after the one COMMIT, or fails
 with them. A read of tables the batch hasn't written answers at once, from committed rows. What each statement reads and
 writes is what SQLite reports as it prepares it (triggers, foreign-key actions and views included), so raw SQL counts as
-generated SQL does. So a wake-up commits once, and no answer goes out with a write its COMMIT then loses. A handler that
-reads a written table and then writes waits for the read, so its write joins the batch the completions open: one more
-COMMIT for the wake-up, not one per request. While a batch holds the connection, other threads waiting for it park
-instead of spinning.
+generated SQL does. So a wake-up commits once (unless an error makes SQLite roll its transaction back, which fails every
+write it held), and no answer goes out with a write its COMMIT then loses. A handler that reads a written table and then
+writes waits for the read, so its write joins the batch the completions open: one more COMMIT for the wake-up, not one
+per request. While a batch holds the connection, other threads waiting for it park instead of spinning.
 
 ## Failures
 

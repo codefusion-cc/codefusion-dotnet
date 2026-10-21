@@ -25,7 +25,8 @@
   batch holding the connection for 500 ms while a queued write and a read wait cost 1,039 ms of process CPU spinning.
   Parked, the test's bound is 300 ms above the same process's CPU in a window with no waiters.
 - **Conclusion:** kept. With nothing waiting off the loop, parking costs nothing. With readers waiting off the loop at
-  FULL, the loop does 12 to 19% fewer operations and the readers 23 to 50% more: parked readers get their turn when the
-  batch ends instead of losing it to the loop's next batch. Both together are about 5% fewer than spinning, which burns
-  a core per waiter for as long as a batch holds the connection. A wake-up's reads now run in its batch, so a batch
+  FULL, the loop does 8 to 19% fewer operations and the readers 15 to 57% more (over the ranges): parked readers get their
+  turn when the batch ends instead of losing it to the loop's next batch. Both together are about 1% fewer than spinning
+  at NORMAL and about 8% fewer at FULL (207 to 219 k against 220 to 242 k), against spinning that burns a core per
+  waiter for as long as a batch holds the connection. (Corrected after the third review: this said "about 5%".) A wake-up's reads now run in its batch, so a batch
   holds the connection a little longer (its reads' rows are kept), but it commits once.

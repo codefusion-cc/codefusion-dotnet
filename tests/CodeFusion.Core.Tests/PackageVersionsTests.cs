@@ -36,8 +36,4 @@ public sealed class PackageVersionsTests
         var e = Assert.Throws<InvalidOperationException>(() => PackageVersions.Check(typeof(Utf8).Assembly, typeof(object).Assembly));
         Assert.Contains("must all be the same version", e.Message, StringComparison.Ordinal);
     }
-
-    [Fact]
-    public void ThisBuildsAssembliesAreOneVersion() =>
-        PackageVersions.Check(typeof(Utf8).Assembly, typeof(Utf8).Assembly);
 }

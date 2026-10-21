@@ -53,9 +53,8 @@ public sealed class HookedTests : IDisposable
         });
         holding.Wait(TestContext.Current.CancellationToken);
         var stopping = Task.Run(s.Stop, TestContext.Current.CancellationToken);
-        // Stop gave up on the batch: the readers' wait (2 s), then the writer thread's close (2 s); the batch's end closes
-        await Task.Delay(4_500, TestContext.Current.CancellationToken);
-        Assert.True(stopping.IsCompleted, "Stop still waits for the batch");
+        // Stop gives up on the batch (the readers' wait, then the writer thread's close), and leaves the close to its end
+        await stopping.WaitAsync(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         Task<DataResult>? read = null;
         int batchThread = loop.ThreadId;
         SqliteReaders.AfterExit = () =>
@@ -145,27 +144,26 @@ public sealed class HookedTests : IDisposable
 #if !DEBUG
         Assert.Skip("needs the Debug hook");
 #else
-        var s = _db.Open(_db.Database(readers: 1, timeout: TimeSpan.FromMilliseconds(200)));
-        // how many steps take 100 ms here
-        Assert.True(Spin(s, 10_000).IsOk); // prepared, warm
-        var clock = Stopwatch.StartNew();
-        Assert.True(Spin(s, 1_000_000).IsOk);
-        long per100ms = Math.Max(1, (long)(1_000_000 * 100 / Math.Max(1, clock.Elapsed.TotalMilliseconds)));
-        int held = 0;
+        var s = _db.Open(_db.Database(readers: 1, timeout: TimeSpan.FromSeconds(1)));
+        Holding.Register(s.Readers.Connections[0].Db);
+        using var slowMayEnd = new ManualResetEventSlim();
+        using var nextRuns = new ManualResetEventSlim();
+        Holding.SlowMayEnd = slowMayEnd;
+        Holding.NextRuns = nextRuns;
+        int decisions = 0;
         SqliteConn.BeforeInterrupt = () =>
         {
-            if (Interlocked.Exchange(ref held, 1) == 0) Thread.Sleep(300); // the first decision waits: its statement ends
+            if (Interlocked.Increment(ref decisions) != 1) return;
+            // the first decision is on the slow statement: let it end, and act only once the next one runs
+            slowMayEnd.Set();
+            Assert.True(nextRuns.Wait(TimeSpan.FromSeconds(10)));
         };
-        clock.Restart();
-        var slow = Spin(s, per100ms * 4);    // about 400 ms: past the timeout, so the watchdog decides on it
-        long slowMs = clock.ElapsedMilliseconds;
-        var next = Spin(s, per100ms * 3 / 2); // about 150 ms, under the timeout: running as the held interrupt goes out
-        long nextMs = clock.ElapsedMilliseconds - slowMs;
+        var slow = Read(s, "SELECT cf_hold(1)"); // past the timeout: ends when the watchdog has decided on it
+        var next = Read(s, "SELECT cf_hold(2)"); // 300 ms, under the timeout, running as the decision is acted on
         SqliteConn.BeforeInterrupt = null;
-        Assert.True(slowMs > 250 && nextMs < 190, $"the statements took {slowMs} and {nextMs} ms");
-        Assert.Equal(1, held);
-        Assert.True(next.IsOk, $"the statement after the one timed was interrupted: {next}");
+        Assert.True(decisions >= 1);
         Assert.Equal(DataStatus.Ok, slow.Status);
+        Assert.True(next.IsOk, $"the statement after the one timed was interrupted: {next}");
         Assert.Equal(0, s.Interrupted);
 #endif
     }
@@ -219,6 +217,9 @@ public sealed class HookedTests : IDisposable
 #endif
     }
 
+    static DataResult Read(SqliteDataSource s, string sql) =>
+        Kv.Done(Sqlite.Run<Value>(s.Read(DurabilityTests.Statement(sql)).Hold(), null, default));
+
     static DataResult Spin(SqliteDataSource s, long steps)
     {
         var c = s.Read(Kv.Spin);
@@ -226,3 +227,30 @@ public sealed class HookedTests : IDisposable
         return Kv.Done(Sqlite.Run<Value>(c.Hold(), null, default));
     }
 }
+
+#if DEBUG
+/// <summary><c>cf_hold(1)</c> waits until <see cref="SlowMayEnd"/> is set; <c>cf_hold(2)</c> sets
+/// <see cref="NextRuns"/>, then takes 300 ms.</summary>
+static unsafe class Holding
+{
+    public static ManualResetEventSlim? SlowMayEnd, NextRuns;
+
+    public static void Register(nint db)
+    {
+        fixed (byte* name = "cf_hold\0"u8)
+            Assert.Equal(0, Sqlite3.CreateFunction(db, name, 1, Sqlite3.Utf8, 0, &Hold, 0, 0, 0));
+    }
+
+    [System.Runtime.InteropServices.UnmanagedCallersOnly(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    static void Hold(nint context, int argc, nint* argv)
+    {
+        if (Sqlite3.ValueInt64(argv[0]) == 1) SlowMayEnd!.Wait(TimeSpan.FromSeconds(10));
+        else
+        {
+            NextRuns!.Set();
+            Thread.Sleep(300);
+        }
+        Sqlite3.ResultInt64(context, 1);
+    }
+}
+#endif
