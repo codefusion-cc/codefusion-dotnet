@@ -59,6 +59,7 @@ CodeFusion.Http.HttpApp.Start() -> void
 CodeFusion.Http.HttpApp.StopAsync() -> System.Threading.Tasks.Task!
 CodeFusion.Http.HttpAppBuilder
 CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret) -> CodeFusion.Http.HttpAppBuilder!
+CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret, CodeFusion.Http.JwtOptions! options) -> CodeFusion.Http.HttpAppBuilder!
 CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret, System.TimeSpan lifetime) -> CodeFusion.Http.HttpAppBuilder!
 CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret, System.TimeSpan lifetime, bool allowShortSecret) -> CodeFusion.Http.HttpAppBuilder!
 CodeFusion.Http.HttpAppBuilder.AddPerConnection<TService>(System.Func<TService!>! factory) -> void
@@ -185,6 +186,16 @@ CodeFusion.Http.JsonBody.SkipValue() -> void
 CodeFusion.Http.JsonBody.Text(in CodeFusion.Http.BodyValue value) -> CodeFusion.Utf8
 CodeFusion.Http.JsonBody.TextList(in CodeFusion.Http.BodyValue value) -> CodeFusion.Utf8List
 CodeFusion.Http.Jwt
+CodeFusion.Http.Jwt.Jwt(string! secret, CodeFusion.Http.JwtOptions! options) -> void
+CodeFusion.Http.Jwt.Scheme.get -> string!
+CodeFusion.Http.JwtOptions
+CodeFusion.Http.JwtOptions.AllowShortSecret.get -> bool
+CodeFusion.Http.JwtOptions.AllowShortSecret.set -> void
+CodeFusion.Http.JwtOptions.JwtOptions() -> void
+CodeFusion.Http.JwtOptions.Lifetime.get -> System.TimeSpan
+CodeFusion.Http.JwtOptions.Lifetime.set -> void
+CodeFusion.Http.JwtOptions.Scheme.get -> string!
+CodeFusion.Http.JwtOptions.Scheme.set -> void
 CodeFusion.Http.MinDataRate
 CodeFusion.Http.MinDataRate.BytesPerSecond.get -> double
 CodeFusion.Http.MinDataRate.GracePeriod.get -> System.TimeSpan

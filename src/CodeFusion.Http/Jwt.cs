@@ -16,8 +16,6 @@ namespace CodeFusion.Http;
 /// </summary>
 public sealed class Jwt : IRequestScoped
 {
-    const long Ttl = 30L * 24 * 3600;
-
     /// <summary>The shortest secret, in UTF-8 bytes: HS256 wants a key at least as long as its 32-byte hash. Only
     /// <c>allowShortSecret</c> takes a shorter one.</summary>
     public const int MinSecretBytes = 32;
@@ -35,6 +33,7 @@ public sealed class Jwt : IRequestScoped
     static ReadOnlySpan<byte> HeaderB64 => "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"u8;
     readonly byte[] _key;
     readonly long _ttl;
+    readonly byte[] _scheme; // the scheme and its space
     IResponse? _response;
     // Unpadded base64url and the two dots. .NET's decoder would also skip whitespace and accept padding; JWTs have neither.
     static readonly SearchValues<byte> TokenChars = SearchValues.Create("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_."u8);
@@ -44,11 +43,11 @@ public sealed class Jwt : IRequestScoped
 
     /// <summary>Tokens signed with <paramref name="secret"/>'s UTF-8 bytes (at least <see cref="MinSecretBytes"/>),
     /// valid for 30 days.</summary>
-    public Jwt(string secret) : this(secret, TimeSpan.FromSeconds(Ttl), false) { }
+    public Jwt(string secret) : this(secret, new JwtOptions()) { }
 
     /// <summary>Tokens signed with <paramref name="secret"/>'s UTF-8 bytes (at least <see cref="MinSecretBytes"/>),
     /// valid for <paramref name="lifetime"/> (whole seconds, at least one) from their issue.</summary>
-    public Jwt(string secret, TimeSpan lifetime) : this(secret, lifetime, false) { }
+    public Jwt(string secret, TimeSpan lifetime) : this(secret, new JwtOptions { Lifetime = lifetime }) { }
 
     /// <summary>
     /// <see cref="Jwt(string, TimeSpan)"/>, and with <paramref name="allowShortSecret"/> a secret shorter than
@@ -57,26 +56,48 @@ public sealed class Jwt : IRequestScoped
     /// and then anyone can sign as anyone: only when the secret isn't yours to choose (SECURITY.md).
     /// </summary>
     public Jwt(string secret, TimeSpan lifetime, bool allowShortSecret)
+        : this(secret, new JwtOptions { Lifetime = lifetime, AllowShortSecret = allowShortSecret }) { }
+
+    /// <summary>Tokens signed with <paramref name="secret"/>'s UTF-8 bytes, issued and read as
+    /// <paramref name="options"/> say: their lifetime, whether a short secret is taken, the header's scheme.</summary>
+    public Jwt(string secret, JwtOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrEmpty(secret);
-        if (!allowShortSecret && Encoding.UTF8.GetByteCount(secret) < MinSecretBytes)
+        if (!options.AllowShortSecret && Encoding.UTF8.GetByteCount(secret) < MinSecretBytes)
             throw new ArgumentException($"the secret is shorter than {MinSecretBytes} bytes of UTF-8 (allowShortSecret takes it)", nameof(secret));
+        TimeSpan lifetime = options.Lifetime;
         if (lifetime < TimeSpan.FromSeconds(1) || lifetime.Ticks % TimeSpan.TicksPerSecond != 0)
-            throw new ArgumentOutOfRangeException(nameof(lifetime), lifetime, "whole seconds, at least one");
+            throw new ArgumentOutOfRangeException(nameof(options), lifetime, "the lifetime is whole seconds, at least one");
+        string scheme = options.Scheme;
+        if (scheme is null) throw new ArgumentNullException(nameof(options), "the scheme is null");
+        if (scheme.Length == 0 || !Ascii.IsValid(scheme) || scheme.AsSpan().ContainsAnyExcept(SchemeChars))
+            throw new ArgumentException($"the scheme '{scheme}' isn't one HTTP token: letters, digits and !#$%&'*+-.^_`|~", nameof(options));
         _key = Encoding.UTF8.GetBytes(secret);
         Lifetime = lifetime;
         _ttl = (long)lifetime.TotalSeconds;
+        Scheme = scheme;
+        _scheme = Encoding.ASCII.GetBytes(scheme + " ");
     }
 
-    Jwt(byte[] key, TimeSpan lifetime)
+    // RFC 9110's tchar
+    static readonly SearchValues<char> SchemeChars = SearchValues.Create("!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+
+    Jwt(Jwt prototype)
     {
-        _key = key;
-        Lifetime = lifetime;
-        _ttl = (long)lifetime.TotalSeconds;
+        _key = prototype._key;
+        Lifetime = prototype.Lifetime;
+        _ttl = prototype._ttl;
+        Scheme = prototype.Scheme;
+        _scheme = prototype._scheme;
     }
 
-    /// <summary>Another instance with the same secret, for another connection.</summary>
-    internal Jwt Copy() => new(_key, Lifetime);
+    /// <summary>Another instance with the same secret and options, for another connection.</summary>
+    internal Jwt Copy() => new(this);
+
+    /// <summary>The Authorization header's scheme, which the token follows after one space: <c>Token</c> unless
+    /// <see cref="JwtOptions.Scheme"/> said otherwise.</summary>
+    public string Scheme { get; }
 
     /// <summary>How long an issued token is valid: its exp is its iat plus this, in whole seconds.</summary>
     public TimeSpan Lifetime { get; }
@@ -270,8 +291,8 @@ public sealed class Jwt : IRequestScoped
 
     /// <summary>
     /// The viewer's user id from the first Authorization header: 0 when none was sent (<paramref name="present"/>
-    /// false); -1 when one was sent but isn't "Token &lt;valid jwt&gt;". A header sent empty (or only whitespace) is
-    /// present and invalid, not anonymous. Surrounding spaces and tabs are trimmed, as Kestrel did.
+    /// false); -1 when one was sent but isn't the scheme, one space and a valid token. A header sent empty (or only
+    /// whitespace) is present and invalid, not anonymous. Surrounding spaces and tabs are trimmed, as Kestrel did.
     /// </summary>
     internal long Viewer(bool present, ReadOnlySpan<byte> header)
     {
@@ -281,13 +302,13 @@ public sealed class Jwt : IRequestScoped
         return id > 0 ? id : -1;
     }
 
-    /// <summary>The token in an Authorization header's value: what follows "Token " once surrounding spaces and
-    /// tabs are trimmed, as Kestrel did; false for another scheme.</summary>
-    internal static bool TryToken(ReadOnlySpan<byte> header, out ReadOnlySpan<byte> token)
+    /// <summary>The token in an Authorization header's value: what follows the scheme and one space once surrounding
+    /// spaces and tabs are trimmed, as Kestrel did; false for another scheme, in any case.</summary>
+    internal bool TryToken(ReadOnlySpan<byte> header, out ReadOnlySpan<byte> token)
     {
         header = header.Trim(" \t"u8);
-        bool ok = header.StartsWith("Token "u8);
-        token = ok ? header["Token ".Length..] : default;
+        bool ok = header.StartsWith(_scheme);
+        token = ok ? header[_scheme.Length..] : default;
         return ok;
     }
 }

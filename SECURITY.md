@@ -48,6 +48,10 @@ Fixes go into the latest release only.
   its `exp` except changing the secret, which ends every session. They live 30 days unless `AddJwtAuth(secret,
   lifetime)` says otherwise. A signature has one spelling: base64url with nonzero spare bits is refused, and it is
   compared in constant time.
+- **The scheme** (`JwtOptions.Scheme`, `Token` unless set) is matched byte for byte after the header's surrounding
+  spaces and tabs are trimmed, then exactly one space: `bearer`, `Bearer  <jwt>` and `Bearer<jwt>` are refused, not
+  read leniently, so the app and a proxy in front of it can't disagree about which token a header carries. A scheme
+  must be one RFC 9110 token, checked when the app starts.
 - **A short secret** is refused unless the app passes `allowShortSecret: true` (`AddJwtAuth(secret, lifetime, true)`
   or the `Jwt` constructor), for a deployment handed a fixed one, such as the Conduit contest's 26 bytes. An empty
   one is refused even then. The tokens are standard HMAC-SHA256 (a key shorter than the 64-byte block is padded with

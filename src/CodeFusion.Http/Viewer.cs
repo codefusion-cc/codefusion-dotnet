@@ -2,7 +2,8 @@ namespace CodeFusion.Http;
 
 /// <summary>
 /// Who sent the request, for a handler that takes one: the user id in the Authorization header's JWT
-/// (<c>Token &lt;jwt&gt;</c>), or 0 for a request without the header. A header that is present but not a valid token
+/// (<c>Token &lt;jwt&gt;</c>, or the scheme <see cref="JwtOptions.Scheme"/> set), or 0 for a request without the
+/// header. A header that is present but not a valid token
 /// is answered with 401 before the handler runs; so is a request without one on an endpoint marked
 /// <c>.AuthRequired()</c>. Needs <c>builder.AddJwtAuth(secret)</c>.
 /// </summary>

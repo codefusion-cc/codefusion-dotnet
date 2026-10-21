@@ -100,7 +100,8 @@ public sealed class EndpointBuilder
 
     internal Endpoint Endpoint => _endpoint;
 
-    /// <summary>Requests without a valid token (<c>Authorization: Token &lt;jwt&gt;</c>) get a 401.</summary>
+    /// <summary>Requests without a valid token (<c>Authorization: Token &lt;jwt&gt;</c>, or the scheme the app set) get a
+    /// 401.</summary>
     public EndpointBuilder AuthRequired() => Set(AuthMode.Required);
 
     /// <summary>A request without the header is anonymous (its <see cref="Viewer"/> is 0); one with a header that

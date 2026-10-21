@@ -61,6 +61,13 @@ The JWT secret must be at least 32 bytes of UTF-8. A deployment handed a shorter
 26 bytes) passes `AddJwtAuth(secret, lifetime, allowShortSecret: true)`. Its tokens are still standard HS256, but a
 short secret can be guessed offline from any one token, and whoever finds it can sign as any user (SECURITY.md).
 
+`JwtOptions` holds the same settings and the header's scheme, `Token` unless set. The header is the scheme, one space
+and the token, once surrounding spaces and tabs are trimmed; the scheme is matched exactly, case included:
+
+```csharp
+builder.AddJwtAuth(secret, new JwtOptions { Scheme = "Bearer", AllowShortSecret = true });
+```
+
 The generator replaces each `MapGet`/`MapPost`/`MapPut`/`MapDelete` call with an endpoint that binds the parameters
 and writes the reply with no reflection and nothing looked up per request. Routes are literal templates; a literal
 segment wins over a parameter, methods ignore case, HEAD runs the GET endpoint and sends its head without the body,

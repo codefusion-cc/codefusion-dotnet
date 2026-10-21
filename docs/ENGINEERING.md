@@ -836,6 +836,22 @@ hot paths is the same as before: each check is a `[Conditional("DEBUG")]` call, 
 Http 505: all pass in Release (the 7 Debug-only check tests skip) and in Debug (the allocation tests skip), against a
 Postgres 18 with CODEFUSION_TEST_DB and the four CODEFUSION_TEST_PG_* logins set. The allocation tests pass in Release.
 
+## Options for an app's own spec (the feed API)
+
+The $12 contest's feed API couldn't be written with the library: it kept a hand-written auth layer and parsed its
+route values itself. Each gap became a public option with today's behavior as its default, not a case for that app.
+Each test was red first: on a stub of the API that compiled but didn't do it.
+
+| Gap | Option | Test | Red before |
+|---|---|---|---|
+| the scheme was `Token ` only | `JwtOptions.Scheme`, and `AddJwtAuth(secret, JwtOptions)` and `Jwt(secret, JwtOptions)` beside the old overloads | `JwtSchemeTests` (exact case, one space, no tab, a Cyrillic look-alike, any RFC 9110 token, invalid schemes refused at startup), `SpecOptionsTests.ABearerAppReadsBearerHeadersOnly`, `TheDefaultAppStillReadsToken` | 17 of 34: `Bearer` refused, `Token` still read |
+
+What it decided:
+
+- The scheme is matched as bytes, case included, then exactly one space, as `Token ` was. RFC 9110 calls schemes
+  case-insensitive and RFC 6750 allows several spaces; reading them leniently would change what `Token` apps accept,
+  and an exact match leaves nothing for a proxy and the app to read differently. Neither is an option yet.
+
 ## Fuzzing (tests/CodeFusion.Fuzz)
 
 Coverage-guided fuzzing of everything that reads network bytes: 11 SharpFuzz targets (the table is in

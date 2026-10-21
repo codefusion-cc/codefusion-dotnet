@@ -65,6 +65,7 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
     internal int PerConnectionCount => _perConnection.Length;
     internal int MaxRouteValues => _router.MaxParameters;
     internal bool HasJwt => _jwt is not null;
+    internal Jwt? Jwt => _jwt;
 
     internal bool TryGetSingleton(Type type, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out object? service) =>
         _singletons.TryGetValue(type, out service);
@@ -272,10 +273,16 @@ public sealed class HttpAppBuilder : IServiceRegistry
     /// <summary><see cref="AddJwtAuth(string, TimeSpan)"/>, and with <paramref name="allowShortSecret"/> a secret
     /// shorter than <see cref="Jwt.MinSecretBytes"/> too, for a deployment handed a fixed one: see
     /// <see cref="Jwt.Jwt(string, TimeSpan, bool)"/> for the risk.</summary>
-    public HttpAppBuilder AddJwtAuth(string secret, TimeSpan lifetime, bool allowShortSecret)
+    public HttpAppBuilder AddJwtAuth(string secret, TimeSpan lifetime, bool allowShortSecret) =>
+        AddJwtAuth(secret, new JwtOptions { Lifetime = lifetime, AllowShortSecret = allowShortSecret });
+
+    /// <summary><see cref="AddJwtAuth(string)"/> as <paramref name="options"/> say: the tokens' lifetime, whether a
+    /// short secret is taken (see <see cref="JwtOptions.AllowShortSecret"/> for the risk), and the header's scheme,
+    /// such as <c>Bearer</c>.</summary>
+    public HttpAppBuilder AddJwtAuth(string secret, JwtOptions options)
     {
         if (JwtPrototype is not null) throw new InvalidOperationException("AddJwtAuth was called already");
-        var jwt = new Jwt(secret, lifetime, allowShortSecret);
+        var jwt = new Jwt(secret, options);
         AddPerConnection(jwt.Copy);
         JwtPrototype = jwt;
         return this;

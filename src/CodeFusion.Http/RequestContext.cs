@@ -133,7 +133,7 @@ public sealed class RequestContext : IResponse, IValueTaskSource
     Utf8 Token()
     {
         ReadOnlySpan<byte> header = _x.Authorization;
-        _ = Jwt.TryToken(header, out ReadOnlySpan<byte> token); // the dispatcher verified it
+        _ = _app.Jwt!.TryToken(header, out ReadOnlySpan<byte> token); // the dispatcher verified it
         header.Overlaps(token, out int offset);
         return new Utf8(_x.RequestBuffer, _x.AuthorizationOffset + offset, token.Length);
     }
