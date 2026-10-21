@@ -1,6 +1,7 @@
 <Solution>
   <Folder Name="/benchmarks/">
     <Project Path="benchmarks/CodeFusion.Benchmarks/CodeFusion.Benchmarks.csproj" />
+    <Project Path="benchmarks/CodeFusion.ContestBench/CodeFusion.ContestBench.csproj" />
     <Project Path="benchmarks/CodeFusion.Data.Sqlite.Throughput/CodeFusion.Data.Sqlite.Throughput.csproj" />
     <Project Path="benchmarks/CodeFusion.Security.Bcrypt.Benchmarks/CodeFusion.Security.Bcrypt.Benchmarks.csproj" />
     <Project Path="benchmarks/CodeFusion.TechEmpower/CodeFusion.TechEmpower.csproj" />
@@ -18,6 +19,7 @@
     <Project Path="src/CodeFusion.Security.Bcrypt.Generators/CodeFusion.Security.Bcrypt.Generators.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/CodeFusion.ContestBench.Tests/CodeFusion.ContestBench.Tests.csproj" />
     <Project Path="tests/CodeFusion.Core.Tests/CodeFusion.Core.Tests.csproj" />
     <Project Path="tests/CodeFusion.Data.Tests/CodeFusion.Data.Tests.csproj" />
     <Project Path="tests/CodeFusion.Data.Postgres.Tests/CodeFusion.Data.Postgres.Tests.csproj" />

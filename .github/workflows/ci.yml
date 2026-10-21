@@ -98,7 +98,7 @@ jobs:
       - if: needs.changes.outputs.code == 'true'
         name: Test
         run: |
-          for t in CodeFusion.Core.Tests CodeFusion.Http.Tests CodeFusion.Http.Generators.Tests CodeFusion.Data.Postgres.Tests CodeFusion.Data.Tests CodeFusion.Data.Sqlite.Tests CodeFusion.TechEmpower.Tests CodeFusion.Fuzz; do
+          for t in CodeFusion.Core.Tests CodeFusion.ContestBench.Tests CodeFusion.Http.Tests CodeFusion.Http.Generators.Tests CodeFusion.Data.Postgres.Tests CodeFusion.Data.Tests CodeFusion.Data.Sqlite.Tests CodeFusion.TechEmpower.Tests CodeFusion.Fuzz; do
             dotnet test --project tests/$t -c ${{ matrix.configuration }} --no-build -- --max-threads 2 --timeout 10m
           done
       # The server's tests again, every server on the epoll event loops (HttpTransport.EventLoop). The allocation
