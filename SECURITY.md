@@ -54,7 +54,8 @@ Fixes go into the latest release only.
   must be one RFC 9110 token, checked when the app starts.
 - **Claims** beyond `sub`, `iat`, `exp` and `nbf` are read only when the app declares them (`JwtOptions.Claims`,
   string claims only), and only after the signature has been checked in constant time and the header found to be
-  HS256: nothing of a forged token is decoded into the arena or parsed. One pass reads the payload. A name that
+  HS256: nothing of a forged token is decoded into the arena or parsed. A header or payload with anything after its
+  object but whitespace is invalid, as JSON is. One pass reads the payload. A name that
   doesn't unescape, an `exp` or `nbf` that isn't a number, or JSON that doesn't parse makes the token invalid. A
   `sub` that isn't a positive integer string, or a declared claim that is absent (when required), not a string, not
   valid UTF-8 (raw bytes or a lone surrogate escape), or outside its byte lengths, makes the payload invalid. Every

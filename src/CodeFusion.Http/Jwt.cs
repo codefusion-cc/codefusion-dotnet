@@ -367,7 +367,7 @@ public sealed class Jwt : IRequestScoped
                 }
                 else r.Skip();
             }
-            return hs256 && r.TokenType == JsonTokenType.EndObject;
+            return hs256 && r.TokenType == JsonTokenType.EndObject && !r.Read(); // nothing after it but whitespace
         }
         catch (JsonException)
         {
@@ -462,7 +462,7 @@ public sealed class Jwt : IRequestScoped
                         break;
                 }
             }
-            if (r.TokenType != JsonTokenType.EndObject) return TokenCheck.Invalid;
+            if (r.TokenType != JsonTokenType.EndObject || r.Read()) return TokenCheck.Invalid; // nothing after it but whitespace
             if (double.IsNaN(exp) || !(now < exp)) return TokenCheck.Invalid; // exp is required
             if (!double.IsNaN(nbf) && now < nbf) return TokenCheck.Invalid;
             if (bad || sub <= 0) return TokenCheck.InvalidPayload;

@@ -278,6 +278,36 @@ public sealed class JwtClaimTests
         Assert.Equal(TokenCheck.Invalid, Read(jwt, "é" + good).Check);
     }
 
+    // Found by the jwt-claims fuzz target: the payload's reader stopped at the root's end, so bytes after it went
+    // unread. A signed token is still only JSON when nothing but whitespace follows, as JsonDocument requires.
+    [Theory]
+    [InlineData(" x")]
+    [InlineData("+")]
+    [InlineData("{}")]
+    [InlineData("}")]
+    [InlineData("\"")]
+    [InlineData(",")]
+    public void AnythingAfterThePayloadOrHeaderMakesTheTokenInvalid(string after)
+    {
+        string payload = $$"""{"sub":"42","username":"jake","exp":{{Now + 60}}}""";
+        Assert.Equal(TokenCheck.Valid, Read(Username(), Signed(payload + " \n\t")).Check);
+        Assert.Equal(TokenCheck.Invalid, Read(Username(), Signed(payload + after)).Check);
+        var plain = new Jwt(JwtTests.Secret);
+        Assert.Equal(42, plain.Verify(Encoding.ASCII.GetBytes(Signed(payload + " ")), NowMs));
+        Assert.Equal(0, plain.Verify(Encoding.ASCII.GetBytes(Signed(payload + after)), NowMs));
+        byte[] p = Encoding.UTF8.GetBytes(payload);
+        string header = Base64Url.EncodeToString(Encoding.ASCII.GetBytes("""{"alg":"HS256"}""" + after));
+        Assert.Equal(TokenCheck.Invalid, Read(Username(), Signed(p, header)).Check);
+        Assert.Equal(TokenCheck.Valid, Read(Username(), Signed(p, Base64Url.EncodeToString(Encoding.ASCII.GetBytes("""{"alg":"HS256"} """)))).Check);
+    }
+
+    [Fact]
+    public void ARawByteAfterThePayloadIsInvalid()
+    {
+        byte[] payload = [.. Encoding.UTF8.GetBytes($$"""{"sub":"42","username":"jake","exp":{{Now + 60}}}"""), 0xBF];
+        Assert.Equal(TokenCheck.Invalid, Read(Username(), Signed(payload)).Check);
+    }
+
     [Fact]
     public void WithoutDeclaredClaimsNothingIsTakenFromTheArena()
     {
