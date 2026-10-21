@@ -269,8 +269,8 @@ public sealed class ShapeGeneratorTests
         var r = Run(source);
         Assert.Equal("WITH t AS (SELECT p.id, p.name FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (owner_id, name) SELECT t.id, $2 FROM t) SELECT t.id, t.name FROM t" +
             Guards.Then("pets", [("owner_id", "bigint"), ("name", "text")], ["pets", "people"], delete: false, corrected: false) + " ORDER BY t.id LIMIT 1", r.Sql("Give"));
-        // a condition holding AND inside a CASE is one condition
-        Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > 1) DELETE FROM pets x USING t WHERE (CASE WHEN x.id > 0 AND x.id < 9 THEN x.owner_id = t.id OR x.id = 2 ELSE false END)", r.Sql("TakeCase"));
+        // a condition holding AND inside a CASE is one condition, and the CASE one term, which needs no parentheses
+        Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > 1) DELETE FROM pets x USING t WHERE CASE WHEN x.id > 0 AND x.id < 9 THEN x.owner_id = t.id OR x.id = 2 ELSE false END", r.Sql("TakeCase"));
         Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > $1) DELETE FROM pets x WHERE x.owner_id = ANY(ARRAY(SELECT t.id FROM t))", r.Sql("Take"));
         // the rows found used otherwise than one key: joined
         Assert.Equal("WITH t AS (SELECT p.id, p.age FROM people p WHERE p.age > $1) DELETE FROM pets x USING t WHERE x.owner_id = t.id AND x.id < t.age", r.Sql("TakeYounger"));
@@ -298,6 +298,20 @@ public sealed class ShapeGeneratorTests
     {
         Assert.Equal(parts, string.Join("|", CodeFusion.Data.Generator.Sql.Conjuncts(sql)));
         Assert.False(CodeFusion.Data.Generator.Sql.EqualsColumnOf("CASE WHEN a = 1 THEN x.c ELSE x.d END = t.id", "t", out _, out _));
+    }
+
+    [Fact]
+    public void ACommentOrALiteralNeverHidesNorMakesAnOperator()
+    {
+        // a comment touching AND: no cut inside its delimiters, and the OR it hides a quote before still needs parentheses
+        Assert.Equal("a/**/AND/**/b", string.Join("|", CodeFusion.Data.Generator.Sql.Conjuncts("a/**/AND/**/b")));
+        Assert.Equal("(x = 1 -- don't\n OR y = 2)", CodeFusion.Data.Generator.Sql.Wrap("x = 1 -- don't\n OR y = 2", " OR "));
+        Assert.Equal("(a/**/OR/**/b)", CodeFusion.Data.Generator.Sql.Wrap("a/**/OR/**/b", " OR "));
+        Assert.Equal("CASE WHEN a OR b THEN 1 END", CodeFusion.Data.Generator.Sql.Wrap("CASE WHEN a OR b THEN 1 END", " OR "));
+        Assert.Equal("'a OR b'", CodeFusion.Data.Generator.Sql.Wrap("'a OR b'", " OR "));
+        // one term: an escaped quote and a space inside one E'' string
+        Assert.True(CodeFusion.Data.Generator.Sql.Atomic("E'a\\' b'"));
+        Assert.False(CodeFusion.Data.Generator.Sql.Atomic("x -- it's"));
     }
 
     [Fact]

@@ -965,7 +965,9 @@ What the fixes decided:
   the row found, or an ignored insert of the same key.
 - The reply of a Then with a Select is the row found of the smallest key.
 - Conditions split at AND only outside parentheses and CASE ... END, scanning `Sql.Code`, which blanks string
-  literals (E'' and dollar-quoted too), quoted names and comments.
+  literals (E'' and dollar-quoted too), quoted names and comments. `Sql.TopLevel` (whether `Wrap` adds parentheses) and
+  `Sql.Atomic` scan the same code, so a quote in a comment hides no operator; a split also needs the operator as
+  written, so `a/**/AND/**/b` is one condition rather than two pieces ending inside a comment.
 - `ToLowerAscii` and `ToUpperAscii` are `translate()` of A to Z, which keeps the text's collation. `regexp_replace`
   fails on text of a nondeterministic collation, and `replace` does before Postgres 18 (documented on the settings).
 - `Concat(long)` writes its number through `SqlDialectAttribute.IntegerText` (`CAST({0} AS text)`); `AnyOfQuery`

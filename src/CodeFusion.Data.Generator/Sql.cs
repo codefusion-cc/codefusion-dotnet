@@ -252,36 +252,28 @@ static class Sql
     /// <summary>Parentheses around <paramref name="sql"/> when it holds <paramref name="op"/> at its top level.</summary>
     public static string Wrap(string sql, string op) => TopLevel(sql, op) ? "(" + sql + ")" : sql;
 
-    /// <summary>Whether <paramref name="op"/> (" AND ", " OR ", ...) occurs outside parentheses and quotes.</summary>
-    public static bool TopLevel(string sql, string op)
-    {
-        int depth = 0;
-        bool quoted = false;
-        for (int i = 0; i < sql.Length; i++)
-        {
-            char c = sql[i];
-            if (c == '\'') quoted = !quoted;
-            else if (quoted) continue;
-            else if (c == '(') depth++;
-            else if (c == ')') depth--;
-            else if (depth == 0 && string.CompareOrdinal(sql, i, op, 0, op.Length) == 0) return true;
-        }
-        return false;
-    }
+    /// <summary>Whether <paramref name="op"/> (" AND ", " OR ", ...) occurs at the top level of <paramref name="sql"/>
+    /// (<see cref="TopLevelAt"/>), one a comment touches included: SQL reads it as the operator.</summary>
+    public static bool TopLevel(string sql, string op) => TopLevelAt(sql, op, cut: false).Count > 0;
 
-    /// <summary>Whether <paramref name="sql"/> is one term: no operator outside parentheses.</summary>
+    /// <summary>Whether <paramref name="sql"/> is one term: no space outside parentheses and string literals, in
+    /// <see cref="Code"/> (a comment or a dollar-quoted string is taken as more than one).</summary>
     public static bool Atomic(string sql)
     {
+        string code = Code(sql);
         int depth = 0;
-        bool quoted = false;
-        for (int i = 0; i < sql.Length; i++)
+        char quote = '\0';
+        foreach (char c in code)
         {
-            char c = sql[i];
-            if (c == '\'') quoted = !quoted;
-            else if (quoted) continue;
+            // a literal's inside is blank in the code: its quotes are the only ones left
+            if (quote != '\0')
+            {
+                if (c == quote) quote = '\0';
+            }
+            else if (c is '\'' or '"') quote = c;
             else if (c == '(') depth++;
             else if (c == ')') depth--;
-            else if (depth == 0 && c == ' ') return false;
+            else if (depth == 0 && char.IsWhiteSpace(c)) return false;
         }
         return true;
     }
@@ -289,9 +281,10 @@ static class Sql
     /// <summary>
     /// Where <paramref name="op"/> (" AND ", " = ") stands at the top level of <paramref name="sql"/>: outside
     /// parentheses and CASE ... END (whose WHEN and THEN hold conditions of their own), in <see cref="Code"/>, so never
-    /// in a string literal, a quoted name or a comment.
+    /// in a string literal, a quoted name or a comment. To <paramref name="cut"/> there, the operator must be written
+    /// as it is, not made of a comment's blanks (<c>a/**/AND/**/b</c>), so a piece never ends inside a comment.
     /// </summary>
-    static List<int> TopLevelAt(string sql, string op)
+    static List<int> TopLevelAt(string sql, string op, bool cut = true)
     {
         string code = Code(sql);
         var at = new List<int>();
@@ -303,7 +296,7 @@ static class Sql
             else if (c == ')') depth--;
             else if (Word(code, i, "CASE")) depth++;
             else if (Word(code, i, "END")) depth--;
-            else if (depth == 0 && string.CompareOrdinal(code, i, op, 0, op.Length) == 0)
+            else if (depth == 0 && string.CompareOrdinal(code, i, op, 0, op.Length) == 0 && (!cut || string.CompareOrdinal(sql, i, op, 0, op.Length) == 0))
             {
                 at.Add(i);
                 i += op.Length - 1;
