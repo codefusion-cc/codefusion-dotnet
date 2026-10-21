@@ -90,6 +90,7 @@ abstract record Source(Location At);
 sealed record TableSource(EntityInfo Entity, Location At) : Source(At);
 sealed record SqlSource(ExpressionSyntax Text, Env Env, Location At) : Source(At);
 sealed record InsertSource(EntityInfo Entity, IOperation Row, Env Env, Location At) : Source(At);
+sealed record ListSource(Host List, Location At) : Source(At);
 
 sealed partial class Translator
 {
@@ -129,6 +130,8 @@ sealed partial class Translator
             }
             var chain = Parse(body, new Env());
             Root(chain, body.Syntax.GetLocation());
+            // a NUL in any text the statements hold (a constant refused where it is, or the text of Sql)
+            if (q.Statements.Any(s => s.Sql.IndexOf('\0') >= 0)) throw new Refused(at, Sql.NulText);
             return q;
         }
         catch (Refused r)
@@ -178,6 +181,12 @@ sealed partial class Translator
                             }
                         }
                         throw new Refused(at, $"'{m.Name}'");
+                    }
+                    if (Known.Same(m.ContainingType, K.Utf8ListOperators) && m.Name == "AsRows")
+                    {
+                        // a list known when called, whose texts are the rows
+                        if (Eval(args[0], env) is not Host list) throw new Refused(args[0].Syntax.GetLocation(), "AsRows of a list that isn't known when the query is called");
+                        return new Chain { Source = new ListSource(list, at) };
                     }
                     var receiver = inv.Instance ?? (args.Count > 0 ? args[0] : throw new Refused(at, $"'{m.Name}' without a receiver"));
                     var chain = Parse(receiver, env);
@@ -230,6 +239,13 @@ sealed partial class Translator
         {
             case TableSource t:
             {
+                int then = chain.Steps.FindIndex(IsFoundThen);
+                if (then >= 0)
+                {
+                    Expect(thens.Count == 0, at, "a unit after Then (Then is one write from each row found)");
+                    FoundWrite(t, chain.Steps, then);
+                    break;
+                }
                 int write = chain.Steps.FindIndex(s => s.Name is "DeleteIf" or "Delete" or "UpdateIf" or "Update");
                 if (write >= 0)
                 {
@@ -255,6 +271,8 @@ sealed partial class Translator
                 _q.IsWrite = true;
                 Insert(i, chain.Steps, null, root: thens.Count == 0);
                 break;
+            case ListSource l:
+                throw ListOnItsOwn(l);
         }
         Then(thens, null);
     }
@@ -464,6 +482,8 @@ sealed partial class Translator
                     Add(sel.Render(D), null);
                     return;
                 }
+                case "Distinct":
+                    throw new Refused(sat, "Distinct in a read (only the rows of an insert from a list, list.AsRows(), take it)");
                 default:
                     throw new Refused(sat, $"'{s.Name}' in a query");
             }
@@ -479,26 +499,40 @@ sealed partial class Translator
         var p = steps[page];
         var at = p.Call.Syntax.GetLocation();
         Expect(page == steps.Count - 2 && steps[page + 1].Name == "Select", at, "a page that doesn't end in .Page(...).Select(...)");
-        var orders = steps.Take(page).Where(s => s.Name.StartsWith("Order", StringComparison.Ordinal) || s.Name.StartsWith("ThenBy", StringComparison.Ordinal)).ToList();
+        static bool IsOrder(Step s) => s.Name.StartsWith("Order", StringComparison.Ordinal) || s.Name.StartsWith("ThenBy", StringComparison.Ordinal);
+        // the newest rows per group: each source row's children (SelectMany), a page of all of them
+        int sm = steps.FindIndex(0, page, s => s.Name == "SelectMany");
+        var before = steps.Take(sm >= 0 ? sm : page).ToList();
+        var after = sm >= 0 ? steps.Skip(sm + 1).Take(page - sm - 1).ToList() : before;
+        var orders = after.Where(IsOrder).ToList();
         Expect(orders.Count == 1, at, "a page that isn't ordered by exactly one key (the column that identifies its rows)");
-        var wheres = steps.Take(page).Where(s => s.Name == "Where").ToList();
-        Expect(wheres.Count + orders.Count == page, at, "operators before Page other than Where and one OrderBy");
+        var wheres = before.Where(s => s.Name == "Where").ToList();
+        var childWheres = sm >= 0 ? after.Where(s => s.Name == "Where").ToList() : new List<Step>();
+        if (sm >= 0)
+        {
+            Expect(wheres.Count == before.Count, steps[sm].Call.Syntax.GetLocation(), "operators before SelectMany other than Where");
+            Expect(childWheres.Count + 1 == after.Count, at, "operators between SelectMany and Page other than Where and one OrderBy");
+            Expect(D.Lateral, at, $"a page of each row's children in {D.Name}, which has no LATERAL join");
+        }
+        else Expect(wheres.Count + orders.Count == page, at, "operators before Page other than Where and one OrderBy");
         bool desc = orders[0].Name == "OrderByDescending";
         string dir = desc ? " DESC" : "";
 
-        // the key: a column of the source that is its own key or a foreign key to the row the page shows
+        // the key: a column of the row that is its own key or a foreign key to the row the page shows
         var keyLambda = orders[0].Lambda(0);
+        var rows = sm >= 0 ? Entity(keyLambda.Symbol.Parameters[0].Type, at) : t.Entity;
         var keyBody = Body(keyLambda.Body, keyLambda.Syntax.GetLocation());
         keyBody = Unwrap(keyBody is IConversionOperation kc ? kc.Operand : keyBody);
-        Expect(keyBody is IPropertyReferenceOperation { Instance: IParameterReferenceOperation } kp && t.Entity.Columns.ContainsKey(kp.Property.Name),
+        Expect(keyBody is IPropertyReferenceOperation { Instance: IParameterReferenceOperation } kp && rows.Columns.ContainsKey(kp.Property.Name),
             keyLambda.Syntax.GetLocation(), "a page key that isn't a column of the row (s => s.Id)");
-        var keyColumn = t.Entity.Columns[((IPropertyReferenceOperation)keyBody).Property.Name];
+        var keyColumn = rows.Columns[((IPropertyReferenceOperation)keyBody).Property.Name];
         EntityInfo shown;
         string? nav = null;
-        if (Known.Same(keyColumn.Property, t.Entity.Key?.Property)) shown = t.Entity;
+        if (Known.Same(keyColumn.Property, rows.Key?.Property)) shown = rows;
         else
         {
-            var one = t.Entity.Ones.Values.FirstOrDefault(o => Known.Same(o.ForeignKey.Property, keyColumn.Property))
+            if (sm >= 0) throw new Refused(keyLambda.Syntax.GetLocation(), "a page of each row's children ordered by something other than their key");
+            var one = rows.Ones.Values.FirstOrDefault(o => Known.Same(o.ForeignKey.Property, keyColumn.Property))
                 ?? throw new Refused(keyLambda.Syntax.GetLocation(), "a page key that is neither the row's key nor a foreign key to the row the page shows");
             shown = Entity(one.Target, at);
             nav = one.Property.Name;
@@ -523,11 +557,15 @@ sealed partial class Translator
         string cte = Aliases.Take("c"), lateral = Aliases.Take("p"), inner = Aliases.Take("p"), b = Aliases.Take("b");
         string name = keyLambda.Symbol.Parameters[0].Name;
 
-        Select Filtered(out Row row)
+        // the rows the page is of, and their key's SQL there; a page's own rows (forPage) are as many of each group's
+        // children as the page can show, offset and all
+        Select Filtered(bool forPage, out string key)
         {
+            if (sm >= 0) return Groups(t, wheres, steps[sm], childWheres, keyColumn, desc, forPage ? PageEnd(offset, limit, maxLimit) : null, out key);
             var s = new Select();
-            row = FromTable(s, t.Entity, name);
+            var row = FromTable(s, t.Entity, name);
             foreach (var w in wheres) s.Where.Add(Condition(Apply(w.Lambda(0), w.Env, new RowValue(row)), w.Call.Syntax.GetLocation()));
+            key = Column(row, keyColumn, at);
             return s;
         }
 
@@ -535,25 +573,26 @@ sealed partial class Translator
         string count;
         if (probe)
         {
-            var exists = Filtered(out var er);
-            exists.OrderBy.Add((Column(er, keyColumn, at), false));
+            var exists = Filtered(false, out var ek);
+            // in the key's order an index finds the cap's row; over several groups' children, no order does
+            if (sm < 0) exists.OrderBy.Add((ek, false));
             exists.Limit = "1";
             exists.Offset = Names.Number(cap - 1);
-            var all = Filtered(out _);
+            var all = Filtered(false, out _);
             all.Columns.Add(("count(*)", null));
             count = $"SELECT CASE WHEN EXISTS ({exists.Render(D)}) THEN {Dialect.Format(D.BigIntLiteral, Names.Number(cap))} ELSE ({all.Render(D)}) END AS n";
         }
         else
         {
-            var limited = Filtered(out _);
+            var limited = Filtered(false, out _);
             limited.Limit = Names.Number(cap);
             count = $"SELECT count(*) AS n FROM ({limited.Render(D)}) {Aliases.Take("s")}";
         }
 
         // the page's keys, picked before anything is filled in
-        var ids = Filtered(out var ir);
-        ids.Columns.Add((Column(ir, keyColumn, at), "id"));
-        ids.OrderBy.Add((Column(ir, keyColumn, at), desc));
+        var ids = Filtered(true, out var ik);
+        ids.Columns.Add((ik, "id"));
+        ids.OrderBy.Add((ik, desc));
         ids.Limit = Names.Number(maxLimit); // a constant: the generic plan expects the page's real size
         ids.Offset = Operand(offset, at);
 
@@ -1069,14 +1108,7 @@ sealed partial class Translator
         var e = source.Entity;
         keySet = null;
         noKey = null;
-        string head = $"INSERT INTO {TableSql(e)}";
-        string tail = ignore ? D.InsertOrIgnore switch
-        {
-            0 => " ON CONFLICT DO NOTHING",
-            1 => "",
-            _ => throw new Refused(at, $"OrIgnore in {D.Name}"),
-        } : "";
-        if (ignore && D.InsertOrIgnore == 1) head = $"INSERT OR IGNORE INTO {TableSql(e)}";
+        var (head, tail) = InsertHead(e, ignore, at);
         var row = source.Row;
         if (row is IAnonymousFunctionOperation lambda)
         {
@@ -1104,6 +1136,11 @@ sealed partial class Translator
         // INSERT ... SELECT from a query whose Select makes the entity
         noKey = "an insert of a query's rows, which may be none or several";
         var chain = Parse(row, source.Env);
+        if (chain.Source is ListSource list)
+        {
+            noKey = "an insert of a list's rows, which may be none or several";
+            return $"{head} {ListRows(e, list, chain.Steps, at)}{tail}";
+        }
         if (chain.Source is not TableSource src || chain.Steps.Count == 0 || chain.Steps[chain.Steps.Count - 1].Name != "Select"
             || chain.Steps.Take(chain.Steps.Count - 1).Any(s => s.Name != "Where"))
             throw new Refused(row.Syntax.GetLocation(), $"an insert from something other than Table.Where(...).Select(x => new {e.Type.Name} {{ ... }})");
@@ -1118,6 +1155,76 @@ sealed partial class Translator
         // SQLite reads the ON of ON CONFLICT as a join's after a FROM without WHERE
         if (ignore && D.InsertOrIgnore == 0 && D.InsertSelectNeedsWhere && sel.Where.Count == 0) sel.Where.Add(D.True);
         return $"{head} ({string.Join(", ", columns)}) {sel.Render(D)}{tail}";
+    }
+
+    /// <summary>
+    /// The columns and rows of an insert from a list known when called: its texts as rows (the dialect's ListRows, the
+    /// list its array parameter), filtered, made distinct and ordered as the chain says, then made into the entity.
+    /// LINQ's Distinct is of the texts, SQL's of the columns made: they are the same when a column is the text itself,
+    /// and only then can SQL order the rows, by that text.
+    /// </summary>
+    string ListRows(EntityInfo e, ListSource list, List<Step> steps, Location at)
+    {
+        if (steps.Count == 0 || steps[steps.Count - 1].Name != "Select")
+            throw new Refused(list.At, $"an insert from a list that doesn't end in .Select(x => new {e.Type.Name} {{ ... }})");
+        if (D.ListRows.Length == 0) throw new Refused(list.At, $"the rows of an insert from a list in {D.Name}, which can't make a list's elements rows");
+        var p = ParamOf(list.List, list.At);
+        if (p.Kind != ParamType.TextArray) throw new Refused(list.At, "AsRows of a list that isn't a list of Utf8");
+        string alias = Aliases.Take(LambdaName(steps) ?? "v");
+        var sel = new Select { From = Dialect.Format(D.ListRows, Params.Add(p), alias) };
+        var text = new SqlValue(alias + ".v", K.Utf8, false);
+        var ordering = new Ordering(sel);
+        Step? distinct = null, ordered = null;
+        foreach (var s in steps.Take(steps.Count - 1))
+        {
+            var sat = s.Call.Syntax.GetLocation();
+            switch (s.Name)
+            {
+                case "Where":
+                    sel.Where.Add(Condition(Apply(s.Lambda(0), s.Env, text), sat));
+                    break;
+                case "Distinct":
+                    distinct = s;
+                    break;
+                case "OrderBy" or "OrderByDescending" or "ThenBy" or "ThenByDescending":
+                    ordering.Add(s.Name, Operand(Apply(s.Lambda(0), s.Env, text), sat));
+                    ordered ??= s;
+                    break;
+                default:
+                    throw new Refused(sat, $"'{s.Name}' in the rows of an insert from a list (Where, Distinct and OrderBy come before its Select)");
+            }
+        }
+        var last = steps[steps.Count - 1];
+        var made = Apply(last.Lambda(0), last.Env, text) as ObjectValue
+            ?? throw new Refused(last.Call.Syntax.GetLocation(), $"an insert's Select that doesn't make a {e.Type.Name}");
+        var (columns, values) = Values(made, e, at);
+        if (distinct is not null)
+        {
+            if (!values.Contains(text.Sql))
+                throw new Refused(last.Call.Syntax.GetLocation(), "Distinct before a Select that sets no column to the text itself (SQL's DISTINCT is of the columns made, LINQ's of the texts)");
+            if (sel.OrderBy.Any(o => o.Sql != text.Sql))
+                throw new Refused(ordered!.Call.Syntax.GetLocation(), "Distinct with an order by something other than the text itself (SQL orders distinct rows only by what they hold)");
+            sel.Distinct = true;
+        }
+        foreach (var v in values) sel.Columns.Add((v, null));
+        return $"({string.Join(", ", columns)}) {sel.Render(D)}";
+    }
+
+    /// <summary>A list's rows used as anything but an insert's.</summary>
+    static Refused ListOnItsOwn(ListSource l) =>
+        new(l.At, "a list's rows on their own: they are the rows of an insert (Insert(table, list.AsRows()...Select(x => new T { ... })))");
+
+    /// <summary>An insert's words around its columns and rows: <c>INSERT INTO t</c>, and the dialect's skip of a row a
+    /// unique key holds already when <paramref name="ignore"/>.</summary>
+    (string Head, string Tail) InsertHead(EntityInfo e, bool ignore, Location at)
+    {
+        if (!ignore) return ($"INSERT INTO {TableSql(e)}", "");
+        return D.InsertOrIgnore switch
+        {
+            0 => ($"INSERT INTO {TableSql(e)}", " ON CONFLICT DO NOTHING"),
+            1 => ($"INSERT OR IGNORE INTO {TableSql(e)}", ""),
+            _ => throw new Refused(at, $"OrIgnore in {D.Name}"),
+        };
     }
 
     /// <summary>The key a row sets: a value known when called is the inserted row's key for later statements; one
@@ -1181,11 +1288,14 @@ sealed partial class Translator
             case TableSource t:
             {
                 int at = chain.Steps.FindIndex(x => x.Name is "DeleteIf" or "Delete" or "UpdateIf" or "Update");
+                if (chain.Steps.Any(IsFoundThen)) throw new Refused(write.Syntax.GetLocation(), "Then from the rows a query found inside a unit (it is a statement of its own: make it a query method's whole definition)");
                 if (at < 0) throw new Refused(write.Syntax.GetLocation(), "a read as a write of the unit");
                 if (chain.Steps[at].Name is "DeleteIf" or "Delete") Delete(t, chain.Steps, at, condition, root: false);
                 else Update(t, chain.Steps, at, condition, root: false);
                 break;
             }
+            case ListSource l:
+                throw ListOnItsOwn(l);
         }
         Then(thens, condition);
     }

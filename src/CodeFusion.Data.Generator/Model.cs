@@ -10,11 +10,11 @@ sealed class Known
 {
     public readonly Compilation Compilation;
     public readonly INamedTypeSymbol Utf8, Timestamp, RawJson, DataContext, DataContextOf, Many, One, Page, WriteOf, Write;
-    public readonly INamedTypeSymbol Query, OrderedQuery, Table, PageQuery, DeleteQuery, WriteQuery, UpdateQuery, Insert, SqlQuery, SqlString;
-    public readonly INamedTypeSymbol QueryOperators, QueryDefinition, SqlTemplate, JoinTable, JsonList, SqlDialect, Provider, SqlFunctions;
+    public readonly INamedTypeSymbol Query, OrderedQuery, Table, PageQuery, DeleteQuery, WriteQuery, UpdateQuery, Insert, SqlQuery, SqlString, FoundQuery;
+    public readonly INamedTypeSymbol QueryOperators, QueryDefinition, SqlTemplate, JoinTable, JsonList, SqlDialect, Provider, SqlFunctions, Utf8Operators, Utf8ListOperators;
     /// <summary>Null against a CodeFusion.Data from before it.</summary>
     public readonly INamedTypeSymbol? RunsAlone;
-    public readonly INamedTypeSymbol? JsonEnvelope, JsonPropertyName, JsonIgnore, TableAttribute, ColumnAttribute, KeyAttribute, ForeignKey, InverseProperty, NotMapped;
+    public readonly INamedTypeSymbol? JsonEnvelope, JsonPropertyName, JsonIgnore, TableAttribute, ColumnAttribute, KeyAttribute, ForeignKey, InverseProperty, NotMapped, Required;
 
     Known(Compilation c)
     {
@@ -38,6 +38,7 @@ sealed class Known
         DeleteQuery = T("CodeFusion.Data.DeleteQuery`1");
         WriteQuery = T("CodeFusion.Data.WriteQuery`1");
         UpdateQuery = T("CodeFusion.Data.UpdateQuery`1");
+        FoundQuery = T("CodeFusion.Data.FoundQuery`1");
         Insert = T("CodeFusion.Data.Insert`1");
         SqlQuery = T("CodeFusion.Data.SqlQuery`1");
         SqlString = T("CodeFusion.Data.SqlString");
@@ -50,6 +51,8 @@ sealed class Known
         SqlDialect = T("CodeFusion.Data.SqlDialectAttribute");
         Provider = T("CodeFusion.Data.IDataProvider`3");
         SqlFunctions = T("CodeFusion.Data.SqlFunctions");
+        Utf8Operators = T("CodeFusion.Data.Utf8Operators");
+        Utf8ListOperators = T("CodeFusion.Data.Utf8ListOperators");
         JsonPropertyName = c.GetTypeByMetadataName("System.Text.Json.Serialization.JsonPropertyNameAttribute");
         JsonIgnore = c.GetTypeByMetadataName("System.Text.Json.Serialization.JsonIgnoreAttribute");
         TableAttribute = c.GetTypeByMetadataName("System.ComponentModel.DataAnnotations.Schema.TableAttribute");
@@ -58,6 +61,7 @@ sealed class Known
         ForeignKey = c.GetTypeByMetadataName("System.ComponentModel.DataAnnotations.Schema.ForeignKeyAttribute");
         InverseProperty = c.GetTypeByMetadataName("System.ComponentModel.DataAnnotations.Schema.InversePropertyAttribute");
         NotMapped = c.GetTypeByMetadataName("System.ComponentModel.DataAnnotations.Schema.NotMappedAttribute");
+        Required = c.GetTypeByMetadataName("System.ComponentModel.DataAnnotations.RequiredAttribute");
     }
 
     /// <summary>The symbols, or null when the compilation doesn't reference CodeFusion.Data.</summary>
@@ -234,8 +238,9 @@ sealed class ViewInfo
 /// <summary>A mapped column of an entity.</summary>
 sealed record ColumnInfo(IPropertySymbol Property, string Name, ValueKind Kind);
 
-/// <summary>A one-navigation: <c>User Author</c> with its foreign key <c>AuthorId</c>.</summary>
-sealed record OneNav(IPropertySymbol Property, INamedTypeSymbol Target, ColumnInfo ForeignKey);
+/// <summary>A one-navigation: <c>User Author</c> with its foreign key <c>AuthorId</c>. <see cref="Required"/>: <c>[Required]</c> on the
+/// navigation or its key, the model's word that the row it leads to is there.</summary>
+sealed record OneNav(IPropertySymbol Property, INamedTypeSymbol Target, ColumnInfo ForeignKey, bool Required = false);
 
 /// <summary>A many-navigation: children holding this entity's key, or rows through a join table.</summary>
 sealed record ManyNav(IPropertySymbol Property, INamedTypeSymbol Target, string? InverseNavigation, string? JoinTable, string? ThisColumn, string? OtherColumn)
@@ -253,7 +258,10 @@ sealed class EntityInfo
     public readonly Dictionary<string, ColumnInfo> Columns = new();
     public readonly Dictionary<string, OneNav> Ones = new();
     public readonly Dictionary<string, ManyNav> Manys = new();
+    /// <summary>The key: its one column, or null when it has none or several (<see cref="KeyColumns"/>).</summary>
     public ColumnInfo? Key;
+    /// <summary>The key's columns: those with [Key] (several make one key), else Id.</summary>
+    public readonly List<ColumnInfo> KeyColumns = new();
 
     EntityInfo(INamedTypeSymbol type, string table, string? schema)
     {
@@ -267,6 +275,8 @@ sealed class EntityInfo
     {
         var e = new EntityInfo(type, table, schema);
         var props = new List<IPropertySymbol>();
+        var keyed = new List<ColumnInfo>();
+        ColumnInfo? id = null;
         for (var t = type; t is not null && t.SpecialType != SpecialType.System_Object; t = t.BaseType)
             props.InsertRange(0, t.GetMembers().OfType<IPropertySymbol>().Where(p => !p.IsStatic && !p.IsIndexer && p.DeclaredAccessibility == Accessibility.Public));
         foreach (var p in props)
@@ -297,13 +307,17 @@ sealed class EntityInfo
                 string name = Known.Attribute(p, k.ColumnAttribute)?.ConstructorArguments.FirstOrDefault().Value as string ?? Names.Snake(p.Name);
                 var col = new ColumnInfo(p, name, kind.Value);
                 e.Columns[p.Name] = col;
-                if (Known.Attribute(p, k.KeyAttribute) is not null || (p.Name == "Id" && e.Key is null)) e.Key = col;
+                if (Known.Attribute(p, k.KeyAttribute) is not null) keyed.Add(col);
+                else if (p.Name == "Id") id = col;
                 continue;
             }
             if (p.Type is INamedTypeSymbol { TypeKind: TypeKind.Class } nav && nav.SpecialType != SpecialType.System_String)
                 continue; // a one-navigation: resolved below, once every column is known
             problems.Add($"{p.Name}: type {p.Type.ToDisplayString()} can't be a column (mark it [NotMapped] if it isn't one)");
         }
+        // [Key] on one column, or on each of a key of several; else Id by convention
+        e.KeyColumns.AddRange(keyed.Count > 0 ? keyed : id is null ? [] : [id]);
+        e.Key = e.KeyColumns.Count == 1 ? e.KeyColumns[0] : null;
         foreach (var p in props)
         {
             if (Known.Attribute(p, k.NotMapped) is not null || Known.Is(p.Type, k.Many) || e.Columns.ContainsKey(p.Name)) continue;
@@ -317,7 +331,7 @@ sealed class EntityInfo
                 problems.Add($"{p.Name}: no foreign key {fkName} for the navigation");
                 continue;
             }
-            e.Ones[p.Name] = new OneNav(p, target, fk);
+            e.Ones[p.Name] = new OneNav(p, target, fk, Known.Attribute(p, k.Required) is not null || Known.Attribute(fk.Property, k.Required) is not null);
         }
         return e;
     }

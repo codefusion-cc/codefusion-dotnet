@@ -227,6 +227,10 @@ sealed class Row(EntityInfo entity, string? alias, Select? owner, RowMode mode =
     /// <summary>A row an inner join reached: its key is the foreign key it was joined on, which the hand-written
     /// statements correlate on (so Postgres evaluates subqueries at the same plan node).</summary>
     public string? KeyViaForeignKey;
+    /// <summary>The join that reached it, as written into its owner's select.</summary>
+    public string? JoinSql;
+    /// <summary>Reached by a navigation the model declares required ([Required]): the row is there.</summary>
+    public bool Required;
     /// <summary>Reached through a left join (here or before): every column may be NULL.</summary>
     public bool Optional;
     /// <summary>Its navigations join LEFT though its columns aren't NULL where they are read: a row's children joined by
@@ -387,7 +391,7 @@ sealed partial class Translator
             case IInstanceReferenceOperation:
                 return new ContextValue(op.Type!);
             case IUtf8StringOperation u8:
-                return new SqlValue(Sql.String(u8.Value), K.Utf8, false);
+                return new SqlValue(Sql.String(u8.Value, at), K.Utf8, false);
             case IDefaultValueOperation d:
                 return new Constant(null, d.Type ?? _compilation.ObjectType);
             case IConversionOperation c:
@@ -656,7 +660,8 @@ sealed partial class Translator
     }
 
     public ColumnInfo KeyOf(EntityInfo e, Location? at) =>
-        e.Key ?? throw new Refused(at, Diagnostics.BadEntity, e.Type.Name, "it has no key (an Id property or [Key]) for this query");
+        e.Key ?? throw new Refused(at, Diagnostics.BadEntity, e.Type.Name, e.KeyColumns.Count > 1
+            ? "its key is of several columns ([Key] on each), and this query needs a key of one" : "it has no key (an Id property or [Key]) for this query");
 
     /// <summary>The row a one-navigation leads to, joined into the row's select once.</summary>
     Row Navigate(Row row, OneNav nav, Location at)
@@ -670,6 +675,7 @@ sealed partial class Translator
         if (row.Mode is RowMode.Inserted or RowMode.NewKey or RowMode.Through)
             throw new Refused(at, $"the navigation '{nav.Property.Name}' from this row");
         var target = Entity(nav.Target, at);
+        Unwritten(target, at);
         if (row.Owner is null && !D.WritableCtes && row.Mode == RowMode.Table && row.Name is { } name)
         {
             // the row an UPDATE, DELETE or INSERT writes, in its RETURNING (no join there, and no writable CTE to select
@@ -683,9 +689,14 @@ sealed partial class Translator
         string alias = Aliases.ForTable(target.Table);
         // a nullable key, or a row a left join reached, may have no target: the join keeps the row either way
         bool optional = nav.ForeignKey.Kind.Nullable || row.Optional;
-        owner.Joins.Add($"{(optional || row.JoinsLeft ? "LEFT JOIN" : "JOIN")} {TableSql(target)} {alias} ON {alias}.{D.Quote(KeyOf(target, at).Name)} = {fk}");
+        string join = $"{(optional || row.JoinsLeft ? "LEFT JOIN" : "JOIN")} {TableSql(target)} {alias} ON {alias}.{D.Quote(KeyOf(target, at).Name)} = {fk}";
+        owner.Joins.Add(join);
         // equal under an inner join; a left join's NULL row would have a NULL key where the foreign key isn't
-        var r = new Row(target, alias, owner) { KeyViaForeignKey = optional ? null : fk, Optional = optional, JoinsLeft = row.JoinsLeft };
+        var r = new Row(target, alias, owner)
+        {
+            KeyViaForeignKey = optional ? null : fk, Optional = optional, JoinsLeft = row.JoinsLeft, JoinSql = join,
+            Required = nav.Required && !optional && !row.JoinsLeft,
+        };
         row.Joins[nav.Property.Name] = r;
         return r;
     }
@@ -694,6 +705,7 @@ sealed partial class Translator
     Value SingleColumn(SingleValue s, IPropertySymbol prop, Location at)
     {
         if (!s.Entity.Columns.TryGetValue(prop.Name, out var col)) throw new Refused(at, $"'{prop.Name}' of Single(...): use one of its columns");
+        Unwritten(s.Entity, at);
         return Nested(() =>
         {
             var sub = new Select();
@@ -810,6 +822,11 @@ sealed partial class Translator
 
     SqlValue Logic(string l, string r, string op, ITypeSymbol type, bool nullIsFalse)
     {
+        // a constant side decides, or leaves the other (true AND x is x, false OR x is x, whatever x is, NULL too)
+        string absorbs = op == " AND " ? D.False : D.True, neutral = op == " AND " ? D.True : D.False;
+        if (l == absorbs || r == absorbs) return new SqlValue(absorbs, type, false);
+        if (l == neutral) return new SqlValue(r, type, false, nullIsFalse);
+        if (r == neutral) return new SqlValue(l, type, false, nullIsFalse);
         // a AND b AND c stays flat; a mix gets parentheses
         string other = op == " AND " ? " OR " : " AND ";
         return new SqlValue(Sql.Wrap(l, other) + op + Sql.Wrap(r, other), type, false, nullIsFalse);
@@ -830,6 +847,9 @@ sealed partial class Translator
         // an operand that is itself a comparison or a condition needs its parentheses: SQL's comparisons don't chain
         string a = Sql.Group(Operand(l, at)), b = Sql.Group(Operand(r, at));
         bool ln = MayBeNull(l), rn = MayBeNull(r);
+        // the same column or parameter on both sides, never NULL: the answer is known (a row written from the row
+        // found holds its key, t.id = t.id)
+        if (a == b && !ln && !rn && Sql.Simple(a)) return new SqlValue(equal ? D.True : D.False, type, false);
         // C#'s == holds for two nulls and is false against one, where SQL's = is NULL: against one that can't be
         // NULL, = is false there as a condition (and an index serves it); two that can need the null-safe form
         if (equal && ln != rn) return new SqlValue($"{a} = {b}", type, false, nullIsFalse: true);
@@ -981,8 +1001,8 @@ sealed partial class Translator
     {
         null => "NULL",
         bool b => b ? D.True : D.False,
-        string s => Sql.String(s),
-        char ch => Sql.String(ch.ToString()),
+        string s => Sql.String(s, at),
+        char ch => Sql.String(ch.ToString(), at),
         // typed: 2.5 alone is numeric in SQL, and 2 an integer
         double d => Dialect.Format(D.ToFloat, FloatLiteral(d.ToString("R", CultureInfo.InvariantCulture)), "double precision"),
         float f => Dialect.Format(D.ToFloat, FloatLiteral(f.ToString("R", CultureInfo.InvariantCulture)), "real"),
@@ -1050,6 +1070,7 @@ sealed partial class Translator
             null => "null",
             bool b => b ? "true" : "false",
             string s => Names.Literal(s),
+            char ch => SymbolDisplay.FormatLiteral(ch, quote: true),
             // each number with its type: C#'s 61 / 2.0 isn't 61 / 2
             long l => Names.Number(l) + "L",
             ulong ul => ul.ToString(CultureInfo.InvariantCulture) + "UL",

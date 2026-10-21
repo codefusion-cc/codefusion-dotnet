@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using CodeFusion;
 using CodeFusion.Data;
@@ -20,14 +21,19 @@ public sealed class User
     /// <summary>The follows naming this user as the one followed.</summary>
     [InverseProperty(nameof(Follow.Followee))]
     public Many<Follow> Followers { get; init; }
+
+    /// <summary>The articles this user wrote.</summary>
+    public Many<Article> Articles { get; init; }
 }
 
 public sealed class Follow
 {
-    public long FollowerId { get; init; }
+    /// <summary>With FolloweeId, the key: one follow of a user by another.</summary>
+    [Key] public long FollowerId { get; init; }
     public User Follower { get; init; } = null!;
-    public long FolloweeId { get; init; }
-    public User Followee { get; init; } = null!;
+    [Key] public long FolloweeId { get; init; }
+    /// <summary>Required: a follow's followee is there (the foreign key says so), so a lateral join from follows needs no join of users.</summary>
+    [Required] public User Followee { get; init; } = null!;
     public Timestamp CreatedAt { get; init; }
 }
 
@@ -67,9 +73,10 @@ public sealed class ArticleTag
 
 public sealed class Favorite
 {
-    public long UserId { get; init; }
+    /// <summary>With ArticleId, the key: one favorite of an article by a user.</summary>
+    [Key] public long UserId { get; init; }
     public User User { get; init; } = null!;
-    public long ArticleId { get; init; }
+    [Key] public long ArticleId { get; init; }
     public Article Article { get; init; } = null!;
     public Timestamp CreatedAt { get; init; }
 }

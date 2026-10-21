@@ -36,7 +36,9 @@ public sealed class AllocationTests(ConduitFixture fixture)
         }
     }
 
-    static readonly Utf8 Slug = U("how-to-train-your-dragon"), Missing = U("no-such-article"), Email = U("bob@example.com"), Dragons = U("dragons");
+    static readonly Utf8 Slug = U("how-to-train-your-dragon"), Missing = U("no-such-article"), Email = U("bob@example.com"), Dragons = U("dragons"), Title = U("Allocation free: an article");
+    static readonly Utf8List KnownTags = Texts.List("training", "dragons", "dragons");
+    static readonly Utf8 Dave = U("dave");
 
     /// <summary>One request of each kind a connection serves, the reads as replies and awaited.</summary>
     static async Task<long> Reads(Connection c, int requests)
@@ -45,7 +47,7 @@ public sealed class AllocationTests(ConduitFixture fixture)
         for (int i = 0; i < requests; i++)
         {
             c.Next();
-            switch (i % 7)
+            switch (i % 8)
             {
                 case 0:
                     await c.Db.ArticleBySlug(Slug, 1).WriteAsync(c.Response).ConfigureAwait(false);
@@ -71,6 +73,11 @@ public sealed class AllocationTests(ConduitFixture fixture)
                     await c.Db.ArticlesByTag(Dragons, new Paging(10, 0), 0).WriteAsync(c.Response).ConfigureAwait(false);
                     if (c.Response.Status != 200) bad++;
                     break;
+                case 6:
+                    // the newest articles of the authors alice follows, each one's from a lateral join
+                    await c.Db.Feed(1, new Paging(20, 0)).WriteAsync(c.Response).ConfigureAwait(false);
+                    if (c.Response.Status != 200) bad++;
+                    break;
                 default:
                     var article = await c.Db.ArticleBySlug(Slug, 0);
                     if (!article.Found || article.Value.FavoritesCount != 2) bad++;
@@ -80,14 +87,16 @@ public sealed class AllocationTests(ConduitFixture fixture)
         return bad;
     }
 
-    /// <summary>Writes that change nothing the other tests read: an update to the same values, a favorite toggled twice.</summary>
+    /// <summary>Writes that change nothing the other tests read: an update to the same values, a favorite toggled twice,
+    /// new articles of dave's, whose slugs no test reads, tags there already, and carol following dave and not again.
+    /// Seven kinds: the runs are multiples of seven, so each toggle ends as it began.</summary>
     static async Task<long> Writes(Connection c, int requests)
     {
         long bad = 0;
         for (int i = 0; i < requests; i++)
         {
             c.Next();
-            switch (i % 3)
+            switch (i % 7)
             {
                 case 0:
                     await c.Db.UpdateUser(4, null, null, null, null, null).WriteAsync(c.Response).ConfigureAwait(false);
@@ -97,9 +106,28 @@ public sealed class AllocationTests(ConduitFixture fixture)
                     await c.Db.Favorite(2, Slug).WriteAsync(c.Response).ConfigureAwait(false);
                     if (c.Response.Status != 200) bad++;
                     break;
-                default:
+                case 2:
                     var r = await c.Db.Unfavorite(2, Slug);
                     if (!r.Found) bad++;
+                    break;
+                case 3:
+                    // a new article of dave's, its slug made by the text functions in SQL
+                    await c.Db.CreateArticle(4, Title, Title, Title, Utf8List.Empty).WriteAsync(c.Response).ConfigureAwait(false);
+                    if (c.Response.Status != 200) bad++;
+                    break;
+                case 4:
+                    // tags there already: the insert of a list's texts skips them all
+                    await c.Db.AddTags(KnownTags).WriteAsync(c.Response).ConfigureAwait(false);
+                    if (c.Response.Status != 204) bad++;
+                    break;
+                case 5:
+                    // a write from the row found, and the row given back
+                    await c.Db.Follow(3, Dave).WriteAsync(c.Response).ConfigureAwait(false);
+                    if (c.Response.Status != 200) bad++;
+                    break;
+                default:
+                    var unfollowed = await c.Db.Unfollow(3, Dave);
+                    if (!unfollowed.Found || unfollowed.Value.Following) bad++;
                     break;
             }
         }
@@ -111,7 +139,7 @@ public sealed class AllocationTests(ConduitFixture fixture)
     {
         TestDb.Require();
         Assert.SkipWhen(Debug(), "Debug builds make every async state machine an object: run in Release");
-        const int Callers = 4, ReadsEach = 3500, WritesEach = 300;
+        const int Callers = 4, ReadsEach = 3500, WritesEach = 280;
         var connections = new Connection[Callers];
         for (int i = 0; i < Callers; i++) connections[i] = new Connection(fixture, writes: i % 2 == 1);
 

@@ -12,10 +12,66 @@ sealed class Dialect
     public string Name = "postgres", Parameter = "${0}", Quotes = "\"\"", Paging = "LIMIT {0} OFFSET {1}", Limit = "LIMIT {0}", Offset = "OFFSET {0}";
     public string JsonArray = "array_to_json(ARRAY({0}))", JsonAggregate = "array_to_json(array_agg({0}{1}))";
     public string LastInsertedKey = "currval(pg_get_serial_sequence('{0}', '{1}'))", NextKey = "nextval(pg_get_serial_sequence('{0}', '{1}'))";
+    public string ListRows = "unnest({0}) {1}(v)";
+    // Query.Then: a column one of a query's values, and the check of the table written the statement makes first
+    public string AnyOfQuery = "{0} = ANY(ARRAY({1}))";
+    public string ThenGuard = ThenGuardOfPostgres;
+
+    /// <summary>
+    /// Fails the statement (casting its message to an integer) when the Select after Then can't read the tables as the
+    /// write left them: {0} the table written, {2} the tables the Select reads and {5} the table of the row found, each
+    /// a string literal; {1} the columns the insert sets, rows of a VALUES of each one's name and the types that hold its
+    /// value as bound, a regtype[] constant; {3} whether the write deletes, {4} whether a read is corrected. The walk
+    /// starts at the table written and its partitions; a delete follows each key that cascades, sets NULL or sets a
+    /// default, and from a row set to NULL or a default the keys acting on its update. A rule or trigger on any table
+    /// walked may write more; a table reached that the Select reads, or that a table it reads holds (a partition or an
+    /// inheriting table, at any depth), fails it, and so does the table written or a partition of it where the row
+    /// found's table holds it (the table written counts as read only where a read of it is corrected). A corrected read
+    /// needs no row security and columns that store the value written (no type modifier, the type bound or a wider
+    /// integer or float) and compare it as the correction does (the default collation). A table without children
+    /// (relhassubclass) costs no lookup of them; each table walked is matched with its ancestors (pg_inherits by
+    /// inhrelid).
+    /// </summary>
+    public const string ThenGuardOfPostgres =
+        "(SELECT CASE WHEN EXISTS (WITH RECURSIVE r(oid, upd, reached, sub, rules) AS (SELECT c.oid, false, false, c.relhassubclass, c.relhasrules " +
+        "UNION SELECT n.* FROM r CROSS JOIN LATERAL (SELECT i.inhrelid, r.upd, r.reached, h.relhassubclass, h.relhasrules " +
+        "FROM pg_inherits i JOIN pg_class h ON h.oid = i.inhrelid WHERE r.sub AND i.inhparent = r.oid " +
+        "UNION ALL SELECT k.conrelid, r.upd OR k.confdeltype <> 'c', true, h.relhassubclass, h.relhasrules FROM pg_depend d JOIN pg_constraint k ON k.oid = d.objid " +
+        "JOIN pg_class h ON h.oid = k.conrelid WHERE {3} AND d.refclassid = 'pg_class'::regclass AND d.refobjid = r.oid AND d.classid = 'pg_constraint'::regclass " +
+        "AND k.contype = 'f' AND k.confrelid = r.oid AND CASE WHEN r.upd THEN k.confupdtype ELSE k.confdeltype END IN ('c', 'n', 'd') OFFSET 0) n) " +
+        "SELECT 1 FROM r WHERE r.rules OR (SELECT true FROM pg_trigger g WHERE g.tgrelid = r.oid AND NOT g.tgisinternal LIMIT 1) " +
+        "OR EXISTS (WITH RECURSIVE u(oid) AS (SELECT r.oid UNION SELECT n.oid FROM u CROSS JOIN LATERAL (SELECT i.inhparent FROM pg_inherits i " +
+        "WHERE i.inhrelid = u.oid OFFSET 0) n(oid)) SELECT 1 FROM u WHERE CASE WHEN r.reached THEN u.oid = ANY (ARRAY[{2}]::regclass[]) ELSE u.oid = {5}::regclass END)) " +
+        "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM (VALUES {1}) v(n, t) JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = v.n::name " +
+        "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid::regtype <> ALL (v.t))) " +
+        "THEN ('CodeFusion: the Select after Then can''t read ' || c.relname || ' as the write left it (a rule, a trigger, row security, a foreign key that cascades " +
+        "into a table it reads, or a column that may store another value than the one written or compare it otherwise)')::int ELSE 0 END FROM pg_class c WHERE c.oid = {0}::regclass) = 0";
+
+    /// <summary>The Postgres types a column may have and hold a value of <paramref name="kind"/> as bound, as a regtype[]
+    /// literal for the Then guard, which the plan folds once: the type the model declares or a wider integer or float
+    /// (a short a smallint, a float a real, though <see cref="ParamList"/> binds both wider). Any other may store another
+    /// value than the one the correction compares.</summary>
+    public static string HoldingTypes(ValueKind kind) => kind.Scalar switch
+    {
+        Scalar.Int64 => "{int8}",
+        Scalar.Int32 => "{int4,int8}",
+        Scalar.Int16 => "{int2,int4,int8}",
+        Scalar.Boolean => "{bool}",
+        Scalar.Double => "{float8}",
+        Scalar.Single => "{float4,float8}",
+        Scalar.Timestamp => "{timestamptz}",
+        _ => "{text}",
+    };
+
     public string InArray = "{0} = ANY({1})", NullSafeEqual = "{0} IS NOT DISTINCT FROM {1}", Now = "now()", Concat = "{0} || {1}";
     public string True = "true", False = "false", BigIntLiteral = "{0}::bigint", LockRows = "FOR UPDATE OF {0}";
     // C#'s conversions between integers and floating point ({1} is the SQL type), the smaller and larger of two counts
     public string ToFloat = "CAST({0} AS {1})", ToInteger = "CAST(trunc({0}) AS {1})", Least = "LEAST({0}, {1})", Greatest = "GREATEST({0}, {1})";
+    // the text functions of Utf8Operators
+    public string LowerAscii = "translate({0}, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')", UpperAscii = "translate({0}, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')";
+    public string IntegerText = "CAST({0} AS text)";
+    public string Trim = "trim(both {1} from {0})", TrimStart = "trim(leading {1} from {0})", TrimEnd = "trim(trailing {1} from {0})";
+    public string Replace = "replace({0}, {1}, {2})", RegexReplace = "regexp_replace({0}, {1}, {2}, 'g')";
     public bool SelectsConditions = true, ReturningAfter = true, Lateral = true, WritableCtes = true, InsertSelectNeedsWhere;
     public int InsertOrIgnore; // 0 ON CONFLICT DO NOTHING, 1 INSERT OR IGNORE, 2 none
 
@@ -52,6 +108,9 @@ sealed class Dialect
                 case "LastInsertedKey": d.LastInsertedKey = (string)v!; break;
                 case "NextKey": d.NextKey = (string)v!; break;
                 case "InArray": d.InArray = (string)v!; break;
+                case "ListRows": d.ListRows = (string)v!; break;
+                case "AnyOfQuery": d.AnyOfQuery = (string)v!; break;
+                case "ThenGuard": d.ThenGuard = (string?)v ?? ThenGuardOfPostgres; break;
                 case "NullSafeEqual": d.NullSafeEqual = (string)v!; break;
                 case "Now": d.Now = (string)v!; break;
                 case "Concat": d.Concat = (string)v!; break;
@@ -63,6 +122,14 @@ sealed class Dialect
                 case "SelectsConditions": d.SelectsConditions = (bool)v!; break;
                 case "BigIntLiteral": d.BigIntLiteral = (string)v!; break;
                 case "LockRows": d.LockRows = (string)v!; break;
+                case "LowerAscii": d.LowerAscii = (string)v!; break;
+                case "UpperAscii": d.UpperAscii = (string)v!; break;
+                case "IntegerText": d.IntegerText = (string)v!; break;
+                case "Trim": d.Trim = (string)v!; break;
+                case "TrimStart": d.TrimStart = (string)v!; break;
+                case "TrimEnd": d.TrimEnd = (string)v!; break;
+                case "Replace": d.Replace = (string)v!; break;
+                case "RegexReplace": d.RegexReplace = (string)v!; break;
             }
         }
         return d;
@@ -171,6 +238,8 @@ sealed class Select
 {
     public readonly List<string> Ctes = new();
     public readonly List<(string Sql, string? Alias)> Columns = new();
+    /// <summary>Each row once: <c>SELECT DISTINCT</c>.</summary>
+    public bool Distinct;
     public string From = "";
     public readonly List<string> Joins = new();
     public readonly List<string> Where = new();
@@ -183,7 +252,7 @@ sealed class Select
     {
         var b = new StringBuilder();
         if (Ctes.Count > 0) b.Append("WITH ").Append(string.Join(", ", Ctes)).Append(' ');
-        b.Append("SELECT ");
+        b.Append(Distinct ? "SELECT DISTINCT " : "SELECT ");
         b.Append(Columns.Count == 0 ? "1" : string.Join(", ", Columns.Select(c => c.Alias is null ? c.Sql : c.Sql + " AS " + c.Alias)));
         if (From.Length > 0) b.Append(" FROM ").Append(From);
         foreach (var j in Joins) b.Append(' ').Append(j);
@@ -203,45 +272,118 @@ static class Sql
     /// <summary>Parentheses around <paramref name="sql"/> when it holds <paramref name="op"/> at its top level.</summary>
     public static string Wrap(string sql, string op) => TopLevel(sql, op) ? "(" + sql + ")" : sql;
 
-    /// <summary>Whether <paramref name="op"/> (" AND ", " OR ", ...) occurs outside parentheses and quotes.</summary>
-    public static bool TopLevel(string sql, string op)
-    {
-        int depth = 0;
-        bool quoted = false;
-        for (int i = 0; i < sql.Length; i++)
-        {
-            char c = sql[i];
-            if (c == '\'') quoted = !quoted;
-            else if (quoted) continue;
-            else if (c == '(') depth++;
-            else if (c == ')') depth--;
-            else if (depth == 0 && string.CompareOrdinal(sql, i, op, 0, op.Length) == 0) return true;
-        }
-        return false;
-    }
+    /// <summary>Whether <paramref name="op"/> (" AND ", " OR ", ...) occurs at the top level of <paramref name="sql"/>
+    /// (<see cref="TopLevelAt"/>), one a comment touches included: SQL reads it as the operator.</summary>
+    public static bool TopLevel(string sql, string op) => TopLevelAt(sql, op, cut: false).Count > 0;
 
-    /// <summary>Whether <paramref name="sql"/> is one term: no operator outside parentheses.</summary>
+    /// <summary>Whether <paramref name="sql"/> is one term: no space outside parentheses and string literals, in
+    /// <see cref="Code"/> (a comment or a dollar-quoted string is taken as more than one).</summary>
     public static bool Atomic(string sql)
     {
+        string code = Code(sql);
         int depth = 0;
-        bool quoted = false;
-        for (int i = 0; i < sql.Length; i++)
+        char quote = '\0';
+        foreach (char c in code)
         {
-            char c = sql[i];
-            if (c == '\'') quoted = !quoted;
-            else if (quoted) continue;
+            // a literal's inside is blank in the code: its quotes are the only ones left
+            if (quote != '\0')
+            {
+                if (c == quote) quote = '\0';
+            }
+            else if (c is '\'' or '"') quote = c;
             else if (c == '(') depth++;
             else if (c == ')') depth--;
-            else if (depth == 0 && c == ' ') return false;
+            else if (depth == 0 && char.IsWhiteSpace(c)) return false;
         }
         return true;
     }
+
+    /// <summary>
+    /// Where <paramref name="op"/> (" AND ", " = ") stands at the top level of <paramref name="sql"/>: outside
+    /// parentheses and CASE ... END (whose WHEN and THEN hold conditions of their own), in <see cref="Code"/>, so never
+    /// in a string literal, a quoted name or a comment. To <paramref name="cut"/> there, the operator must be written
+    /// as it is, not made of a comment's blanks (<c>a/**/AND/**/b</c>), so a piece never ends inside a comment.
+    /// </summary>
+    static List<int> TopLevelAt(string sql, string op, bool cut = true)
+    {
+        string code = Code(sql);
+        var at = new List<int>();
+        int depth = 0;
+        for (int i = 0; i < code.Length; i++)
+        {
+            char c = code[i];
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (Word(code, i, "CASE")) depth++;
+            else if (Word(code, i, "END")) depth--;
+            else if (depth == 0 && string.CompareOrdinal(code, i, op, 0, op.Length) == 0 && (!cut || string.CompareOrdinal(sql, i, op, 0, op.Length) == 0))
+            {
+                at.Add(i);
+                i += op.Length - 1;
+            }
+        }
+        return at;
+    }
+
+    /// <summary>Whether the keyword <paramref name="word"/> stands at <paramref name="i"/>, as a word of its own.</summary>
+    static bool Word(string sql, int i, string word) =>
+        string.Compare(sql, i, word, 0, word.Length, StringComparison.OrdinalIgnoreCase) == 0
+        && (i == 0 || !(char.IsLetterOrDigit(sql[i - 1]) || sql[i - 1] is '_' or '.' or '$'))
+        && (i + word.Length >= sql.Length || !(char.IsLetterOrDigit(sql[i + word.Length]) || sql[i + word.Length] is '_' or '.'));
+
+    /// <summary>The conditions <paramref name="sql"/> ANDs together at its top level, each as it is written.</summary>
+    public static List<string> Conjuncts(string sql)
+    {
+        var parts = new List<string>();
+        int start = 0;
+        foreach (int i in TopLevelAt(sql, " AND "))
+        {
+            parts.Add(sql.Substring(start, i - start));
+            start = i + 5;
+        }
+        parts.Add(sql.Substring(start));
+        return parts;
+    }
+
+    /// <summary>Whether <paramref name="condition"/> is <c>x = alias.column</c> (or the other way round), the one
+    /// <c>=</c> at its top level: <paramref name="other"/> is x.</summary>
+    public static bool EqualsColumnOf(string condition, string alias, out string other, out string column)
+    {
+        other = column = "";
+        var equals = TopLevelAt(condition, " = ");
+        if (equals.Count != 1) return false;
+        int at = equals[0];
+        string left = condition.Substring(0, at), right = condition.Substring(at + 3);
+        // each side one term: in a OR x.c = t.id the other side is "a OR x.c", which no column is
+        if (!Atomic(left) || !Atomic(right)) return false;
+        var name = new System.Text.RegularExpressions.Regex("^" + System.Text.RegularExpressions.Regex.Escape(alias) + @"\.(""(?:[^""]|"""")+""|[a-z_][a-z0-9_]*)$");
+        if (name.Match(right) is { Success: true } r)
+        {
+            (other, column) = (left, r.Groups[1].Value);
+            return true;
+        }
+        if (name.Match(left) is { Success: true } l)
+        {
+            (other, column) = (right, l.Groups[1].Value);
+            return true;
+        }
+        return false;
+    }
+    /// <summary>Whether <paramref name="sql"/> is a column, a parameter or a number: the same text is the same value
+    /// wherever it is read in a statement (a call could be volatile, and isn't one).</summary>
+    public static bool Simple(string sql) => sql.Length > 0 && Atomic(sql) && sql.IndexOf('(') < 0 && sql.IndexOf('\'') < 0;
 
     /// <summary><paramref name="sql"/> in parentheses unless it is one term.</summary>
     public static string Group(string sql) => Atomic(sql) ? sql : "(" + sql + ")";
 
     /// <summary>A string literal.</summary>
     public static string String(string s) => "'" + s.Replace("'", "''") + "'";
+
+    /// <summary>A string literal of a constant at <paramref name="at"/>, which SQL text can't hold with a NUL in it.</summary>
+    public static string String(string s, Location? at) => s.IndexOf('\0') < 0 ? String(s) : throw new Refused(at, NulText);
+
+    /// <summary>What a NUL in a constant is refused as; a statement holding one anywhere is refused too.</summary>
+    public const string NulText = "text with a NUL, which SQL text can't hold,";
 
     /// <summary>
     /// <paramref name="sql"/> with what isn't SQL's own words blanked, at the same positions: comments become spaces,

@@ -40,6 +40,9 @@ public readonly record struct ArticleListView(
         a.Favorites.Count(),
         viewer != 0 && a.Favorites.Any(f => f.UserId == viewer),
         ProfileView.Of(a.Author, viewer));
+
+    /// <summary>An article of the viewer's feed, whose author the viewer follows: the feed found it through the follow.</summary>
+    public static ArticleListView InFeed(Article a, long viewer) => Of(a, viewer) with { Author = new ProfileView(a.Author.Username, a.Author.Bio, a.Author.Image, true) };
 }
 
 [JsonEnvelope("comment")]
@@ -61,12 +64,11 @@ public readonly record struct UserRow(Utf8 Username, Utf8 Email, Utf8? Bio, Utf8
     public static UserRow Of(User u) => new(u.Username, u.Email, u.Bio, u.Image);
 }
 
-/// <summary>SQL the query definitions use.</summary>
+/// <summary>The spec's slug rule, in the text functions of Utf8Operators: SQL in a query, and C# anywhere else.</summary>
 public static class Slugs
 {
-    /// <summary>The title as a slug, then "-" and the article's id: unique, as the id is.</summary>
-    [SqlTemplate("trim(both '-' from lower(regexp_replace({0}, '[^A-Za-z0-9]+', '-', 'g'))) || '-' || {1}")]
-    // SQLite has no regexp_replace: spaces become dashes, which the tests' titles need
+    /// <summary>The title as a slug, then "-" and the article's id: unique, as the id is (the spec's SLUGIFY). SQLite
+    /// has no regexp_replace: there spaces become dashes, which the tests' titles need.</summary>
     [SqlTemplate("lower(replace(trim({0}), ' ', '-')) || '-' || {1}", Dialect = "sqlite")]
-    public static Utf8 WithId(Utf8 title, long id) => throw new NotSupportedException();
+    public static Utf8 WithId(Utf8 title, long id) => title.ReplaceMatches("[^A-Za-z0-9]+", "-").ToLowerAscii().Trim('-').Concat("-"u8).Concat(id);
 }

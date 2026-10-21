@@ -67,6 +67,8 @@ CodeFusion.Data.DataType.TextArray = 6 -> CodeFusion.Data.DataType
 CodeFusion.Data.DataType.Timestamp = 5 -> CodeFusion.Data.DataType
 CodeFusion.Data.DeleteQuery<T>
 CodeFusion.Data.DeleteQuery<T>.Select<TResult>(System.Func<T, TResult>! selector) -> CodeFusion.Data.WriteQuery<TResult>!
+CodeFusion.Data.FoundQuery<T>
+CodeFusion.Data.FoundQuery<T>.Select<TResult>(System.Func<T, TResult>! selector) -> CodeFusion.Data.Write<TResult>
 CodeFusion.Data.IDataCommand<TStatement>
 CodeFusion.Data.IDataCommand<TStatement>.BeginTextArray() -> void
 CodeFusion.Data.IDataCommand<TStatement>.Boolean(bool value) -> void
@@ -181,6 +183,7 @@ CodeFusion.Data.Query<T>.AsJson() -> CodeFusion.Data.One<CodeFusion.RawJson>
 CodeFusion.Data.Query<T>.Count() -> CodeFusion.Data.One<long>
 CodeFusion.Data.Query<T>.Delete() -> CodeFusion.Data.DeleteQuery<T>!
 CodeFusion.Data.Query<T>.DeleteIf(System.Func<T, bool>! condition) -> CodeFusion.Data.DeleteQuery<T>!
+CodeFusion.Data.Query<T>.Distinct() -> CodeFusion.Data.Query<T>!
 CodeFusion.Data.Query<T>.Many() -> CodeFusion.Data.Many<T>
 CodeFusion.Data.Query<T>.OrderBy<TKey>(System.Func<T, TKey>! key) -> CodeFusion.Data.OrderedQuery<T>!
 CodeFusion.Data.Query<T>.OrderByDescending<TKey>(System.Func<T, TKey>! key) -> CodeFusion.Data.OrderedQuery<T>!
@@ -190,6 +193,7 @@ CodeFusion.Data.Query<T>.SelectMany<TChild, TResult>(System.Func<T, CodeFusion.D
 CodeFusion.Data.Query<T>.Single(System.Func<T, bool>! predicate) -> T
 CodeFusion.Data.Query<T>.Skip(long count) -> CodeFusion.Data.Query<T>!
 CodeFusion.Data.Query<T>.Take(long count) -> CodeFusion.Data.Query<T>!
+CodeFusion.Data.Query<T>.Then(System.Func<T, CodeFusion.Data.Write>! write) -> CodeFusion.Data.FoundQuery<T>!
 CodeFusion.Data.Query<T>.Update(System.Func<T, T>! set) -> CodeFusion.Data.UpdateQuery<T>!
 CodeFusion.Data.Query<T>.UpdateIf(System.Func<T, bool>! condition, System.Func<T, T>! set) -> CodeFusion.Data.UpdateQuery<T>!
 CodeFusion.Data.Query<T>.Where(System.Func<T, bool>! predicate) -> CodeFusion.Data.Query<T>!
@@ -233,6 +237,8 @@ CodeFusion.Data.RowState.Json.get -> System.Text.Json.Utf8JsonWriter!
 CodeFusion.Data.RowState.Seen.get -> int
 CodeFusion.Data.RowState.Seen.set -> void
 CodeFusion.Data.SqlDialectAttribute
+CodeFusion.Data.SqlDialectAttribute.AnyOfQuery.get -> string!
+CodeFusion.Data.SqlDialectAttribute.AnyOfQuery.init -> void
 CodeFusion.Data.SqlDialectAttribute.BigIntLiteral.get -> string!
 CodeFusion.Data.SqlDialectAttribute.BigIntLiteral.init -> void
 CodeFusion.Data.SqlDialectAttribute.Booleans.get -> string!
@@ -245,6 +251,8 @@ CodeFusion.Data.SqlDialectAttribute.InArray.get -> string!
 CodeFusion.Data.SqlDialectAttribute.InArray.init -> void
 CodeFusion.Data.SqlDialectAttribute.InsertOrIgnore.get -> CodeFusion.Data.SqlInsertOrIgnore
 CodeFusion.Data.SqlDialectAttribute.InsertOrIgnore.init -> void
+CodeFusion.Data.SqlDialectAttribute.IntegerText.get -> string!
+CodeFusion.Data.SqlDialectAttribute.IntegerText.init -> void
 CodeFusion.Data.SqlDialectAttribute.InsertSelectNeedsWhere.get -> bool
 CodeFusion.Data.SqlDialectAttribute.InsertSelectNeedsWhere.init -> void
 CodeFusion.Data.SqlDialectAttribute.JsonAggregate.get -> string!
@@ -253,16 +261,20 @@ CodeFusion.Data.SqlDialectAttribute.JsonArray.get -> string!
 CodeFusion.Data.SqlDialectAttribute.JsonArray.init -> void
 CodeFusion.Data.SqlDialectAttribute.LastInsertedKey.get -> string!
 CodeFusion.Data.SqlDialectAttribute.LastInsertedKey.init -> void
-CodeFusion.Data.SqlDialectAttribute.Keywords.get -> string!
-CodeFusion.Data.SqlDialectAttribute.Keywords.init -> void
 CodeFusion.Data.SqlDialectAttribute.Lateral.get -> bool
 CodeFusion.Data.SqlDialectAttribute.Lateral.init -> void
+CodeFusion.Data.SqlDialectAttribute.ListRows.get -> string!
+CodeFusion.Data.SqlDialectAttribute.ListRows.init -> void
+CodeFusion.Data.SqlDialectAttribute.Keywords.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Keywords.init -> void
 CodeFusion.Data.SqlDialectAttribute.Least.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Least.init -> void
 CodeFusion.Data.SqlDialectAttribute.LockRows.get -> string!
 CodeFusion.Data.SqlDialectAttribute.LockRows.init -> void
 CodeFusion.Data.SqlDialectAttribute.Limit.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Limit.init -> void
+CodeFusion.Data.SqlDialectAttribute.LowerAscii.get -> string!
+CodeFusion.Data.SqlDialectAttribute.LowerAscii.init -> void
 CodeFusion.Data.SqlDialectAttribute.Name.get -> string!
 CodeFusion.Data.SqlDialectAttribute.NextKey.get -> string!
 CodeFusion.Data.SqlDialectAttribute.NextKey.init -> void
@@ -278,11 +290,25 @@ CodeFusion.Data.SqlDialectAttribute.Parameter.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Parameter.init -> void
 CodeFusion.Data.SqlDialectAttribute.Quotes.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Quotes.init -> void
+CodeFusion.Data.SqlDialectAttribute.RegexReplace.get -> string!
+CodeFusion.Data.SqlDialectAttribute.RegexReplace.init -> void
+CodeFusion.Data.SqlDialectAttribute.Replace.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Replace.init -> void
 CodeFusion.Data.SqlDialectAttribute.Returning.get -> CodeFusion.Data.SqlReturning
 CodeFusion.Data.SqlDialectAttribute.Returning.init -> void
 CodeFusion.Data.SqlDialectAttribute.SelectsConditions.get -> bool
 CodeFusion.Data.SqlDialectAttribute.SelectsConditions.init -> void
 CodeFusion.Data.SqlDialectAttribute.SqlDialectAttribute(string! name) -> void
+CodeFusion.Data.SqlDialectAttribute.ThenGuard.get -> string?
+CodeFusion.Data.SqlDialectAttribute.ThenGuard.init -> void
+CodeFusion.Data.SqlDialectAttribute.Trim.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Trim.init -> void
+CodeFusion.Data.SqlDialectAttribute.TrimEnd.get -> string!
+CodeFusion.Data.SqlDialectAttribute.TrimEnd.init -> void
+CodeFusion.Data.SqlDialectAttribute.TrimStart.get -> string!
+CodeFusion.Data.SqlDialectAttribute.TrimStart.init -> void
+CodeFusion.Data.SqlDialectAttribute.UpperAscii.get -> string!
+CodeFusion.Data.SqlDialectAttribute.UpperAscii.init -> void
 CodeFusion.Data.SqlDialectAttribute.ToInteger.get -> string!
 CodeFusion.Data.SqlDialectAttribute.ToInteger.init -> void
 CodeFusion.Data.SqlDialectAttribute.WritableCtes.get -> bool
@@ -314,6 +340,7 @@ CodeFusion.Data.Table<T>
 CodeFusion.Data.UpdateQuery<T>
 CodeFusion.Data.UpdateQuery<T>.Select<TResult>(System.Func<T, TResult>! selector) -> CodeFusion.Data.Write<TResult>
 CodeFusion.Data.Utf8ListOperators
+CodeFusion.Data.Utf8Operators
 CodeFusion.Data.Write
 CodeFusion.Data.Write.Conflict(CodeFusion.ErrorReply! reply) -> CodeFusion.Data.Write
 CodeFusion.Data.Write.GetAwaiter() -> System.Runtime.CompilerServices.ValueTaskAwaiter<CodeFusion.Data.DataResult>
@@ -340,6 +367,7 @@ override CodeFusion.Data.Paging.GetHashCode() -> int
 static CodeFusion.Data.DataErrors.Default.get -> CodeFusion.Data.DataErrors!
 static CodeFusion.Data.DataResult.Of(CodeFusion.Data.DataStatus status) -> CodeFusion.Data.DataResult
 static CodeFusion.Data.DeleteQuery<T>.implicit operator CodeFusion.Data.Write(CodeFusion.Data.DeleteQuery<T>! delete) -> CodeFusion.Data.Write
+static CodeFusion.Data.FoundQuery<T>.implicit operator CodeFusion.Data.Write(CodeFusion.Data.FoundQuery<T>! found) -> CodeFusion.Data.Write
 static CodeFusion.Data.Insert<T>.implicit operator CodeFusion.Data.Write(CodeFusion.Data.Insert<T!>! insert) -> CodeFusion.Data.Write
 static CodeFusion.Data.Paging.operator !=(CodeFusion.Data.Paging left, CodeFusion.Data.Paging right) -> bool
 static CodeFusion.Data.Paging.operator ==(CodeFusion.Data.Paging left, CodeFusion.Data.Paging right) -> bool
@@ -376,7 +404,17 @@ static CodeFusion.Data.RowJson.Timestamp<TRow>(System.Text.Json.Utf8JsonWriter! 
 static CodeFusion.Data.RowJson.TimestampValue<TRow>(System.Text.Json.Utf8JsonWriter! json, scoped in TRow row, int column) -> void
 static CodeFusion.Data.SqlFunctions.Now() -> CodeFusion.Timestamp
 static CodeFusion.Data.UpdateQuery<T>.implicit operator CodeFusion.Data.Write(CodeFusion.Data.UpdateQuery<T>! update) -> CodeFusion.Data.Write
+static CodeFusion.Data.Utf8ListOperators.AsRows(this CodeFusion.Utf8List list) -> CodeFusion.Data.Query<CodeFusion.Utf8>!
 static CodeFusion.Data.Utf8ListOperators.Contains(this CodeFusion.Utf8List list, CodeFusion.Utf8 text) -> bool
+static CodeFusion.Data.Utf8Operators.Concat(this CodeFusion.Utf8 text, long number) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.Concat(this CodeFusion.Utf8 text, System.ReadOnlySpan<byte> other) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.Replace(this CodeFusion.Utf8 text, System.ReadOnlySpan<byte> oldValue, System.ReadOnlySpan<byte> newValue) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.ReplaceMatches(this CodeFusion.Utf8 text, string! pattern, string! replacement) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.ToLowerAscii(this CodeFusion.Utf8 text) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.ToUpperAscii(this CodeFusion.Utf8 text) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.Trim(this CodeFusion.Utf8 text, char trimChar) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.TrimEnd(this CodeFusion.Utf8 text, char trimChar) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.TrimStart(this CodeFusion.Utf8 text, char trimChar) -> CodeFusion.Utf8
 virtual CodeFusion.Data.QueryOps.Begin(System.Text.Json.Utf8JsonWriter! json) -> void
 virtual CodeFusion.Data.QueryOps.End(System.Text.Json.Utf8JsonWriter! json, in CodeFusion.Data.DataResult result) -> void
 virtual CodeFusion.Data.QueryOps.HasSource.get -> bool

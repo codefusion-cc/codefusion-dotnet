@@ -46,16 +46,22 @@ public sealed class PlanTests
         ["CurrentUser"] = (ConduitDb.QuerySql.CurrentUser, ConduitDb.QuerySql.CurrentUserParameters.ToArray(), Sql.CurrentUser + OneRow, ["int8"]),
         ["UpdateUser"] = (ConduitDb.QuerySql.UpdateUser, ConduitDb.QuerySql.UpdateUserParameters.ToArray(), Sql.UpdateUser, ["int8", "text", "text", "text", "text", "text"]),
         ["Profile"] = (ConduitDb.QuerySql.Profile, ConduitDb.QuerySql.ProfileParameters.ToArray(), Sql.Profile + OneRow, ["int8", "text"]),
-        ["Follow (Sql)"] = (ConduitDb.QuerySql.Follow, ConduitDb.QuerySql.FollowParameters.ToArray(), Sql.Follow, ["int8", "text"]),
-        ["Unfollow (Sql)"] = (ConduitDb.QuerySql.Unfollow, ConduitDb.QuerySql.UnfollowParameters.ToArray(), Sql.Unfollow, ["int8", "text"]),
+        // with the compiled one's check of the table written, and its reply the first row found by key
+        ["Follow"] = (ConduitDb.QuerySql.Follow, ConduitDb.QuerySql.FollowParameters.ToArray(), Checked(Sql.Follow, ConduitDb.QuerySql.Follow), ["int8", "text"]),
+        // the followee one of the ids found, as many as there are, where = (SELECT ...) takes one: an index condition on
+        // the whole primary key, where the contest's scans the followee index and filters by follower
+        ["Unfollow"] = (ConduitDb.QuerySql.Unfollow, ConduitDb.QuerySql.UnfollowParameters.ToArray(),
+            Checked(Fixed(Sql.Unfollow, ("followee_id = (SELECT id FROM t)", "followee_id = ANY(ARRAY(SELECT id FROM t))")), ConduitDb.QuerySql.Unfollow), ["int8", "text"]),
         ["AllArticles"] = (ConduitDb.QuerySql.AllArticles, ConduitDb.QuerySql.AllArticlesParameters.ToArray(), Sql.List[(int)Sql.ListKind.Global], ["int8", "int8", "int8"]),
         ["ArticlesByTag"] = (ConduitDb.QuerySql.ArticlesByTag, ConduitDb.QuerySql.ArticlesByTagParameters.ToArray(), Sql.List[(int)Sql.ListKind.Tag], ["int8", "int8", "int8", "text"]),
         ["ArticlesBy"] = (ConduitDb.QuerySql.ArticlesBy, ConduitDb.QuerySql.ArticlesByParameters.ToArray(), Sql.List[(int)Sql.ListKind.Author], ["int8", "int8", "int8", "text"]),
         ["FavoritedBy"] = (ConduitDb.QuerySql.FavoritedBy, ConduitDb.QuerySql.FavoritedByParameters.ToArray(), Sql.List[(int)Sql.ListKind.Favorited], ["int8", "int8", "int8", "text"]),
-        ["Feed (Sql)"] = (ConduitDb.QuerySql.Feed, ConduitDb.QuerySql.FeedParameters.ToArray(), Sql.List[(int)Sql.ListKind.Feed], ["int8", "int8", "int8", "int8"]),
+        ["Feed"] = (ConduitDb.QuerySql.Feed, ConduitDb.QuerySql.FeedParameters.ToArray(), Sql.List[(int)Sql.ListKind.Feed], ["int8", "int8", "int8", "int8"]),
         ["ArticleBySlug"] = (ConduitDb.QuerySql.ArticleBySlug, ConduitDb.QuerySql.ArticleBySlugParameters.ToArray(), Sql.ArticleBySlug + OneRow, ["int8", "text"]),
         ["CreateArticle"] = (ConduitDb.QuerySql.CreateArticle, ConduitDb.QuerySql.CreateArticleParameters.ToArray(), Sql.InsertArticle, ["int8", "text", "text", "text"]),
-        ["CreateArticle_2 (Sql)"] = (ConduitDb.QuerySql.CreateArticle_2, ConduitDb.QuerySql.CreateArticle_2Parameters.ToArray(), Sql.InsertTags, ["text[]"]),
+        // unnest in FROM, where a Where can filter it: a Function Scan for the ProjectSet over a Result, the same one pass
+        ["CreateArticle_2"] = (ConduitDb.QuerySql.CreateArticle_2, ConduitDb.QuerySql.CreateArticle_2Parameters.ToArray(), Fixed(Sql.InsertTags,
+            ("SELECT DISTINCT unnest($1::text[]) ORDER BY 1", "SELECT DISTINCT n.v FROM unnest($1::text[]) n(v) ORDER BY 1")), ["text[]"]),
         ["CreateArticle_3"] = (ConduitDb.QuerySql.CreateArticle_3, ConduitDb.QuerySql.CreateArticle_3Parameters.ToArray(), Sql.InsertArticleTags, ["text[]"]),
         ["CreateArticle_4"] = (ConduitDb.QuerySql.CreateArticle_4, ConduitDb.QuerySql.CreateArticle_4Parameters.ToArray(), Sql.InsertedArticle, ["int8"]),
         ["UpdateArticle"] = (ConduitDb.QuerySql.UpdateArticle, ConduitDb.QuerySql.UpdateArticleParameters.ToArray(), Fixed(Sql.UpdateArticle,
@@ -64,14 +70,25 @@ public sealed class PlanTests
         ["DeleteArticle"] = (ConduitDb.QuerySql.DeleteArticle, ConduitDb.QuerySql.DeleteArticleParameters.ToArray(), Fixed(Sql.DeleteArticle,
             ("WHERE slug = $2)", "WHERE slug = $2 FOR UPDATE)"), ("WHERE id = (SELECT id FROM t WHERE author_id = $1))", "WHERE id IN (SELECT id FROM t WHERE author_id = $1) RETURNING id)"),
             ("SELECT author_id FROM t", "SELECT t.author_id, d.id FROM t LEFT JOIN d ON d.id = t.id ORDER BY d.id IS NULL, t.id")), ["int8", "text"]),
-        ["Favorite (Sql)"] = (ConduitDb.QuerySql.Favorite, ConduitDb.QuerySql.FavoriteParameters.ToArray(), Sql.Favorite, ["int8", "text"]),
-        ["Unfavorite (Sql)"] = (ConduitDb.QuerySql.Unfavorite, ConduitDb.QuerySql.UnfavoriteParameters.ToArray(), Sql.Unfavorite, ["int8", "text"]),
         ["CommentsOf"] = (ConduitDb.QuerySql.CommentsOf, ConduitDb.QuerySql.CommentsOfParameters.ToArray(), Sql.Comments, ["int8", "text"]),
         ["CreateComment"] = (ConduitDb.QuerySql.CreateComment, ConduitDb.QuerySql.CreateCommentParameters.ToArray(), Sql.CreateComment, ["int8", "text", "text"]),
         ["DeleteComment"] = (ConduitDb.QuerySql.DeleteComment, ConduitDb.QuerySql.DeleteCommentParameters.ToArray(), Fixed(Sql.DeleteComment,
             ("AND a.slug = $3)", "AND a.slug = $3 FOR UPDATE OF c)"), ("WHERE id = (SELECT id FROM c WHERE author_id = $1))", "WHERE id IN (SELECT id FROM c WHERE author_id = $1) RETURNING id)"),
             ("SELECT author_id FROM c", "SELECT c.author_id, d.id FROM c LEFT JOIN d ON d.id = c.id ORDER BY d.id IS NULL, c.id")), ["int8", "int8", "text"]),
         ["AllTags"] = (ConduitDb.QuerySql.AllTags, ConduitDb.QuerySql.AllTagsParameters.ToArray(), Sql.Tags, []),
+    };
+
+    /// <summary>
+    /// Compiled statements whose plan is another shape than the contest's, as their SQL is (the favorite toggles read
+    /// the article from the CTE of the row found, which the contest's reads again by its key): each reads no index
+    /// and no table the contest's doesn't, and no more often.
+    /// </summary>
+    public static readonly TheoryData<string> Fewer = new(FewerPairs.Keys);
+
+    static Dictionary<string, (string Sql, DataType[] Types, string Reference, string[] ReferenceTypes)> FewerPairs => new()
+    {
+        ["Favorite"] = (ConduitDb.QuerySql.Favorite, ConduitDb.QuerySql.FavoriteParameters.ToArray(), Sql.Favorite + " AND " + Guard(ConduitDb.QuerySql.Favorite), ["int8", "text"]),
+        ["Unfavorite"] = (ConduitDb.QuerySql.Unfavorite, ConduitDb.QuerySql.UnfavoriteParameters.ToArray(), Sql.Unfavorite + " AND " + Guard(ConduitDb.QuerySql.Unfavorite), ["int8", "text"]),
     };
 
     // The contest's statements with what the compiled ones do more: One reads one row (LIMIT 1); a conditional write
@@ -89,6 +106,18 @@ public sealed class PlanTests
             sql = sql.Replace(from, to, StringComparison.Ordinal);
         }
         return sql;
+    }
+
+    /// <summary>The contest's statement with the compiled one's check of the tables it reads (a catalog lookup by index,
+    /// before the rows), and the first row found by key: what the compiled one does more after Then.</summary>
+    static string Checked(string reference, string compiled) => reference + " WHERE " + Guard(compiled) + " ORDER BY id LIMIT 1";
+
+    /// <summary>The check of the tables a compiled statement after Then makes, the condition of its final WHERE.</summary>
+    static string Guard(string compiled)
+    {
+        int start = compiled.IndexOf(" WHERE (SELECT CASE WHEN ", StringComparison.Ordinal), end = compiled.LastIndexOf(" ORDER BY ", StringComparison.Ordinal);
+        Assert.True(start > 0 && end > start, compiled);
+        return compiled[(start + 7)..end];
     }
 
     static readonly System.Threading.SemaphoreSlim SeedLock = new(1, 1);
@@ -122,6 +151,149 @@ public sealed class PlanTests
         string theirs = await Plan(reference, referenceTypes);
         Assert.True(theirs == ours, $"{name}: the contest's plan\n{theirs}\nthe compiled one\n{ours}");
     }
+
+    [Theory]
+    [MemberData(nameof(Fewer))]
+    public async Task TheCompiledQueryReadsNoMoreThanTheHandWrittenOne(string name)
+    {
+        TestDb.Require();
+        await EnsureSeed();
+        var (sql, types, reference, referenceTypes) = FewerPairs[name];
+        // the contest's with the compiled one's check of the catalog, which TheCheckReadsTheCatalogByItsIndexes pins
+        var ours = Scans(await PlanJson(sql, types.Select(TypeName).ToArray()));
+        var theirs = Scans(await PlanJson(reference, referenceTypes));
+        string both = $"{name}: the contest's reads\n{string.Join("\n", theirs)}\nthe compiled one's\n{string.Join("\n", ours)}";
+        Assert.True(ReadsNoMore(ours, theirs) is null, ReadsNoMore(ours, theirs) + "\n" + both);
+        TestContext.Current.TestOutputHelper?.WriteLine(both);
+    }
+
+    /// <summary>The compiled statements that check the catalog after Then.</summary>
+    public static readonly TheoryData<string> Checking =
+        new(Pairs.Concat(FewerPairs).Where(p => p.Value.Sql.Contains(" WHERE (SELECT CASE WHEN ", StringComparison.Ordinal)).Select(p => p.Key));
+
+    [Theory]
+    [MemberData(nameof(Checking))]
+    public async Task TheCheckReadsTheCatalogByItsIndexes(string name)
+    {
+        TestDb.Require();
+        await EnsureSeed();
+        var (sql, types, _, _) = Pairs.TryGetValue(name, out var pair) ? pair : FewerPairs[name];
+        // the planner may scan a small catalog table whole, as it costs less; with that off, each read has an index that
+        // serves it, a lookup whatever the catalog's size: by an index condition, not the whole index read in order
+        var catalog = CatalogReads(await PlanJson(sql, types.Select(TypeName).ToArray(), "SET enable_seqscan = off"));
+        string all = string.Join("\n", catalog);
+        Assert.All(catalog, s => Assert.Matches(ByIndexCondition, s));
+        // the table written and its partitions, their rules and triggers, the columns an insert sets; after a delete the
+        // tables it reaches
+        string[] read = name is "Unfollow" or "Unfavorite"
+            ? ["pg_attribute", "pg_class", "pg_constraint", "pg_depend", "pg_inherits", "pg_trigger"] : ["pg_attribute", "pg_class", "pg_inherits", "pg_trigger"];
+        Assert.True(read.SequenceEqual(catalog.Select(s => s[..s.IndexOf(' ', StringComparison.Ordinal)]).Distinct()), all);
+    }
+
+    /// <summary>A catalog read bounded by an index condition.</summary>
+    const string ByIndexCondition = @"^pg_\w+ pg_\w+_index \| (Index Scan|Index Only Scan|Bitmap Heap Scan) \| Index Cond$";
+
+    [Fact]
+    public async Task TheCatalogPinTellsAWholeIndexReadApart()
+    {
+        // the pin itself: pg_class read in its oid index's order is an index scan, of the whole index
+        TestDb.Require();
+        var reads = CatalogReads(await PlanJson("SELECT relname FROM pg_class ORDER BY oid", [], "SET enable_seqscan = off"));
+        Assert.Equal(["pg_class pg_class_oid_index | Index Scan | no condition"], reads);
+        Assert.DoesNotMatch(ByIndexCondition, reads[0]);
+        Assert.Matches(ByIndexCondition, CatalogReads(await PlanJson("SELECT relname FROM pg_class WHERE oid = 1259", [], "SET enable_seqscan = off"))[0]);
+    }
+
+    /// <summary>The catalog reads of a plan, each as its relation, index, kind of scan and whether an index condition
+    /// bounds it (on a bitmap scan, in the index scan below it).</summary>
+    static List<string> CatalogReads(JsonElement node)
+    {
+        var all = new List<string>();
+        void Walk(JsonElement n)
+        {
+            if (n.TryGetProperty("Relation Name", out var rel) && rel.GetString()!.StartsWith("pg_", StringComparison.Ordinal))
+            {
+                var bounded = n.GetProperty("Node Type").GetString() == "Bitmap Heap Scan" && n.TryGetProperty("Plans", out var below) ? below[0] : n;
+                string index = bounded.TryGetProperty("Index Name", out var ix) ? ix.GetString()! : "-";
+                all.Add($"{rel.GetString()} {index} | {n.GetProperty("Node Type").GetString()} | {(bounded.TryGetProperty("Index Cond", out _) ? "Index Cond" : "no condition")}");
+            }
+            if (n.TryGetProperty("Plans", out var plans))
+                foreach (var p in plans.EnumerateArray()) Walk(p);
+        }
+        Walk(node);
+        all.Sort(StringComparer.Ordinal);
+        return all;
+    }
+
+    // Unfavorite's reads on CI's fresh Postgres 18 (run 39581090857): the delete's two indexes of favorites cost the
+    // same there, and each statement took another of them
+    static readonly List<string> CiTheirs =
+    [
+        "article_tags article_tags_pkey | Index Only Scan", "articles articles_pkey | Index Scan", "articles articles_slug_key | Index Scan",
+        "favorites - | ModifyTable", "favorites favorites_article_idx | Index Only Scan", "favorites favorites_article_idx | Index Scan",
+        "favorites favorites_article_idx | Index Scan", "follows follows_followee_idx | Index Scan", "pg_class pg_class_oid_index | Index Scan",
+        "pg_inherits - | Seq Scan", "tags - | Seq Scan", "users users_pkey | Index Scan",
+    ];
+
+    static readonly List<string> CiOurs =
+    [
+        "article_tags article_tags_pkey | Index Only Scan", "articles articles_slug_key | Index Scan", "favorites - | ModifyTable",
+        "favorites favorites_article_idx | Index Only Scan", "favorites favorites_article_idx | Index Scan", "favorites favorites_pkey | Index Scan",
+        "follows follows_followee_idx | Index Scan", "pg_class pg_class_oid_index | Index Scan", "pg_inherits - | Seq Scan",
+        "tags - | Seq Scan", "users users_pkey | Index Scan",
+    ];
+
+    [Fact]
+    public void ReadingNoMoreAllowsAnotherIndexOfTheSameTableOnly()
+    {
+        // another index of a table read as often: the planner's pick between two of the same cost
+        Assert.Null(ReadsNoMore(CiOurs, CiTheirs));
+        // a table theirs doesn't read, a table read more often, a table read whole where theirs looks it up
+        Assert.NotNull(ReadsNoMore([.. CiOurs, "comments comments_article_idx | Index Scan"], CiTheirs));
+        Assert.NotNull(ReadsNoMore([.. CiOurs, "users users_pkey | Index Scan"], CiTheirs));
+        Assert.NotNull(ReadsNoMore([.. CiOurs.Where(s => s != "follows follows_followee_idx | Index Scan"), "follows - | Seq Scan"], CiTheirs));
+    }
+
+    /// <summary>
+    /// Why <paramref name="ours"/> reads more of the tables than <paramref name="theirs"/>, or null: a table theirs
+    /// doesn't read, more reads of one, or more of it read whole (a sequential scan). Which index of a table serves a
+    /// read is the planner's pick where two cost the same, as favorites' primary key and article index do for
+    /// Unfavorite's delete, so it may differ. The catalog's reads are TheCheckReadsTheCatalogByItsIndexes's to pin.
+    /// </summary>
+    static string? ReadsNoMore(List<string> ours, List<string> theirs)
+    {
+        static string Relation(string s) => s[..s.IndexOf(' ', StringComparison.Ordinal)];
+        static bool Whole(string s) => s.EndsWith("| Seq Scan", StringComparison.Ordinal);
+        foreach (var read in ours.Where(s => !s.StartsWith("pg_", StringComparison.Ordinal)).GroupBy(Relation))
+        {
+            var their = theirs.Where(t => Relation(t) == read.Key).ToList();
+            if (their.Count == 0) return $"{read.Key}: theirs doesn't read it";
+            if (read.Count() > their.Count) return $"{read.Key}: read {read.Count()} times, theirs {their.Count}";
+            if (read.Count(Whole) > their.Count(Whole)) return $"{read.Key}: read whole {read.Count(Whole)} times, theirs {their.Count(Whole)}";
+        }
+        return null;
+    }
+
+    /// <summary>The scans of a plan, each as its relation, index (or none) and kind of scan.</summary>
+    static List<string> Scans(JsonElement node)
+    {
+        var all = new List<string>();
+        void Walk(JsonElement n)
+        {
+            // a bitmap scan names its index in the node below it
+            if (n.TryGetProperty("Relation Name", out var rel))
+                all.Add($"{rel.GetString()} {(n.TryGetProperty("Index Name", out var ix) ? ix.GetString() : BitmapIndex(n) ?? "-")} | {n.GetProperty("Node Type").GetString()}");
+            if (n.TryGetProperty("Plans", out var plans))
+                foreach (var p in plans.EnumerateArray()) Walk(p);
+        }
+        Walk(node);
+        all.Sort(StringComparer.Ordinal);
+        return all;
+    }
+
+    static string? BitmapIndex(JsonElement n) =>
+        n.GetProperty("Node Type").GetString() == "Bitmap Heap Scan" && n.TryGetProperty("Plans", out var below) && below[0].TryGetProperty("Index Name", out var ix)
+            ? ix.GetString() : null;
 
     /// <summary>A plan's shape.</summary>
     [Fact]
@@ -161,9 +333,17 @@ public sealed class PlanTests
     /// <summary>The generic plan of <paramref name="sql"/>, as an indented outline of its shape.</summary>
     static async Task<string> Plan(string sql, string[] types)
     {
+        var b = new StringBuilder();
+        Outline(await PlanJson(sql, types), 0, b);
+        return b.ToString();
+    }
+
+    /// <summary>The generic plan of <paramref name="sql"/>, as EXPLAIN writes it.</summary>
+    static async Task<JsonElement> PlanJson(string sql, string[] types, params string[] settings)
+    {
         await using var db = TestDb.Admin(Schema);
         await using var conn = await db.OpenConnectionAsync();
-        foreach (var set in new[] { "SET plan_cache_mode = force_generic_plan", "SET jit = off", "SET max_parallel_workers_per_gather = 0" })
+        foreach (var set in new[] { "SET plan_cache_mode = force_generic_plan", "SET jit = off", "SET max_parallel_workers_per_gather = 0" }.Concat(settings))
             await Run(conn, set);
         string name = "p" + Guid.NewGuid().ToString("N");
         await Run(conn, $"PREPARE {name}{(types.Length == 0 ? "" : "(" + string.Join(", ", types) + ")")} AS {sql}");
@@ -171,9 +351,7 @@ public sealed class PlanTests
         string json = (string)(await explain.ExecuteScalarAsync())!;
         await Run(conn, $"DEALLOCATE {name}");
         using var doc = JsonDocument.Parse(json);
-        var b = new StringBuilder();
-        Outline(doc.RootElement[0].GetProperty("Plan"), 0, b);
-        return b.ToString();
+        return doc.RootElement[0].GetProperty("Plan").Clone();
     }
 
     static async Task Run(NpgsqlConnection conn, string sql)

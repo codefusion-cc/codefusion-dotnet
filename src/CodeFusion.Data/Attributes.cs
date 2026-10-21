@@ -74,7 +74,8 @@ public sealed class SqlTemplateAttribute(string template) : Attribute
     public string Template { get; } = template;
 
     /// <summary>The dialect (its <see cref="SqlDialectAttribute.Name"/>, such as <c>sqlite</c>) this template is for; null:
-    /// any dialect without one of its own. A method may carry one template per dialect.</summary>
+    /// any dialect without one of its own. A method may carry one template per dialect; in a dialect it has none for, a
+    /// method whose body is an expression it translates is that expression (a slug rule in LINQ, and SQLite's own SQL).</summary>
     public string? Dialect { get; init; }
 }
 
@@ -103,4 +104,11 @@ public static class Utf8ListOperators
             if (t == text) return true;
         return false;
     }
+
+    /// <summary>
+    /// The list's texts as the rows of a query, for an insert of each (<c>unnest($1)</c>, the list the array
+    /// parameter): <c>Insert(Tags, names.AsRows().Distinct().OrderBy(n =&gt; n).Select(n =&gt; new Tag { Name = n })).OrIgnore()</c>
+    /// inserts each new name once, in sorted order. Before the Select come Where, Distinct and one OrderBy.
+    /// </summary>
+    [QueryDefinition] public static Query<Utf8> AsRows(this Utf8List list) => Definition.Never<Query<Utf8>>();
 }

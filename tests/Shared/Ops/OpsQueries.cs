@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 using System.Linq;
 using CodeFusion;
@@ -15,6 +16,9 @@ public sealed class Team
     public long Id { get; init; }
     public Utf8 Name { get; init; }
     public Many<Person> Members { get; init; }
+
+    /// <summary>Rows a delete of chain_a reaches two foreign keys down, which the model has no navigation for.</summary>
+    public Many<ChainC> Chains { get; init; }
 }
 
 public sealed class Person
@@ -32,6 +36,9 @@ public sealed class Person
 
     [JoinTable("person_labels")]
     public Many<Label> Labels { get; init; }
+
+    /// <summary>The same labels, as the link table's own rows.</summary>
+    public Many<PersonLabel> Labelings { get; init; }
 }
 
 public sealed class Pet
@@ -41,6 +48,7 @@ public sealed class Pet
     public Person Owner { get; init; } = null!;
     public Utf8 Name { get; init; }
     public int Legs { get; init; }
+    public float? Weight { get; init; }
 }
 
 public sealed class Label
@@ -51,10 +59,29 @@ public sealed class Label
 
 public sealed class PersonLabel
 {
-    public long PersonId { get; init; }
+    /// <summary>With LabelId, the key: [Key] on each.</summary>
+    [Key] public long PersonId { get; init; }
     public Person Person { get; init; } = null!;
-    public int LabelId { get; init; }
+    [Key] public int LabelId { get; init; }
     public Label Label { get; init; } = null!;
+}
+
+/// <summary>The head of a chain of cascades: chain_b references it, and chain_c chain_b, each ON DELETE CASCADE.</summary>
+[Table("chain_a")]
+public sealed class ChainA
+{
+    public long Id { get; init; }
+    public Utf8 Name { get; init; }
+}
+
+/// <summary>The end of the chain, mapped without the navigation that would lead the model to chain_a.</summary>
+[Table("chain_c")]
+public sealed class ChainC
+{
+    public long Id { get; init; }
+    public long BId { get; init; }
+    public long TeamId { get; init; }
+    public Team Team { get; init; } = null!;
 }
 
 /// <summary>A table whose name needs quotes.</summary>

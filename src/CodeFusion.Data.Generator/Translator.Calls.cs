@@ -22,7 +22,7 @@ sealed partial class Translator
     public bool IsDefinition(ISymbol s) => Known.Attribute(s.OriginalDefinition, K.QueryDefinition) is not null;
 
     /// <summary>The SQL of a [SqlTemplate] method in this dialect: its template for the dialect, else its template for any
-    /// dialect; null when the method isn't one.</summary>
+    /// dialect; null when the method isn't one, or has neither and a definition of its own (its body, translated).</summary>
     string? Template(IMethodSymbol m, Location at)
     {
         string? any = null, mine = null;
@@ -37,7 +37,10 @@ sealed partial class Translator
             else if (dialect == D.Name) mine ??= sql;
         }
         if (!template) return null;
-        return mine ?? any ?? throw new Refused(at, $"'{m.Name}', which has no [SqlTemplate] for the {D.Name} dialect");
+        if ((mine ?? any) is { } chosen) return chosen;
+        // none for this dialect: a method with a definition of its own is that here, as a method without templates is
+        if (m.IsStatic && Inlinable(m, out var body) && Unwrap(body!) is not IThrowOperation) return null;
+        throw new Refused(at, $"'{m.Name}', which has no [SqlTemplate] for the {D.Name} dialect");
     }
 
     Value Invoke(IInvocationOperation inv, Env env)
@@ -63,6 +66,7 @@ sealed partial class Translator
                 "Now" => new SqlValue(D.Now, m.ReturnType, false),
                 _ => throw new Refused(at, $"SqlFunctions.{m.Name}"),
             };
+        if (Known.Same(m.ContainingType, K.Utf8Operators)) return TextFunction(m, inv, args, env);
         if (IsDefinition(m))
         {
             var receiver = inv.Instance is { } i ? Eval(i, env) : args.Count > 0 ? Eval(args[0], env) : null;
@@ -134,6 +138,104 @@ sealed partial class Translator
         return Composite($"{target}({string.Join(", ", parts)})", m.ReturnType, false, null, made.ToArray());
     }
 
+    /// <summary>
+    /// A text function of Utf8Operators: its SQL, by the dialect's template. Over values known when called it is also
+    /// C#, the method itself, for where C# decides (a ThenIf's condition); in SQL it is still the function over the
+    /// parameters, so the call never runs and nothing is allocated.
+    /// </summary>
+    Value TextFunction(IMethodSymbol m, IInvocationOperation inv, List<IOperation> args, Env env)
+    {
+        var at = inv.Syntax.GetLocation();
+        var values = args.Select(a => Eval(a, env)).ToList();
+        Location Arg(int i) => args[i].Syntax.GetLocation();
+        string Literal(int i, string what) => values[i] is Constant { Constant_: string s } ? s
+            : throw new Refused(Arg(i), $"{m.Name}'s {what} that isn't a constant string (it is checked when the query is compiled)");
+        string template;
+        // the operands' SQL, and the arguments written as SQL literals
+        var operands = new List<int> { 0 };
+        var literals = new List<string>();
+        switch (m.Name)
+        {
+            case "ToLowerAscii":
+                template = D.LowerAscii;
+                break;
+            case "ToUpperAscii":
+                template = D.UpperAscii;
+                break;
+            case "Trim" or "TrimStart" or "TrimEnd":
+            {
+                template = m.Name == "Trim" ? D.Trim : m.Name == "TrimStart" ? D.TrimStart : D.TrimEnd;
+                if (values[1] is not Constant { Constant_: char c })
+                    throw new Refused(Arg(1), $"{m.Name}'s character that isn't a constant");
+                if (char.IsSurrogate(c)) throw new Refused(Arg(1), $"{m.Name} by half a character (a surrogate)");
+                literals.Add(Sql.String(c.ToString(), Arg(1)));
+                break;
+            }
+            case "Replace":
+                template = D.Replace;
+                operands.AddRange([1, 2]);
+                break;
+            case "ReplaceMatches":
+            {
+                template = D.RegexReplace;
+                string pattern = Literal(1, "pattern"), replacement = Literal(2, "replacement");
+                if (Patterns.Problem(pattern) is { } problem)
+                    throw new Refused(Arg(1), $"ReplaceMatches with {problem}, which .NET and SQL may read differently, so the pattern");
+                if (Patterns.ReplacementProblem(replacement) is { } bad)
+                    throw new Refused(Arg(2), $"ReplaceMatches with {bad}, which .NET and SQL read differently, so the replacement");
+                literals.Add(Sql.String(pattern, Arg(1)));
+                literals.Add(Sql.String(replacement, Arg(2)));
+                break;
+            }
+            case "Concat":
+                template = D.Concat;
+                operands.Add(1);
+                break;
+            default:
+                throw new Refused(at, $"Utf8Operators.{m.Name}");
+        }
+        if (template.Length == 0) throw new Refused(at, $"{m.Name} in {D.Name}");
+        string Render()
+        {
+            var sql = operands.Select(i => Operand(values[i], Arg(i))).ToList();
+            // a number as text by the dialect's own cast: + would add it where + is the concatenation
+            if (m.Name == "Concat")
+                return Dialect.Format(template, Chained(sql[0]), m.Parameters[1].Type.SpecialType == SpecialType.System_Int64 ? Dialect.Format(D.IntegerText, sql[1]) : Sql.Group(sql[1]));
+            return Dialect.Format(template, sql.Concat(literals).ToArray());
+        }
+        if (values[0] is Host && operands.All(i => values[i] is Host or Constant))
+        {
+            // the method itself in C#: a nullable value's .Value as written (Property gives the value itself)
+            var code = values.Select((v, i) => v is Host h && IsNullable(h.Type) && !IsNullable(m.Parameters[i].Type) ? $"({h.Code}).Value" : Code(v, Arg(i)));
+            return Composite($"global::CodeFusion.Data.Utf8Operators.{m.Name}({string.Join(", ", code)})", m.ReturnType, true, Render, values.ToArray());
+        }
+        return new SqlValue(Render(), m.ReturnType, operands.Any(i => MayBeNull(values[i])));
+    }
+
+    /// <summary>The left side of a concatenation: as it is when it is one term or a chain of concatenations
+    /// (<c>a || b || c</c> is read from the left), else in parentheses.</summary>
+    string Chained(string sql)
+    {
+        if (Sql.Atomic(sql)) return sql;
+        string op = Dialect.Format(D.Concat, "", "");
+        int depth = 0;
+        bool quoted = false;
+        for (int i = 0; i < sql.Length; i++)
+        {
+            char c = sql[i];
+            if (c == '\'') quoted = !quoted;
+            else if (quoted) continue;
+            else if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (depth == 0 && c == ' ')
+            {
+                if (string.CompareOrdinal(sql, i, op, 0, op.Length) != 0) return "(" + sql + ")";
+                i += op.Length - 1;
+            }
+        }
+        return sql;
+    }
+
     public IAnonymousFunctionOperation Lambda(IOperation op) =>
         Unwrap(op) as IAnonymousFunctionOperation ?? throw new Refused(op.Syntax.GetLocation(), "an operator's argument that isn't a lambda written in place");
 
@@ -160,6 +262,8 @@ sealed partial class Translator
         {
             case "Where" or "Select" or "OrderBy" or "OrderByDescending" or "ThenBy" or "ThenByDescending" or "Take":
                 return new ManyValue(inv.Type!, mv.Parent, mv.Nav, mv.Target, new List<Step>(mv.Steps) { new(name, inv, env) });
+            case "Any" or "Count" when _written is { } w && !mv.Nav.IsThrough && SameTable(mv.Target, w.Table):
+                return Corrected(mv, name, inv, env, w);
             case "Any" or "Count":
                 return Nested(() =>
                 {
@@ -229,6 +333,12 @@ sealed partial class Translator
         var sub = new Select();
         var parent = mv.Parent;
         var target = mv.Target;
+        // the table the write before a Select changes is read only by the correction of a Count or Any of it
+        if (!ReferenceEquals(mv, _correcting))
+        {
+            Unwritten(target, at);
+            if (mv.Nav.IsThrough) Unwritten(mv.Nav.JoinTable!, null, at);
+        }
         string parentKey = Column(parent, KeyOf(parent.Entity, at), at);
         string? hint = mv.Steps.Select(s => Unwrap(s.Call.Arguments.LastOrDefault()?.Value ?? s.Call)).OfType<IAnonymousFunctionOperation>()
             .Select(f => f.Symbol.Parameters.FirstOrDefault()?.Name).FirstOrDefault(n => n is not null);
@@ -245,13 +355,8 @@ sealed partial class Translator
         else
         {
             child = FromTable(sub, target, hint);
-            var inverse = target.Ones.Values.Where(o => Known.Same(o.Target, parent.Entity.Type)
-                && (mv.Nav.InverseNavigation is null || o.Property.Name == mv.Nav.InverseNavigation)).ToList();
-            if (inverse.Count != 1)
-                throw new Refused(at, Diagnostics.BadEntity, parent.Entity.Type.Name, inverse.Count == 0
-                    ? $"'{mv.Nav.Property.Name}': {target.Type.Name} has no navigation back to {parent.Entity.Type.Name} (or name its join table with [JoinTable])"
-                    : $"'{mv.Nav.Property.Name}': {target.Type.Name} has several navigations to {parent.Entity.Type.Name}; name one with [InverseProperty]");
-            sub.Where.Add($"{Column(child, inverse[0].ForeignKey, at)} = {parentKey}");
+            var inverse = Inverse(mv, at);
+            sub.Where.Add($"{Column(child, inverse.ForeignKey, at)} = {parentKey}");
         }
         current = new RowValue(child);
         selected = false;
@@ -278,6 +383,19 @@ sealed partial class Translator
             }
         }
         return sub;
+    }
+
+    /// <summary>The one-navigation of a many-navigation's rows back to its parent, whose foreign key correlates them.</summary>
+    OneNav Inverse(ManyValue mv, Location at)
+    {
+        var parent = mv.Parent.Entity;
+        var inverse = mv.Target.Ones.Values.Where(o => Known.Same(o.Target, parent.Type)
+            && (mv.Nav.InverseNavigation is null || o.Property.Name == mv.Nav.InverseNavigation)).ToList();
+        if (inverse.Count != 1)
+            throw new Refused(at, Diagnostics.BadEntity, parent.Type.Name, inverse.Count == 0
+                ? $"'{mv.Nav.Property.Name}': {mv.Target.Type.Name} has no navigation back to {parent.Type.Name} (or name its join table with [JoinTable])"
+                : $"'{mv.Nav.Property.Name}': {mv.Target.Type.Name} has several navigations to {parent.Type.Name}; name one with [InverseProperty]");
+        return inverse[0];
     }
 
     // ---------- order, Take and Skip ----------

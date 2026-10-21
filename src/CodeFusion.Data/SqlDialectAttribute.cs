@@ -85,6 +85,11 @@ public sealed class SqlDialectAttribute : Attribute
     /// <summary>Whether {0} is one of the elements of the array parameter {1}: <c>{0} = ANY({1})</c>.</summary>
     public string InArray { get; init; } = "{0} = ANY({1})";
 
+    /// <summary>The elements of an array parameter as rows of one column named v, for an insert of a list's texts; {0}
+    /// is the parameter, {1} the rows' alias: <c>unnest({0}) {1}(v)</c>; SQLite <c>(SELECT value AS v FROM json_each({0})) {1}</c>.
+    /// Empty: the dialect has none, and an insert of a list's texts is refused.</summary>
+    public string ListRows { get; init; } = "unnest({0}) {1}(v)";
+
     /// <summary>Equality that holds for two NULLs: <c>{0} IS NOT DISTINCT FROM {1}</c>; SQLite <c>{0} IS {1}</c>.</summary>
     public string NullSafeEqual { get; init; } = "{0} IS NOT DISTINCT FROM {1}";
 
@@ -93,6 +98,38 @@ public sealed class SqlDialectAttribute : Attribute
 
     /// <summary>Text concatenation; {0} and {1} are the parts: <c>{0} || {1}</c>, or <c>{0} + {1}</c> for SQL Server.</summary>
     public string Concat { get; init; } = "{0} || {1}";
+
+    /// <summary>Text with A to Z lowered and nothing else (<see cref="Utf8Operators.ToLowerAscii"/>); {0} is the text:
+    /// <c>translate({0}, 'A…Z', 'a…z')</c>, alike in every collation, and the result keeps the text's own collation, so
+    /// an order by it is the column's (<c>lower({0} COLLATE "C")</c> would order bytewise). SQLite's <c>lower({0})</c>
+    /// lowers A to Z only already.</summary>
+    public string LowerAscii { get; init; } = "translate({0}, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')";
+
+    /// <summary>Text with a to z raised and nothing else (<see cref="Utf8Operators.ToUpperAscii"/>): <c>translate({0}, 'a…z', 'A…Z')</c>.</summary>
+    public string UpperAscii { get; init; } = "translate({0}, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')";
+
+    /// <summary>An integer as text, for <see cref="Utf8Operators.Concat(Utf8, long)"/>; {0} is the number:
+    /// <c>CAST({0} AS text)</c>, or <c>CAST({0} AS varchar(20))</c> where <see cref="Concat"/> is <c>+</c>.</summary>
+    public string IntegerText { get; init; } = "CAST({0} AS text)";
+
+    /// <summary>Text without a character at either end; {0} is the text, {1} the character as a string literal:
+    /// <c>trim(both {1} from {0})</c>; SQLite <c>trim({0}, {1})</c>.</summary>
+    public string Trim { get; init; } = "trim(both {1} from {0})";
+
+    /// <summary>Text without a character at its start: <c>trim(leading {1} from {0})</c>; SQLite <c>ltrim({0}, {1})</c>.</summary>
+    public string TrimStart { get; init; } = "trim(leading {1} from {0})";
+
+    /// <summary>Text without a character at its end: <c>trim(trailing {1} from {0})</c>; SQLite <c>rtrim({0}, {1})</c>.</summary>
+    public string TrimEnd { get; init; } = "trim(trailing {1} from {0})";
+
+    /// <summary>Each occurrence of {1} in {0} replaced by {2}, an empty {1} replacing nothing: <c>replace({0}, {1}, {2})</c>.
+    /// Before Postgres 18 it fails on text of a nondeterministic collation.</summary>
+    public string Replace { get; init; } = "replace({0}, {1}, {2})";
+
+    /// <summary>Each match of the pattern {1} in {0} replaced by {2}, both string literals:
+    /// <c>regexp_replace({0}, {1}, {2}, 'g')</c>, which fails on text of a nondeterministic collation. Empty: the
+    /// dialect has none, and ReplaceMatches is refused.</summary>
+    public string RegexReplace { get; init; } = "regexp_replace({0}, {1}, {2}, 'g')";
 
     /// <summary>The literals for true and false: <c>true false</c>, or <c>1 0</c> where there is no bool type.</summary>
     public string Booleans { get; init; } = "true false";
@@ -103,6 +140,28 @@ public sealed class SqlDialectAttribute : Attribute
 
     /// <summary>A bigint literal for a count's cap; {0} is the number: <c>{0}::bigint</c>.</summary>
     public string BigIntLiteral { get; init; } = "{0}::bigint";
+
+    /// <summary>A column one of a query's values, for a delete in <c>Query.Then</c> tied to the rows found by one column;
+    /// {0} is the column, {1} the query: <c>{0} = ANY(ARRAY({1}))</c>, an index condition. Empty: the delete joins the
+    /// rows found instead (<c>DELETE ... USING</c>).</summary>
+    public string AnyOfQuery { get; init; } = "{0} = ANY(ARRAY({1}))";
+
+    /// <summary>
+    /// A condition of the Select after <c>Query.Then</c> that fails the statement, before its write commits, when the
+    /// Select can't read the tables as the write left them: a rule or trigger on the table written, one of its
+    /// partitions, or a table a delete reaches key after key (along the keys that cascade or set NULL or a default, and
+    /// from a row set to NULL or a default along the keys acting on its update); such a table that the Select reads, or
+    /// that a table it reads holds as a partition or by inheritance; the table written, or a partition of it, held by
+    /// the row found's table; row security on a table whose read is corrected; or a column the insert sets that may
+    /// store another value than the one written (a type modifier such as numeric(5,2), a type other than the one bound
+    /// but a wider integer or float) or compare it in another collation than the default. {0} is the table written,
+    /// {2} the tables the Select reads and {5} the table of the row found, each a string literal; {1} the columns the
+    /// insert sets, rows of a VALUES of each one's name and the types that hold its value as bound
+    /// (<c>('legs', '{int4,int8}'::regtype[])</c>); {3} whether the write deletes and {4} whether a read is corrected,
+    /// each a boolean. Null: the generator's check of the Postgres catalog, which reads it by its indexes. Empty: such a
+    /// Then is refused.
+    /// </summary>
+    public string? ThenGuard { get; init; }
 
     /// <summary>A floating-point value as an integer, cut toward zero as C# casts it; {0} is the value, {1} the SQL integer
     /// type: <c>CAST(trunc({0}) AS {1})</c>; SQLite <c>CAST({0} AS {1})</c>, whose cast already cuts toward zero.</summary>
@@ -115,13 +174,14 @@ public sealed class SqlDialectAttribute : Attribute
     public string Greatest { get; init; } = "GREATEST({0}, {1})";
 
     /// <summary>Whether a subquery in FROM may refer to the rows before it (<c>LEFT JOIN LATERAL</c>). False (SQLite): a
-    /// page's rows join without it, and a row's children are joined by their keys being in the correlated top n.</summary>
+    /// page's rows join without it, and a row's children are joined by their keys being in the correlated top n; a page
+    /// of the newest rows per group (<c>SelectMany</c> before <c>Page</c>) is refused.</summary>
     public bool Lateral { get; init; } = true;
 
     /// <summary>Whether a CTE may write (<c>WITH d AS (DELETE ... RETURNING ...)</c>). False (SQLite): a conditional write
     /// is two statements of one unit, the write with RETURNING and the refused rows after it, and the rows a write
     /// returns read their navigations through scalar subqueries. The provider hands the reader every row of every
-    /// statement of the unit, in order.</summary>
+    /// statement of the unit, in order. A write from the rows a query found (<c>Query.Then</c>) is refused.</summary>
     public bool WritableCtes { get; init; } = true;
 
     /// <summary>Whether <c>INSERT ... SELECT ... ON CONFLICT</c> needs a WHERE in its SELECT to parse (SQLite reads the ON
