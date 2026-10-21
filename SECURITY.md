@@ -35,6 +35,20 @@ Fixes go into the latest release only.
   behind such a request is seen on Linux and macOS only), so a handler that passes the token on stops work nobody
   waits for, behind a proxy too. The cancel's callbacks never run on the heartbeat's thread, so a handler can't stall
   the timeouts above. After a close the answer is still sent if the handler finishes; after a reset it is dropped.
+- **Event loops** (`HttpTransport.EventLoop`: the default on Linux, an option on macOS). Connections share their
+  loop's thread.
+  - A handler that blocks before its first await holds every connection on its loop until it returns.
+  - One connection gets at most 16 reads and 16 handler calls per wake-up of its loop. Past either it waits until
+    the loop's other ready connections have had theirs and their answers are sent. So a neighbour waits at most for
+    16 of the busy client's handlers at a time, plus its own turn: a bound in handler calls, so in time only as far
+    as the handlers' own cost is bounded.
+  - The cancel of `Aborted` runs on the thread pool, never on a loop.
+  - A stop waits at most a second more for a loop a handler holds. It returns after that and leaves the loop's thread
+    to end with the handler.
+- **Port sharing.** On Linux and macOS the runtime's `ReuseAddress`, which every listener sets, also sets
+  SO_REUSEPORT. So on either transport another process of the same user can bind the same port, and a second server
+  started on it by mistake shares its connections instead of failing to bind. On Linux the event loops' own listeners
+  (`ListenerPerLoop`) rely on that on purpose.
 - **Memory.** A request's buffer starts at 4 KB and doubles as its bytes arrive, up to the whole request, so a
   connection holds at most about twice what it has sent, whatever its Content-Length declares. A response is built
   whole in memory and kept until the socket has taken it: a client reading at 240 B/s holds a 1 MB response for up to

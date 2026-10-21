@@ -24,12 +24,27 @@ is the GC collections and allocation rate of the CodeFusion process during a sus
 The CodeFusion build is every performance branch merged: the event loop, pg-pipelining, data-batched-updates, two
 readers per core and four writers. These are reduced-rig numbers; the TechEmpower rounds run on larger hardware.
 
+Two things the table leaves out:
+- **The fastest overall is in C, not Rust, on two tests.** libreactor does 9,461,172 on plaintext and 1,483,605 on
+  JSON on the same rig. On single query, multiple queries and updates CodeFusion leads every entry measured; on
+  fortunes, xitca-web leads.
+- **On single query, multiple queries and updates, Postgres is the limit.** Its 8 vCPUs ran 93 to 100% busy for the
+  leaders, so a larger database machine could reorder them.
+
 ## Iterations
 
 | Date | File | What was tested | Result |
 |---|---|---|---|
 | 2026-10-21 | [2026-10-21-pg-job-cache.md](2026-10-21-pg-job-cache.md) | A per-thread cache in front of the job pool, TechEmpower db and fortunes | db +8.3% (692,778), fortunes +2.1% |
 | 2026-10-21 | [2026-10-21-pg-read-burst.md](2026-10-21-pg-read-burst.md) | 32 reads queued at once on idle loops, before and after pipelining and shared bursts | 162-172 µs to 70-87 µs per read; Npgsql 106-122 |
+| 2026-10-20 | [one-receive-per-request](2026-10-20-one-receive-per-request.md) | System calls per response, Sockets against EventLoop (epoll), $12 entry, one CPU | 1 recvfrom + 1 sendto per response, down from 2 + 1 |
+| 2026-10-20 | [event-loop-vs-sockets-linux](2026-10-20-event-loop-vs-sockets-linux.md) | Throughput of the $12 entry, Sockets against EventLoop, against #74 | health +21%, post +14%, feed +10%, mix +5%; #74 still 26% ahead on health |
+| 2026-10-20 | [event-loop-allocations-macos](2026-10-20-event-loop-allocations-macos.md) | Allocations per request, kqueue against Sockets, Release | ≤ 0.07 B/request on both; zero kept |
+| 2026-10-21 | [direct-calls-and-batched-sends](2026-10-21-direct-calls-and-batched-sends.md) | Event loop with direct recv/send and per-wake-up sends, against the event loop before them | health +17 to 25%, post +21%, feed +8%, mix +26% |
+| 2026-10-21 | [listener-per-loop-and-loop-count](2026-10-21-listener-per-loop-and-loop-count.md) | SO_REUSEPORT listener per loop on one CPU; Sockets and 1 to 3 loops on two CPUs | one CPU: health +7%, mix level; two CPUs: inconclusive (25% swings), loop p99 higher on the mix |
+| 2026-10-21 | [review-fixes-and-batch-size](2026-10-21-review-fixes-and-batch-size.md) | Review fixes on one CPU; Sockets, batches of 512 and of 64 on two CPUs | one CPU: -2.5% health, -6% mix (one round); two CPUs: loop +22% over Sockets, p99 16-19 vs 10-11 ms; batches of 64 worse |
+| 2026-10-21 | [second-review-fixes-send-and-listeners](2026-10-21-second-review-fixes-send-and-listeners.md) | 00cc86e against 805f8d9; send with and without its GC transition; listener per loop against one on two CPUs | health level or better, mix -6% on the loop (not syscalls, not the edge word); keep the transition; listeners level |
+| 2026-10-21 | [mix-bisect](2026-10-21-mix-bisect.md) | The mix at five commits from 805f8d9 to 00cc86e, two rounds, profiles of both ends | no commit costs the mix: +4% in round 1, -5% in round 2, by position in the run; profiles alike |
 
 ## Template
 
