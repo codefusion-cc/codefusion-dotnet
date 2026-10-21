@@ -150,7 +150,7 @@ const CodeFusion.Data.Postgres.PgErrorCodes.UniqueViolation = "23505" -> string!
 const CodeFusion.Data.Postgres.PgReader.MaxGroup = 32 -> int
 const CodeFusion.Data.Postgres.PgReader.MaxQueued = 65536 -> int
 const CodeFusion.Data.Postgres.PgWriter.MaxGroup = 128 -> int
-const CodeFusion.Data.Postgres.PgWriter.MaxQueued = 4096 -> int
+const CodeFusion.Data.Postgres.PgWriter.MaxQueued = 65536 -> int
 override CodeFusion.Data.Postgres.PgDataSource.Stop() -> void
 override CodeFusion.Data.Postgres.PgResult.ToString() -> string!
 override CodeFusion.Data.Postgres.PgStatement.ToString() -> string!
@@ -175,3 +175,4 @@ CodeFusion.Data.Postgres.PgCounters.Alone -> long
 CodeFusion.Data.Postgres.PgStatement.RunsAlone.get -> bool
 CodeFusion.Data.Postgres.PgStatement.RunsAlone.init -> void
 static CodeFusion.Data.Postgres.Postgres.Alone(CodeFusion.Data.Postgres.PgStatement! statement) -> CodeFusion.Data.Postgres.PgStatement!
+CodeFusion.Data.Postgres.PgWriter.PgWriter(CodeFusion.Data.Postgres.PgSettings! settings, int maxQueued) -> void
