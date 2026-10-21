@@ -22,7 +22,7 @@
       },
       "SourceGear.sqlite3": {
         "type": "Direct",
-        "requested": "[3.50.4.5, )",
+        "requested": "[3.50.4.5, 3.50.4.5]",
         "resolved": "3.50.4.5",
         "contentHash": "UtnipXhJYZKQOQIfpws/msLK7IRhMplE1CZCaZLIQXRnGD474QVpO/J9nMlQQY8NZueGz1aidjoxDRnrC1NT3Q=="
       },

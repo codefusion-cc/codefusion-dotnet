@@ -30,6 +30,49 @@
     <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.HotPath.txt" Visible="false" Condition="'$(CodeFusionHotPath)' == 'true'" />
   </ItemGroup>
 
+  <!-- The CodeFusion packages use each other's internals, so they must run at one version. Packed, each depends on the
+       others at exactly its own version ([x.y.z], not "x.y.z or newer"); scripts/CheckPackages.cs checks the packages.
+       Loaded, each but Core checks the CodeFusion assemblies it references are at its version (CodeFusion.PackageVersions),
+       from a module initializer written here into the project's own namespace. CodeFusion.Security.* has releases of
+       its own. -->
+  <Target Name="CodeFusionExactProjectReferenceVersions" AfterTargets="_GetProjectReferenceVersions" Condition="'$(CodeFusionBcrypt)' != 'true'">
+    <ItemGroup>
+      <_CodeFusionExactVersions Include="@(_ProjectReferencesWithVersions)">
+        <ProjectVersion>[%(_ProjectReferencesWithVersions.ProjectVersion)]</ProjectVersion>
+      </_CodeFusionExactVersions>
+      <_ProjectReferencesWithVersions Remove="@(_ProjectReferencesWithVersions)" />
+      <_ProjectReferencesWithVersions Include="@(_CodeFusionExactVersions)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CodeFusionVersionCheck" BeforeTargets="CoreCompile"
+          Condition="'$(IsPackable)' != 'false' and '$(CodeFusionBcrypt)' != 'true' and '$(MSBuildProjectName)' != 'CodeFusion.Core'">
+    <PropertyGroup>
+      <_CodeFusionVersionCheckFile>$(IntermediateOutputPath)CodeFusionVersions.g.cs</_CodeFusionVersionCheckFile>
+      <!-- the CodeFusion assemblies it uses, each by a type of its own: Core always, Data for the providers -->
+      <_CodeFusionUses>typeof(global::CodeFusion.Utf8).Assembly</_CodeFusionUses>
+      <_CodeFusionUses Condition="$(MSBuildProjectName.StartsWith('CodeFusion.Data.'))">$(_CodeFusionUses), typeof(global::CodeFusion.Data.DataContext).Assembly</_CodeFusionUses>
+    </PropertyGroup>
+    <ItemGroup>
+      <_CodeFusionVersionCheckLines Include="// &lt;auto-generated&gt;src/Directory.Build.props: every CodeFusion package at one version&lt;/auto-generated&gt;" />
+      <_CodeFusionVersionCheckLines Include="namespace $(RootNamespace)" />
+      <_CodeFusionVersionCheckLines Include="{" />
+      <_CodeFusionVersionCheckLines Include="    internal static class CodeFusionVersions" />
+      <_CodeFusionVersionCheckLines Include="    {" />
+      <_CodeFusionVersionCheckLines Include="#pragma warning disable CA2255 // a library's module initializer, on purpose: a mixed install fails as it loads, saying why" />
+      <_CodeFusionVersionCheckLines Include="        [global::System.Runtime.CompilerServices.ModuleInitializer]" />
+      <_CodeFusionVersionCheckLines Include="        internal static void Check() =&gt; global::CodeFusion.PackageVersions.Check(typeof(CodeFusionVersions).Assembly, $(_CodeFusionUses))%3B" />
+      <_CodeFusionVersionCheckLines Include="#pragma warning restore CA2255" />
+      <_CodeFusionVersionCheckLines Include="    }" />
+      <_CodeFusionVersionCheckLines Include="}" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(_CodeFusionVersionCheckFile)" Lines="@(_CodeFusionVersionCheckLines)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+    <ItemGroup>
+      <Compile Include="$(_CodeFusionVersionCheckFile)" />
+      <FileWrites Include="$(_CodeFusionVersionCheckFile)" />
+    </ItemGroup>
+  </Target>
+
   <!-- The published packages' public API, nullability included, in each project's PublicAPI.Shipped.txt and
        PublicAPI.Unshipped.txt (the package picks them up): a change to it is a build error until the file says so,
        so it shows in review. Without the files every public symbol is an error. -->
