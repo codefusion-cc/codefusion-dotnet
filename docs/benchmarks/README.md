@@ -13,7 +13,7 @@ is the GC collections and allocation rate of the CodeFusion process during a sus
 | Workload | Machine | CodeFusion | Best Rust (entry) | Gap to Rust | Best other .NET (entry) | Allocation | Iteration |
 |---|---|---|---|---|---|---|---|
 | Multicore contest: Conduit on Postgres, users at the 5-minute hold | GCP c4-highcpu-8 | not measured yet | not measured yet | | | | |
-| $12 contest: feed on SQLite, users at the 5-minute hold | GCP C4 held to 1 vCPU / 2 GB | not measured yet | not measured yet | | | | |
+| $12 contest: feed on SQLite, users at the 5-minute hold | GCP c4-highcpu-2 held to 1 vCPU / 2 GB, 65,535 descriptors | 65,250 (cf-tables) | 188,250 (PR #82) | -65% | 65,500 (PR #74) | 470 / 478 MB RSS, about 7.3 KB a connection | 2026-10-21-twelve-scoring.md |
 | TechEmpower plaintext (pipelined 16), requests/s | reduced TFB rig: app c4-highcpu-8, Postgres c4-highcpu-8, wrk n2-highcpu-16; TFB 57d92fbec6f8 | 7,506,549 | 8,908,020 (xitca-web) | -16% | 7,297,751 (aspnetcore Platform) | 0 GC, 0 B in a measured minute | perf/techempower: 2026-10-21-tfb-final.md |
 | TechEmpower JSON, requests/s | same | 1,201,705 | 1,263,920 (xitca-web) | -5% | 703,920 (aspnetcore Platform) | 0 GC, 0 B in a measured minute | same |
 | TechEmpower single query, requests/s | same | 706,377 | 628,393 (may-minihttp) | **+12%** | 381,963 (aspnetcore Platform) | 0 GC, at most 0.013 B/request | same |
@@ -35,6 +35,7 @@ Two things the table leaves out:
 
 | Date | File | What was tested | Result |
 |---|---|---|---|
+| 2026-10-21 | [2026-10-21-twelve-scoring.md](2026-10-21-twelve-scoring.md) | The $12 contest on GCP: cf-tables, PR #74 (C# epoll) and PR #82 (Rust io_uring), users at the 5-minute hold | pr82 188,250 (memory-bound); pr74 65,500 and cf-tables 65,250 (descriptor limit) |
 | 2026-10-21 | [2026-10-21-rust-entries-techniques.md](2026-10-21-rust-entries-techniques.md) | Code study of the best Rust entries in both contests: what carries over, where, and the expected gain | 12 ideas ranked; #1 is mostly on perf/http-transport; the rest is new library work (Data.Postgres pipelining, Data.Sqlite per-wake-up transaction) |
 | 2026-10-21 | [2026-10-21-each-slot-locks.md](2026-10-21-each-slot-locks.md) | An Each's slots rented and returned under one lock each, not two per read; Each(20) of World, 1 and 16 connections | 40 slot-pool locks per Each(20) down to 2; times within the busy Mac's noise; kept |
 | 2026-10-21 | [2026-10-21-tfb-loop-pools.md](2026-10-21-tfb-loop-pools.md) | perf/http-loop-pools against perf/http-transport, plaintext and json, A B B A; a shared listener, 6 loops | Pools +2.5% plaintext, +1.9% json, the lock gone; shared listener ±2.5%; 6 loops -10 to -16% |
