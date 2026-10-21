@@ -143,7 +143,7 @@ public static class SqliteChecks
         var c = s.Writer.Counters;
         Assert.True(c.Unexpected == 0, $"the writer caught {c.Unexpected} unexpected exceptions; the first: {c.FirstUnexpected}");
 #if DEBUG
-        Assert.Equal(0, System.Threading.Interlocked.Read(ref s.JobsOut));
+        Assert.Equal(0, s.JobsOut);
 #endif
     }
 }

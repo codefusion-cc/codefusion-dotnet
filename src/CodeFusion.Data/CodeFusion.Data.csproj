@@ -17,6 +17,9 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="CodeFusion.Data.Tests" />
+    <!-- the providers share its job core (Jobs.cs) -->
+    <InternalsVisibleTo Include="CodeFusion.Data.Postgres" />
+    <InternalsVisibleTo Include="CodeFusion.Data.Sqlite" />
     <None Include="README.md" Pack="true" PackagePath="/" />
     <!-- The generator ships as this package's analyzer, with the setting its interceptors need. -->
     <None Include="../CodeFusion.Data.Generator/bin/$(Configuration)/netstandard2.0/CodeFusion.Data.Generator.dll" Pack="true" PackagePath="analyzers/dotnet/cs" Visible="false" />

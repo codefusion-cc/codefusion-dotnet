@@ -169,7 +169,10 @@ public sealed class SqliteDataSource : DataSource, IDisposable
     internal readonly SqliteReaders Readers;
 
     /// <summary>Debug builds: jobs rented from this source and not yet back in the pool (0 at rest). Release builds: 0.</summary>
-    internal long JobsOut;
+    internal readonly JobCounter Jobs = new();
+
+    /// <summary><see cref="Jobs"/>' count, read now.</summary>
+    internal int JobsOut => Volatile.Read(ref Jobs.Out);
 
     internal SqliteDataSource(SqliteDatabase database, SqliteReaders readers, SqliteWriter writer)
     {

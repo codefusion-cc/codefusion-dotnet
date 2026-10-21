@@ -15,24 +15,15 @@ namespace CodeFusion.Data.Sqlite;
 /// </summary>
 internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkItem
 {
-    const int MaxPooled = 4096;
-    /// <summary>Buffers past this size go with a returned job instead of being pooled.</summary>
-    const int MaxPooledBytes = 64 << 10;
-    static readonly SqliteJob?[] Pool = new SqliteJob?[MaxPooled];
-    static readonly Lock PoolLock = new();
-    static int _pooled;
-    /// <summary>A read is rented and given back on one thread: that thread's job, no lock. (A shared lock here capped
-    /// reads at about 2 M/s whatever the thread count.)</summary>
-    [ThreadStatic] static SqliteJob? t_cached;
-
     // parameter tags in Buf, and value tags in Saved
     internal const byte TagNull = 0, TagInt64 = 1, TagDouble = 2, TagText = 3;
 
     InlineValueTaskSourceCore<DataResult> _core;
+    /// <summary>Its generation and hold, and in Debug its steps: CodeFusion.Data's, as every provider's job.</summary>
+    JobLife _life = new("SQLite", queuesUnheld: false);
+
     /// <summary>Changes each time the job goes back to the pool, so a stale command or held copy can't touch it.</summary>
-    internal int Generation;
-    long _heldAt = Unclaimed;
-    const long Unclaimed = -1;
+    internal int Generation => _life.Generation;
 
     // ---- the command ----
     internal byte[] Buf = new byte[256];
@@ -55,31 +46,28 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
     internal DataResult Failure;
     internal bool Failed;
 
-    SqliteJob() => FillReturned();
+    SqliteJob()
+    {
+        // Debug: as a returned job's, so the first rent checks the same way
+        JobLife.Poison(Buf);
+        JobLife.Poison(Saved);
+    }
 
+    /// <summary>A job from the pool (a read is rented and given back on one thread: that thread's own, no lock).</summary>
     internal static SqliteJob Rent(SqliteStatement first, SqliteDataSource owner)
     {
-        SqliteJob? job = t_cached;
-        if (job is not null) t_cached = null;
-        else
-            lock (PoolLock)
-                if (_pooled > 0)
-                {
-                    job = Pool[--_pooled];
-                    Pool[_pooled] = null;
-                }
-        job ??= new SqliteJob();
-        job.CheckUnwritten();
-        job.To(Life.Building);
-        job.RentedBy(owner);
+        var job = JobPool<SqliteJob>.Take(local: true) ?? new SqliteJob();
+        job._life.CheckPoisoned(job.Buf);
+        job._life.CheckPoisoned(job.Saved);
+        job._life.To(JobStep.Building);
+        job._life.CountOut(owner.Jobs);
         job.Statement(first);
         return job;
     }
 
     internal unsafe void Return()
     {
-        CheckReturnable();
-        Generation++;
+        _life.CheckReturnable();
         Array.Clear(Statements, 0, Count);
         Count = Len = SavedLen = SavedRows = _params = 0;
         _arrayLenAt = -1;
@@ -90,28 +78,19 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
         Writer = null;
         _pending = default;
         Failed = false;
-        if (Buf.Length > MaxPooledBytes) Buf = new byte[256];
-        if (Saved.Length > MaxPooledBytes) Saved = new byte[256];
+        if (Buf.Length > JobPool.MaxPooledBytes) Buf = new byte[256];
+        if (Saved.Length > JobPool.MaxPooledBytes) Saved = new byte[256];
         _core.Reset();
-        To(Life.Pooled);
-        FillReturned();
-        if (t_cached is null)
-        {
-            t_cached = this;
-            return;
-        }
-        lock (PoolLock)
-            if (_pooled < MaxPooled) Pool[_pooled++] = this;
+        _life.Returned();
+        JobLife.Poison(Buf);
+        JobLife.Poison(Saved);
+        JobPool<SqliteJob>.Give(this, local: true);
     }
 
-    internal void Hold()
-    {
-        To(Life.Held);
-        Volatile.Write(ref _heldAt, (uint)Generation);
-    }
+    internal void Hold() => _life.Hold();
 
     /// <summary>Takes the held job for its one run or discard: of two callers only one wins, a stale one never.</summary>
-    internal bool Claim(int generation) => Interlocked.CompareExchange(ref _heldAt, Unclaimed, (uint)generation) == (uint)generation;
+    internal bool Claim(int generation) => _life.Claim(generation);
 
     internal ValueTask<DataResult> Task => new(this, _core.Version);
 
@@ -221,7 +200,7 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
     /// <summary>Copies the current row of <paramref name="stmt"/>: a column count, then per column a tag and its value.</summary>
     internal unsafe void Save(nint stmt)
     {
-        CheckIs(Life.Queued);
+        _life.CheckIs(JobStep.Queued);
         int n = Sqlite3.ColumnCount(stmt);
         EnsureSaved(4);
         BinaryPrimitives.WriteInt32LittleEndian(Saved.AsSpan(SavedLen), n);
@@ -269,7 +248,7 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
     /// <summary>Forgets an attempt whose transaction rolled back: the write runs again.</summary>
     internal void Restart()
     {
-        CheckIs(Life.Queued);
+        _life.CheckIs(JobStep.Queued);
         SavedLen = SavedRows = 0;
         Failed = false;
         Failure = default;
@@ -279,7 +258,7 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
     /// ReaderFailed; it committed all the same.</summary>
     internal unsafe DataResult HandRows()
     {
-        CheckIs(Life.Queued);
+        _life.CheckIs(JobStep.Queued);
         long value = 0;
         if (Reader is not null)
         {
@@ -310,7 +289,7 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
     // ---------- completion ----------
 
     /// <summary>Queued for the writer: no more building, no second run.</summary>
-    internal void Queued() => To(Life.Queued);
+    internal void Queued() => _life.To(JobStep.Queued);
 
     /// <summary>
     /// Completes the write. <paramref name="inline"/>: its caller continues here, on the writer's thread; else on the
@@ -318,7 +297,7 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
     /// </summary>
     internal void Complete(in DataResult result, bool inline)
     {
-        To(Life.Completed);
+        _life.To(JobStep.Completed);
         if (!inline)
         {
             _pending = result;
@@ -356,74 +335,6 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
 
     void IValueTaskSource<DataResult>.OnCompleted(Action<object?> continuation, object? state, short token, ValueTaskSourceOnCompletedFlags flags) =>
         _core.OnCompleted(continuation, state, token, flags);
-
-    // ---------- Debug checks: each call compiles away in Release ----------
-
-    /// <summary>Where a job is in its life. Debug builds check each step: a step out of order hands one command's rows
-    /// or result to another.</summary>
-    internal enum Life : byte { Pooled, Building, Held, Queued, Completed }
-    Life _life;
-
-    [Conditional("DEBUG")]
-    internal void To(Life next)
-    {
-        bool allowed = (_life, next) switch
-        {
-            (Life.Pooled, Life.Building) => true,
-            (Life.Building, Life.Held) or (Life.Held, Life.Queued) => true,
-            (Life.Queued, Life.Completed) => true,
-            (not Life.Pooled, Life.Pooled) => true, // read (Completed), run inline (Held), or given back unrun
-            _ => false,
-        };
-        if (!allowed)
-            throw new InvalidOperationException(next == Life.Completed
-                ? $"a SQLite job was completed while {_life} (twice, or after its return)"
-                : $"a SQLite job went from {_life} to {next}");
-        _life = next;
-    }
-
-    [Conditional("DEBUG")]
-    void CheckReturnable()
-    {
-        if (_life == Life.Pooled) throw new InvalidOperationException("a SQLite job was returned twice");
-    }
-
-    /// <summary>The writer touches a job's run only while it is queued: after its completion it may be someone else's.</summary>
-    [Conditional("DEBUG")]
-    internal void CheckIs(Life life)
-    {
-        if (_life != life) throw new InvalidOperationException($"a SQLite job was used while {_life}, not {life}");
-    }
-
-    const byte Returned = 0xDD;
-
-    /// <summary>Fills a returned job's buffers with 0xDD, so a reader that kept one sees garbage.</summary>
-    [Conditional("DEBUG")]
-    void FillReturned()
-    {
-        Buf.AsSpan().Fill(Returned);
-        Saved.AsSpan().Fill(Returned);
-        if (_owner is { } owner) Interlocked.Decrement(ref owner.JobsOut);
-        _owner = null;
-    }
-
-    /// <summary>A job's buffers sat in the pool untouched: anything but 0xDD was written after its return.</summary>
-    [Conditional("DEBUG")]
-    void CheckUnwritten()
-    {
-        if (Buf.AsSpan().IndexOfAnyExcept(Returned) >= 0 || Saved.AsSpan().IndexOfAnyExcept(Returned) >= 0)
-            throw new InvalidOperationException("a pooled SQLite job's buffer was written to after its return");
-    }
-
-    /// <summary>Debug: the source it was rented from, which counts it out until it is back in the pool.</summary>
-    SqliteDataSource? _owner;
-
-    [Conditional("DEBUG")]
-    void RentedBy(SqliteDataSource owner)
-    {
-        _owner = owner;
-        Interlocked.Increment(ref owner.JobsOut);
-    }
 }
 
 /// <summary>A row of a write, kept until its group committed: read from the job's buffer.</summary>

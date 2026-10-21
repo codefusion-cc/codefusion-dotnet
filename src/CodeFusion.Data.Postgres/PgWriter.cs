@@ -103,7 +103,7 @@ public sealed class PgWriter : PgLoops
     /// <summary>The committed write's kept rows, to its handler.</summary>
     static void HandRows(PgConnection conn, PgJob job)
     {
-        job.CheckIs(PgJob.Life.Queued); // before its completion: after it, the job may be someone else's
+        job.CheckIs(JobStep.Queued); // before its completion: after it, the job may be someone else's
         if (job.Handler is not { } handler) return;
         var saved = job.Saved!;
         int last = job.Statements[job.Count - 1].Id;
