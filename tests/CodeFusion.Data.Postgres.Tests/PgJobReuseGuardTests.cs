@@ -10,12 +10,17 @@ using Xunit;
 namespace CodeFusion.Data.Postgres.Tests;
 
 /// <summary>
-/// A command's builder after its job went back to the pool. Alone: the pool is shared by the process, and the job a
-/// command gave back must be the one the next command takes, not one another test took first.
+/// A command's builder after its job went back to the pool. Alone, and with the threads' job caches off: the pool is
+/// shared by the process, and the job a command gave back must be the one the next command takes (each test checks
+/// it is), not one another test or another thread's cache took.
 /// </summary>
 [Collection(nameof(Alone))]
 public sealed class PgJobReuseGuardTests : IDisposable
 {
+    readonly bool _caches = PgJob.UseThreadCaches;
+
+    public PgJobReuseGuardTests() => PgJob.UseThreadCaches = false;
+
     static readonly PgStatement Echo = new("echo for reuse", PgType.Int8);
     readonly List<PgLoops> _started = [];
 
@@ -33,6 +38,7 @@ public sealed class PgJobReuseGuardTests : IDisposable
     public void Dispose()
     {
         LoopChecks.Stop(_started);
+        PgJob.UseThreadCaches = _caches;
     }
 
     static FakeServer Server() => new() { Rows = static b => [[ServerWriter.BE64(b.Int8(0))]] };
@@ -64,8 +70,10 @@ public sealed class PgJobReuseGuardTests : IDisposable
         var r = Reader(Server());
         r.Start(1);
         var first = r.Command(Echo).Int8(1);
+        var job = first.RawJob;
         Assert.Equal(1, Wait(first.Run(Collect, new Seen())).Value);
         var second = r.Command(Echo); // the pooled job the first one gave back
+        Assert.Same(job, second.RawJob);
         Assert.True(Refused(first, 5));
         Assert.Equal(2, Wait(second.Int8(2).Run(Collect, new Seen())).Value);
     }
@@ -75,10 +83,13 @@ public sealed class PgJobReuseGuardTests : IDisposable
     {
         var r = Reader(Server());
         r.Start(1);
-        var held = r.Command(Echo).Int8(3).Hold();
+        var building = r.Command(Echo).Int8(3);
+        var job = building.RawJob;
+        var held = building.Hold();
         Assert.Equal(3, Wait(held.Run(Collect, new Seen())).Value);
         Assert.Throws<InvalidOperationException>(() => { _ = held.Run(Collect, new Seen()); });
         var next = r.Command(Echo).Int8(8); // on the job the held command gave back
+        Assert.Same(job, next.RawJob);
         held.Discard();                     // after its run: touches nothing
         Assert.Equal(8, Wait(next.Run(Collect, new Seen())).Value);
 
@@ -87,9 +98,9 @@ public sealed class PgJobReuseGuardTests : IDisposable
         dropped.Discard();
         Assert.Throws<InvalidOperationException>(() => { _ = dropped.Run(Collect, new Seen()); });
 
-        var building = r.Command(Echo).Int8(5);
-        var kept = building.Hold();
-        Assert.True(Refused(building, 6)); // a held command's builder is done
+        var building5 = r.Command(Echo).Int8(5);
+        var kept = building5.Hold();
+        Assert.True(Refused(building5, 6)); // a held command's builder is done
         Assert.Equal(5, Wait(kept.Run(Collect, new Seen())).Value);
 
         bool missing;

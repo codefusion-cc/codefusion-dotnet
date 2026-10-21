@@ -26,6 +26,9 @@ var user = await db.UserByEmail(email);
 if (user.Failed) return user.Error!;
 ```
 
+A query method marked `[RunsAlone]` runs apart from the provider's groups, for a query slow enough to hold the
+others up.
+
 The SQL of every query is a constant (`ConduitDb.QuerySql.ArticleBySlug`). LINQ the translator can't compile is a
 build error that points at `Sql<T>($"...")`, whose interpolation holes become parameters at build time (constant
 strings too, and one where a parameter can't stand, as a table after FROM or a whole ORDER BY item, is a build

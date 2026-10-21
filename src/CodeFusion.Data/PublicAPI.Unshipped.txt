@@ -407,3 +407,6 @@ virtual CodeFusion.Data.QueryOps.HasSource.get -> bool
 virtual CodeFusion.Data.QueryOps.Status.get -> int
 ~override CodeFusion.Data.Paging.Equals(object obj) -> bool
 ~override CodeFusion.Data.Paging.ToString() -> string
+CodeFusion.Data.RunsAloneAttribute
+CodeFusion.Data.RunsAloneAttribute.RunsAloneAttribute() -> void
+CodeFusion.Data.IDataProvider<TSelf, TStatement, TCommand>.Alone(TStatement! statement) -> TStatement!

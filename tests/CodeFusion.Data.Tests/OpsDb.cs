@@ -357,6 +357,12 @@ public sealed partial class OpsDb : DataContext<Postgres>
 
     public Write AddLabelOnce(int id, Utf8 name) => Insert(Labels, new Label { Id = id, Name = name }).OrIgnore();
 
+    [RunsAlone]
+    public Write AddLabelAlone(int id, Utf8 name) => Insert(Labels, new Label { Id = id, Name = name }).OrIgnore();
+
+    [RunsAlone]
+    public One<Name> ByNameAlone(Utf8 name) => People.Where(p => p.Name == name).Select(p => Name.Of(p)).One();
+
     public Write<Name> AddNicknamed(Utf8 name) =>
         Insert(People, n => new Person { Name = name, Nick = SqlText.Lower(name), Age = 1, Active = false, Born = SqlFunctions.Now(), TeamId = n.Id % 2 + 1 })
             .Then(n => Insert(Pets, Pets.Where(x => x.Id == 1).Select(x => new Pet { Id = x.Id + 1000 + n.Id, OwnerId = n.Id, Name = x.Name, Legs = x.Legs })))

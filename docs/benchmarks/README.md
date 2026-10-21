@@ -35,6 +35,8 @@ Two things the table leaves out:
 
 | Date | File | What was tested | Result |
 |---|---|---|---|
+| 2026-10-21 | [2026-10-21-pg-job-cache.md](2026-10-21-pg-job-cache.md) | A per-thread cache in front of the job pool, TechEmpower db and fortunes | db +8.3% (692,778), fortunes +2.1% |
+| 2026-10-21 | [2026-10-21-pg-read-burst.md](2026-10-21-pg-read-burst.md) | 32 reads queued at once on idle loops, before and after pipelining and shared bursts | 162-172 µs to 70-87 µs per read; Npgsql 106-122 |
 | 2026-10-20 | [one-receive-per-request](2026-10-20-one-receive-per-request.md) | System calls per response, Sockets against EventLoop (epoll), $12 entry, one CPU | 1 recvfrom + 1 sendto per response, down from 2 + 1 |
 | 2026-10-20 | [event-loop-vs-sockets-linux](2026-10-20-event-loop-vs-sockets-linux.md) | Throughput of the $12 entry, Sockets against EventLoop, against #74 | health +21%, post +14%, feed +10%, mix +5%; #74 still 26% ahead on health |
 | 2026-10-20 | [event-loop-allocations-macos](2026-10-20-event-loop-allocations-macos.md) | Allocations per request, kqueue against Sockets, Release | ≤ 0.07 B/request on both; zero kept |
@@ -49,6 +51,7 @@ Two things the table leaves out:
 | 2026-10-21 | [loop-pools-c4](2026-10-21-loop-pools-c4.md) | A buffer stack per event loop against the locked pool, C4, TechEmpower plaintext and json, ABBA | plaintext +2.5%, json +1.9%, the lock gone from the profile; one listener level; 6 loops on 8 cores -10 to 16% |
 | 2026-10-21 | [twelve-entry-connection-memory](2026-10-21-twelve-entry-connection-memory.md) | The $12 entry at 10k, 50k and 100k concurrent load.js users, one CPU and 2 GB: memory, latency, CPU | about 5.5 KB a connection (3.0-3.4 KB process, 1.8-2.3 KB kernel); idle connections hold no buffer; latency here was the Mac's noise |
 | 2026-10-21 | [twelve-entry-fd-limit-crash](2026-10-21-twelve-entry-fd-limit-crash.md) | The $12 entry past a 65,535 descriptor limit, the GCP crash at 80k users | out of descriptors the runtime aborts; a connection cap 1,024 below the limit keeps it up (64,511 held, p99 41 ms) |
+| 2026-10-21 | [default-connection-limit-past-fd-limit](2026-10-21-default-connection-limit-past-fd-limit.md) | The $12 entry at 8,192 descriptors and 10k users, with no cap and with the library's default limit | no cap: 99.9% CPU, nothing answered, the runtime aborts; the default holds 7,168, 1,324 req/s at 15% CPU |
 | 2026-10-21 | [then-guard-cost](2026-10-21-then-guard-cost.md) | The catalog check after Query.Then, in Follow and Unfollow and alone, M1 Pro under load | about +30 µs alone (pgbench, fastest of 6); +56 to +115 µs end to end, within the short job's noise |
 
 ## Template

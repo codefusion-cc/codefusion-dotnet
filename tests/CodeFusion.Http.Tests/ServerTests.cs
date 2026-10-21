@@ -359,7 +359,13 @@ public class ServerTests
     [Fact(Timeout = 30_000)]
     public async Task RandomBytesNeverHurtTheServer()
     {
-        await using var t = TestServer.Start(TestServer.Echo, o => o.RequestTimeout = TimeSpan.FromMilliseconds(300));
+        // the heartbeat enforces the timeout: at 50 ms a head that never ends closes within about 350 ms, far inside
+        // the read's 5 s on a loaded runner (at 1 s, CI once took past a 3 s read)
+        await using var t = TestServer.Start(TestServer.Echo, o =>
+        {
+            o.RequestTimeout = TimeSpan.FromMilliseconds(300);
+            o.HeartbeatInterval = TimeSpan.FromMilliseconds(50);
+        });
         var rng = new Random(1234);
         for (int i = 0; i < 100; i++)
         {
@@ -371,7 +377,7 @@ public class ServerTests
             // An answer and a close, or a close at the request timeout: never a hang or a crash.
             try
             {
-                var r = await c.ReadAsync(timeoutMs: 3000);
+                var r = await c.ReadAsync(timeoutMs: 5000);
                 Assert.Contains(r.Status, new[] { 400, 413, 414, 431, 505 });
             }
             catch (Exception e) when (e is EndOfStreamException or SocketException)

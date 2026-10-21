@@ -50,9 +50,15 @@ sealed class PgQueue
         return Added.Ok;
     }
 
+    /// <summary>The least a loop takes when it shares a burst with sleeping loops: fewer would cost a wakeup and a
+    /// round trip for too little.</summary>
+    public const int ShareAtLeast = 4;
+
     /// <summary>Waits for commands and takes up to <paramref name="max"/> into <paramref name="into"/>, in queue
-    /// order. 0 once the queue is stopped and empty. <paramref name="slept"/>: the loop had to wait for them.</summary>
-    public int Take(Waiter me, PgJob?[] into, int max, out bool slept)
+    /// order. 0 once the queue is stopped and empty. <paramref name="slept"/>: the loop had to wait for them. With
+    /// <paramref name="share"/>, a loop that finds others asleep takes only its share and wakes the next for the rest,
+    /// so a burst runs on several connections at once instead of one after another on one.</summary>
+    public int Take(Waiter me, PgJob?[] into, int max, out bool slept, bool share = false)
     {
         slept = false;
         while (true)
@@ -68,15 +74,7 @@ sealed class PgQueue
                 }
                 if (_count > 0)
                 {
-                    n = Math.Min(max, _count);
-                    for (int i = 0; i < n; i++)
-                    {
-                        int at = (_head + i) % _ring.Length;
-                        into[i] = _ring[at];
-                        _ring[at] = null;
-                    }
-                    _head = (_head + n) % _ring.Length;
-                    Volatile.Write(ref _count, _count - n);
+                    n = TakeLocked(into, max, share);
                     if (_count > 0) wake = PickIdle();
                 }
                 else if (_stopped) return 0;
@@ -95,6 +93,40 @@ sealed class PgQueue
                 while (!me.Woken) Monitor.Wait(me);
             slept = true;
         }
+    }
+
+    /// <summary>Takes up to <paramref name="max"/> without waiting: 0 when nothing is queued. For a loop with a group
+    /// in flight, which is never asleep.</summary>
+    public int TryTake(PgJob?[] into, int max, bool share = false)
+    {
+        if (Volatile.Read(ref _count) == 0) return 0;
+        Waiter? wake = null;
+        int n;
+        lock (_lock)
+        {
+            if (_count == 0) return 0;
+            n = TakeLocked(into, max, share);
+            if (_count > 0) wake = PickIdle();
+        }
+        Wake(wake);
+        return n;
+    }
+
+    /// <summary>Under the lock: the commands at the head, as many as <see cref="Take"/> says.</summary>
+    int TakeLocked(PgJob?[] into, int max, bool share)
+    {
+        int n = Math.Min(max, _count);
+        // the loops asleep each get as much: this one its share, then one of them is woken for the rest
+        if (share && _idleCount > 0) n = Math.Min(n, Math.Max(ShareAtLeast, (_count + _idleCount) / (_idleCount + 1)));
+        for (int i = 0; i < n; i++)
+        {
+            int at = (_head + i) % _ring.Length;
+            into[i] = _ring[at];
+            _ring[at] = null;
+        }
+        _head = (_head + n) % _ring.Length;
+        Volatile.Write(ref _count, _count - n);
+        return n;
     }
 
     /// <summary>Takes no more; the loops take what is queued, then <see cref="Take"/> returns 0.</summary>

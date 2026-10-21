@@ -105,6 +105,9 @@ public readonly ref struct PgCommand : IDataCommand<PgStatement>
         _generation = job.Generation;
     }
 
+    /// <summary>The job it builds, whatever its state. For tests.</summary>
+    internal object RawJob => _job;
+
     PgJob Job => _job.Generation == _generation && !_job.Submitted && !_job.Held ? _job
         : throw new InvalidOperationException("the command was already run, held, or given back when building it threw");
 
@@ -449,13 +452,144 @@ public readonly struct PgHeld
 /// </summary>
 sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
 {
-    /// <summary>Most of the jobs a burst left behind are dropped: the workload has a few thousand commands in
-    /// flight, not the 65,536 a full read queue holds.</summary>
-    const int MaxPooled = 4096;
-    /// <summary>A stack, so the jobs in use are the few warm ones, with their buffers grown to what they carry.</summary>
-    static readonly PgJob?[] Pool = new PgJob?[MaxPooled];
+    // The jobs kept for reuse: a stack, so the jobs in use are the few warm ones, with their buffers grown to what they
+    // carry. It keeps no more than the loops of the process can hold at once (each loops object's queue and its groups
+    // in flight, see Reserve), never more than MaxPooled, and never more than were out together: a burst's jobs come
+    // back and wait for the next one, so steady load makes none. And it holds at most Budget bytes, each job counted
+    // whole (its object, about JobBytes, and its buffers): past that a returning job grown past SmallBuffer goes, and
+    // a small one takes the place of the jobs at the bottom of the stack, the ones least recently used. The stack is a
+    // ring, so they go from its bottom at no cost.
+    static PgJob?[]? _pool;
     static readonly object PoolLock = new();
-    static int _pooled;
+    static int _bottom, _pooled, _capacity;
+    static long _pooledBytes;
+    const int MaxPooled = 16384;
+    const long Budget = 32 << 20;
+    const int JobBytes = 512;
+    /// <summary>A job whose buffers are past this goes straight to the shared stack, where it is counted, never into a
+    /// thread's cache: so what the caches hold is at most CacheSize small jobs a thread.</summary>
+    const int SmallBuffer = 4 << 10;
+
+    /// <summary>Makes room in the pool for <paramref name="jobs"/> more (negative: gives it back), for loops that can
+    /// hold that many commands at once.</summary>
+    internal static void Reserve(int jobs)
+    {
+        lock (PoolLock)
+        {
+            _capacity = Math.Max(0, _capacity + jobs);
+            while (_pooled > Math.Min(_capacity, MaxPooled)) DropBottom();
+        }
+    }
+
+    /// <summary>Under the pool's lock: the least recently pooled job goes.</summary>
+    static void DropBottom()
+    {
+        var job = _pool![_bottom]!;
+        _pool[_bottom] = null;
+        _bottom = (_bottom + 1) % MaxPooled;
+        _pooled--;
+        _pooledBytes -= job._kept;
+        job._kept = 0;
+    }
+
+    /// <summary>Puts <paramref name="jobs"/> new jobs on the shared stack (as far as its room and budget go), made now so
+    /// that steady load makes none: loops starting add what they can hold and what their threads' caches can keep
+    /// aside, so a thread whose cache ran dry finds the stack never empty while other threads' caches hold jobs.</summary>
+    internal static void Prewarm(int jobs)
+    {
+        for (int i = 0; i < jobs; i++)
+        {
+            var job = new PgJob();
+            lock (PoolLock)
+            {
+                if (_pooled >= Math.Min(_capacity, MaxPooled) || _pooledBytes + job.Footprint > Budget) return;
+                Push(job);
+            }
+        }
+    }
+
+    /// <summary>The jobs a thread's cache keeps aside, at most.</summary>
+    internal const int CachedPerThread = CacheSize;
+
+    /// <summary>What a pooled job holds, counted against <see cref="Budget"/>.</summary>
+    long Footprint => JobBytes + Buf.Length + (Saved?.Length ?? 0);
+
+    /// <summary>For tests: off, every job comes from and goes back to the shared stack, so the job a command takes is
+    /// the one given back last.</summary>
+    internal static bool UseThreadCaches = true;
+
+    // Each thread keeps a few jobs of its own in front of the shared stack, and moves them to or from it a batch at a
+    // time: a job is rented on a request's thread and returned on a loop's, so without it every command took the
+    // shared lock twice. A thread that ends gives its jobs back (the cache's finalizer).
+    const int CacheSize = 32, Batch = 16;
+    [ThreadStatic] static Cache? t_cache;
+
+    sealed class Cache
+    {
+        public readonly PgJob?[] Jobs = new PgJob?[CacheSize];
+        public int Count;
+
+        ~Cache()
+        {
+            lock (PoolLock)
+                while (Count > 0)
+                {
+                    var job = Jobs[--Count]!;
+                    Jobs[Count] = null;
+                    Push(job);
+                }
+        }
+    }
+
+    /// <summary>Under the pool's lock: onto the top of the shared stack, the least recently pooled job going if it is
+    /// full, so the job just returned (the warm one) is the next taken. Past the budget a job grown past
+    /// <see cref="SmallBuffer"/> goes itself (a job grown for one large command keeps its buffers through every small
+    /// one after, so letting those go is what brings the pool back under it, and costs no allocation); a small one
+    /// takes the place of the least recently pooled.</summary>
+    static void Push(PgJob job)
+    {
+        int room = Math.Min(_capacity, MaxPooled);
+        long bytes = job.Footprint;
+        if (room == 0 || _pooledBytes + bytes > Budget && (job.Buf.Length > SmallBuffer || job.Saved is { Length: > SmallBuffer } || bytes > Budget)) return;
+        if (_pooled >= room) DropBottom();
+        while (_pooledBytes + bytes > Budget) DropBottom();
+        _pool ??= new PgJob?[MaxPooled];
+        _pool[(_bottom + _pooled++) % MaxPooled] = job;
+        _pooledBytes += job._kept = bytes;
+    }
+
+    static PgJob? Pop()
+    {
+        if (_pooled == 0) return null;
+        int top = (_bottom + --_pooled) % MaxPooled;
+        var job = _pool![top]!;
+        _pool[top] = null;
+        _pooledBytes -= job._kept;
+        job._kept = 0;
+        return job;
+    }
+
+    /// <summary>An empty cache takes a batch from the shared stack (none when it is empty: the job is made anew).</summary>
+    static void Refill(Cache cache)
+    {
+        lock (PoolLock)
+            while (cache.Count < Batch && Pop() is { } job) cache.Jobs[cache.Count++] = job;
+    }
+
+    /// <summary>A full cache gives a batch to the shared stack; past its limit they go.</summary>
+    static void Spill(Cache cache)
+    {
+        lock (PoolLock)
+            for (int i = 0; i < Batch; i++)
+            {
+                var job = cache.Jobs[--cache.Count]!;
+                cache.Jobs[cache.Count] = null;
+                Push(job);
+            }
+    }
+
+    /// <summary>What this job counts against <see cref="Budget"/> while it is on the shared stack.</summary>
+    long _kept;
     static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     /// <summary>Buffers past this size go with a returned job instead of being pooled.</summary>
     const int MaxPooledBytes = 64 << 10;
@@ -517,12 +651,18 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
     internal static PgJob Rent(PgStatement first)
     {
         PgJob? job = null;
-        lock (PoolLock)
-            if (_pooled > 0)
+        if (UseThreadCaches)
+        {
+            var cache = t_cache ??= new Cache();
+            if (cache.Count == 0) Refill(cache);
+            if (cache.Count > 0)
             {
-                job = Pool[--_pooled];
-                Pool[_pooled] = null;
+                job = cache.Jobs[--cache.Count];
+                cache.Jobs[cache.Count] = null;
             }
+        }
+        else
+            lock (PoolLock) job = Pop();
         job ??= new PgJob();
         job.CheckUnwritten();
         job.To(Life.Building);
@@ -550,8 +690,39 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
         _core.Reset();
         To(Life.Pooled);
         FillReturned();
+        if (UseThreadCaches && Buf.Length <= SmallBuffer && (Saved is null || Saved.Length <= SmallBuffer))
+        {
+            var cache = t_cache ??= new Cache();
+            if (cache.Count == CacheSize) Spill(cache);
+            cache.Jobs[cache.Count++] = this;
+        }
+        else
+            lock (PoolLock) Push(this);
+    }
+
+    /// <summary>How many jobs the shared stack may keep, and keeps now. For tests.</summary>
+    internal static int Capacity
+    {
+        get { lock (PoolLock) return _capacity; }
+    }
+
+    internal static int Pooled
+    {
+        get { lock (PoolLock) return _pooled; }
+    }
+
+    /// <summary>Lets every job on the shared stack go. For tests that count allocations: what earlier tests left there
+    /// (jobs grown for large commands) decides how many jobs a burst finds.</summary>
+    internal static void ClearPool()
+    {
         lock (PoolLock)
-            if (_pooled < MaxPooled) Pool[_pooled++] = this;
+            while (_pooled > 0) DropBottom();
+    }
+
+    /// <summary>The bytes the shared stack's jobs hold, counted against the budget. For tests.</summary>
+    internal static long PooledBytes
+    {
+        get { lock (PoolLock) return _pooledBytes; }
     }
 
     /// <summary>Back to the pool without having run (refused, cancelled at once, or the build failed).</summary>
