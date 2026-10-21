@@ -9,6 +9,10 @@ batch; a `PgWriter`'s loops commit whatever writes have queued in one transactio
 commits them all. Requests never hold a connection, and a refused or failed command comes back as a status, not an
 exception.
 
+A read loop keeps up to two groups in flight on its connection (`PgReader.MaxInFlight`): it sends what has queued
+while Postgres still answers the group before, so the backend never sits a round trip without work. A burst that
+arrives while other read loops sleep is shared out among them, so its reads run on several backends at once.
+
 It is also CodeFusion.Data's Postgres provider: a context deriving from `DataContext<Postgres>` has its LINQ
 compiled to Postgres's SQL at build time and run on these loops, registered with
 `services.AddDatabase<ConduitDb>(Postgres.FromUrl(url), readers, writers)`, or `services.AddDatabase<ConduitDb>(source)`

@@ -169,3 +169,5 @@ static CodeFusion.Data.Postgres.PostgresServices.AddDatabase<TContext>(this Code
 static CodeFusion.Data.Postgres.PostgresServices.AddDatabase<TContext>(this CodeFusion.IServiceRegistry! services, CodeFusion.Data.Postgres.PostgresDatabase! database, int readers, int writers) -> CodeFusion.Data.Postgres.PgDataSource!
 virtual CodeFusion.Data.Postgres.PgRowHandler.Invoke(in CodeFusion.Data.Postgres.PgRow row, object? state) -> long
 virtual CodeFusion.Data.Postgres.PgTransport.Started() -> void
+CodeFusion.Data.Postgres.PgCounters.Pipelined -> long
+const CodeFusion.Data.Postgres.PgReader.MaxInFlight = 2 -> int
