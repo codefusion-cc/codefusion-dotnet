@@ -34,6 +34,8 @@ public sealed class RequestContext : IResponse, IValueTaskSource
     readonly RequestArena _arena;
     readonly object?[] _scoped;
     readonly int[] _route;
+    readonly int[] _claims;
+    ArenaBytes _claimPayload;
     bool _jsonInUse;
     long _viewer;
 
@@ -52,6 +54,7 @@ public sealed class RequestContext : IResponse, IValueTaskSource
         _arena = new RequestArena(app.ArenaChunks);
         _scoped = new object?[app.PerConnectionCount];
         _route = new int[2 * Math.Max(1, app.MaxRouteValues)];
+        _claims = new int[2 * (app.Jwt?.ClaimCount ?? 0)];
         _onWritten = OnWritten;
     }
 
@@ -123,11 +126,32 @@ public sealed class RequestContext : IResponse, IValueTaskSource
 
     /// <summary>The request's viewer: the id the dispatcher verified, and the token it presented.</summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
-    public Viewer Viewer => _viewer > 0 ? new Viewer(_viewer, Token()) : default;
+    public Viewer Viewer => _viewer > 0 ? new Viewer(_viewer, Token(), this) : new Viewer(0, default, this);
 
     internal long ViewerId
     {
         set => _viewer = value;
+    }
+
+    /// <summary>Where the dispatcher's check put each declared claim: start and length in <see cref="ClaimPayload"/>,
+    /// start -1 when absent.</summary>
+    internal Span<int> ClaimRanges => _claims;
+
+    /// <summary>The token's decoded payload in the arena, which <see cref="ClaimRanges"/> points into.</summary>
+    internal ArenaBytes ClaimPayload
+    {
+        set => _claimPayload = value;
+    }
+
+    internal bool TryGetClaim(ReadOnlySpan<byte> name, bool authenticated, out Utf8 value)
+    {
+        value = default;
+        int i = _app.Jwt?.ClaimIndex(name) ?? -1;
+        if (i < 0) throw new ArgumentException($"the claim '{System.Text.Encoding.UTF8.GetString(name)}' isn't declared on JwtOptions.Claims", nameof(name));
+        int start = _claims[2 * i];
+        if (!authenticated || start < 0) return false;
+        value = _claimPayload.Text(start, _claims[2 * i + 1]);
+        return true;
     }
 
     Utf8 Token()
@@ -277,6 +301,7 @@ public sealed class RequestContext : IResponse, IValueTaskSource
         }
         _arena.Reset();
         _viewer = 0;
+        _claimPayload = default;
     }
 
     /// <summary>The connection is idle or closed: the arena's kept chunk goes back to the pool.</summary>

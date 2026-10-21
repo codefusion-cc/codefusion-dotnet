@@ -186,11 +186,24 @@ CodeFusion.Http.JsonBody.SkipValue() -> void
 CodeFusion.Http.JsonBody.Text(in CodeFusion.Http.BodyValue value) -> CodeFusion.Utf8
 CodeFusion.Http.JsonBody.TextList(in CodeFusion.Http.BodyValue value) -> CodeFusion.Utf8List
 CodeFusion.Http.Jwt
+CodeFusion.Http.Jwt.Issue(long userId, long now, System.ReadOnlySpan<CodeFusion.Utf8> claims, System.Span<byte> dest) -> int
+CodeFusion.Http.Jwt.Issue(long userId, params System.ReadOnlySpan<CodeFusion.Utf8> claims) -> CodeFusion.Utf8
 CodeFusion.Http.Jwt.Jwt(string! secret, CodeFusion.Http.JwtOptions! options) -> void
+CodeFusion.Http.Jwt.MaxIssuedBytesWith(System.ReadOnlySpan<CodeFusion.Utf8> claims) -> int
 CodeFusion.Http.Jwt.Scheme.get -> string!
+CodeFusion.Http.JwtClaim
+CodeFusion.Http.JwtClaim.JwtClaim(string! name) -> void
+CodeFusion.Http.JwtClaim.MaxBytes.get -> int
+CodeFusion.Http.JwtClaim.MaxBytes.init -> void
+CodeFusion.Http.JwtClaim.MinBytes.get -> int
+CodeFusion.Http.JwtClaim.MinBytes.init -> void
+CodeFusion.Http.JwtClaim.Name.get -> string!
+CodeFusion.Http.JwtClaim.Required.get -> bool
+CodeFusion.Http.JwtClaim.Required.init -> void
 CodeFusion.Http.JwtOptions
 CodeFusion.Http.JwtOptions.AllowShortSecret.get -> bool
 CodeFusion.Http.JwtOptions.AllowShortSecret.set -> void
+CodeFusion.Http.JwtOptions.Claims.get -> System.Collections.Generic.IList<CodeFusion.Http.JwtClaim!>!
 CodeFusion.Http.JwtOptions.JwtOptions() -> void
 CodeFusion.Http.JwtOptions.Lifetime.get -> System.TimeSpan
 CodeFusion.Http.JwtOptions.Lifetime.set -> void
@@ -308,14 +321,18 @@ CodeFusion.Http.RouteGroup.Map(CodeFusion.Http.RequestMethod method, string! pat
 CodeFusion.Http.RouteGroup.MapGroup(string! prefix) -> CodeFusion.Http.RouteGroup!
 CodeFusion.Http.RouteGroup.Prefix.get -> string!
 CodeFusion.Http.Viewer
+CodeFusion.Http.Viewer.Claim(System.ReadOnlySpan<byte> name) -> CodeFusion.Utf8
 CodeFusion.Http.Viewer.Id.get -> long
 CodeFusion.Http.Viewer.IsAuthenticated.get -> bool
 CodeFusion.Http.Viewer.Token.get -> CodeFusion.Utf8
+CodeFusion.Http.Viewer.TryGetClaim(System.ReadOnlySpan<byte> name, out CodeFusion.Utf8 value) -> bool
 CodeFusion.Http.Viewer.Viewer() -> void
 CodeFusion.Http.Viewer.Viewer(long id, CodeFusion.Utf8 token) -> void
+const CodeFusion.Http.Jwt.MaxClaims = 16 -> int
 const CodeFusion.Http.Jwt.MaxIssuedBytes = 193 -> int
 const CodeFusion.Http.Jwt.MaxTokenBytes = 4096 -> int
 const CodeFusion.Http.Jwt.MinSecretBytes = 32 -> int
+const CodeFusion.Http.JwtClaim.MaxNameBytes = 64 -> int
 override CodeFusion.Http.Reply.Equals(object? obj) -> bool
 override CodeFusion.Http.Reply.GetHashCode() -> int
 static CodeFusion.Http.BodyValue.FromNested(bool valid) -> CodeFusion.Http.BodyValue

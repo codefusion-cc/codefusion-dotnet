@@ -845,12 +845,25 @@ Each test was red first: on a stub of the API that compiled but didn't do it.
 | Gap | Option | Test | Red before |
 |---|---|---|---|
 | the scheme was `Token ` only | `JwtOptions.Scheme`, and `AddJwtAuth(secret, JwtOptions)` and `Jwt(secret, JwtOptions)` beside the old overloads | `JwtSchemeTests` (exact case, one space, no tab, a Cyrillic look-alike, any RFC 9110 token, invalid schemes refused at startup), `SpecOptionsTests.ABearerAppReadsBearerHeadersOnly`, `TheDefaultAppStillReadsToken` | 17 of 34: `Bearer` refused, `Token` still read |
+| no claim but `sub` reached a handler | `JwtClaim` (`Required`, `MinBytes`, `MaxBytes`) on `JwtOptions.Claims`; `Viewer.Claim`, `Viewer.TryGetClaim`; `Jwt.Issue(userId, params ReadOnlySpan<Utf8> claims)`, `Issue(userId, now, claims, dest)`, `MaxIssuedBytesWith` | `JwtClaimTests` (escapes, surrogate pairs and lone surrogates, raw invalid UTF-8, null, wrong types, lengths at 0, 1, max and max+1 once unescaped, a 2,900-byte claim, repeats, escaped names of 64 bytes, every bad `sub`, forged and expired tokens leaving the arena untouched, issue and read back, a property test of 3,000 payloads against a `JsonDocument` reading of the rules), `SpecOptionsTests.AHandlerReadsTheTokensClaimAsItWasIssued`, `AnOptionalClaimThatIsAbsentReadsAsNone` | 56 of 71 on a stub that read no claim |
 
 What it decided:
 
 - The scheme is matched as bytes, case included, then exactly one space, as `Token ` was. RFC 9110 calls schemes
   case-insensitive and RFC 6750 allows several spaces; reading them leniently would change what `Token` apps accept,
   and an exact match leaves nothing for a proxy and the app to read differently. Neither is an option yet.
+- Claims are declared for the whole app at runtime, not per endpoint: a token's payload is valid or not wherever it
+  is read. A handler reads them by name (`viewer.Claim("username"u8)`, a scan of at most 16 names), and an undeclared
+  name throws so that a typo can't read as an empty claim. A claim can't be a view of the request buffer, which holds
+  base64url: the payload is decoded into the arena, twice its size, so that an escaped value is unescaped at its own
+  offset in the second half, as `JsonBody` does. Without declared claims the payload stays on the stack as before,
+  and the arena isn't touched.
+- The verifier is one path, `Jwt.Check`, which reports why a token failed (`TokenCheck`). `Verify` and the
+  dispatcher both use it. A bad `sub` or claim no longer stops the read early: the rest is still read, so an expired
+  or malformed token is reported as invalid whatever its claims hold.
+- `JsonBody.TryTextEquals` unescaped into a fixed 96-byte buffer, enough for the names it had (at most 16 bytes). A
+  declared name may be 64 bytes, so it now takes what the raw name needs, at most six bytes for each byte compared
+  (`ALongDeclaredNameMatchesThroughEscapes`).
 
 ## Fuzzing (tests/CodeFusion.Fuzz)
 

@@ -68,6 +68,26 @@ and the token, once surrounding spaces and tabs are trimmed; the scheme is match
 builder.AddJwtAuth(secret, new JwtOptions { Scheme = "Bearer", AllowShortSecret = true });
 ```
 
+Tokens can carry string claims beside `sub`. The app declares them once, every token is checked for them, and a
+handler reads each one as a `Utf8` view of the token's payload, decoded into the request's arena:
+
+```csharp
+var auth = new JwtOptions { Scheme = "Bearer" };
+auth.Claims.Add(new JwtClaim("username") { MaxBytes = 64 });  // required unless Required = false
+builder.AddJwtAuth(secret, auth);
+// ...
+app.MapPost("/posts", static (NewPost body, Viewer viewer, Posts posts) =>
+        posts.Create(viewer.Id, viewer.Claim("username"u8), body.Body))
+   .AuthRequired();
+```
+
+A token is invalid when its signature, header, JSON, `exp` or `nbf` fails. When those pass, its payload is still
+invalid if `sub` isn't a positive integer string, or a declared claim is missing (when required), isn't a string, isn't
+valid text, or is outside `MinBytes` and `MaxBytes` once unescaped. If a claim appears twice, the last one counts, and
+any bad copy makes the payload invalid. `viewer.Claim(name)` throws for a name that wasn't declared and gives an empty
+value for an anonymous viewer; `TryGetClaim` tells an absent optional claim from an empty one. `jwt.Issue(userId,
+username)` issues a token carrying the claims, and refuses values the verifier would refuse.
+
 The generator replaces each `MapGet`/`MapPost`/`MapPut`/`MapDelete` call with an endpoint that binds the parameters
 and writes the reply with no reflection and nothing looked up per request. Routes are literal templates; a literal
 segment wins over a parameter, methods ignore case, HEAD runs the GET endpoint and sends its head without the body,

@@ -430,7 +430,7 @@ public ref struct JsonBody
         if (!IsValidEscaped(raw)) return false;
         // an escape takes at most 6 raw bytes per byte it stands for, so a longer raw name can't match
         if (raw.Length > 6 * text.Length) return true;
-        Span<byte> buf = stackalloc byte[16 * 6];
+        Span<byte> buf = stackalloc byte[raw.Length]; // at most 6 per byte of text, as checked above
         TryUnescape(raw, buf, out int n);
         equal = buf[..n].SequenceEqual(text);
         return true;

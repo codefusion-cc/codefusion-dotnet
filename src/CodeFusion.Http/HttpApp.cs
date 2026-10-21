@@ -171,9 +171,11 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
         if (e is null) return Errors.NotFound.WriteAsync(c);
         if (e.Auth != AuthMode.None)
         {
-            long viewer = _jwt!.Viewer(x.HasAuthorization, x.Authorization);
-            if (viewer < 0 || viewer == 0 && e.Auth == AuthMode.Required) return Errors.Unauthorized.WriteAsync(c);
+            TokenCheck check = _jwt!.Authenticate(x.HasAuthorization, x.Authorization, c.Arena, c.ClaimRanges, out long viewer, out ArenaBytes payload);
+            // no header is anonymous where that is allowed; a header that isn't a valid token never is
+            if (check != TokenCheck.Valid && (x.HasAuthorization || e.Auth == AuthMode.Required)) return Errors.Unauthorized.WriteAsync(c);
             c.ViewerId = viewer;
+            c.ClaimPayload = payload;
         }
         return e.Invoke(c);
     }
