@@ -5,17 +5,17 @@
          own, in their project file). BCrypt.Net-Next is what bcrypt's tests and benchmarks check against. -->
     <PackageVersion Include="BCrypt.Net-Next" Version="4.2.1" />
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
-    <PackageVersion Include="FsCheck.Xunit.v3" Version="3.4.0" />
+    <PackageVersion Include="FsCheck.Xunit.v3" Version="3.5.0" />
     <!-- The generators run inside the compiler, so they build against a Roslyn no newer than the SDK's: 10.0.402 ships
          5.x. The generator tests drive them with the same version. bcrypt's lane generator keeps 4.14 (in every SDK
          from 9.0.300), in its project file. -->
-    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.Analyzers" Version="5.9.0" />
     <!-- The src build gates (src/Directory.Build.props). Analyzers run in the SDK's compiler (5.9 in 10.0.402), so
          they too stay at or below its Roslyn. -->
     <PackageVersion Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="5.6.0" />
     <PackageVersion Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="5.6.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.0.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
+    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="5.9.0" />
     <!-- Test setup and the frozen 21abce6 code the benchmarks compare with; no package depends on it. -->
     <PackageVersion Include="Npgsql" Version="10.0.3" />
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
