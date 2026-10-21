@@ -1,0 +1,145 @@
+using System;
+using System.Diagnostics;
+using System.Linq;
+using System.Threading.Tasks;
+using CodeFusion.Data.Postgres;
+using Npgsql;
+using Xunit;
+
+// The timeouts turn a command that never completes into a failure instead of a hung run.
+#pragma warning disable xUnit1069, xUnit1051, xUnit1031
+
+namespace CodeFusion.Data.Postgres.Tests;
+
+/// <summary>
+/// Statements that run alone (<see cref="PgStatement.RunsAlone"/>): on a connection of their own, each command in a
+/// transaction of its own, so a slow one holds up no group, a write's group commit or a read group.
+/// </summary>
+public sealed class PgAloneTests : IAsyncDisposable
+{
+    static readonly PgStatement TxId = new("SELECT txid_current()");
+    static readonly PgStatement SlowTxId = new("SELECT txid_current() FROM pg_sleep(0.5)") { RunsAlone = true };
+    static readonly PgStatement Times10 = new("SELECT $1::bigint * 10", PgType.Int8);
+    static readonly PgStatement SlowRead = new("SELECT $1::bigint FROM pg_sleep(0.5)", PgType.Int8) { RunsAlone = true };
+    static readonly PgStatement Pid = new("SELECT pg_backend_pid()");
+    static readonly PgStatement AlonePid = new("SELECT pg_backend_pid()") { RunsAlone = true };
+    static readonly PgStatement SlowPid = new("SELECT pg_backend_pid() FROM pg_sleep(0.3)") { RunsAlone = true };
+
+    PgWriter? _writer;
+    PgReader? _reader;
+
+    static readonly PgRowHandler First = static (in PgRow r, object? _) => r.GetInt64(0);
+
+    static Task<PgResult> Run(PgLoops loops, PgStatement s, params long[] args)
+    {
+        var cmd = loops.Command(s);
+        foreach (long a in args) cmd.Int8(a);
+        return cmd.Run(First, null).AsTask();
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ASlowWriteThatRunsAloneHoldsUpNoGroupCommit()
+    {
+        var w = _writer = new PgWriter(PgTestDb.Settings());
+        w.Start(1);
+        var slow = Run(w, SlowTxId);
+        await Task.Delay(50);
+        var group = Enumerable.Range(0, 10).Select(_ => Run(w, TxId)).ToArray();
+        var done = await Task.WhenAll(group);
+        Assert.False(slow.IsCompleted, "the group waited for the slow write");
+        Assert.All(done, r => Assert.True(r.IsOk));
+        var s = (await slow).ThrowIfFailed();
+        Assert.DoesNotContain(s.Value, done.Select(r => r.Value));
+        Assert.Equal(1, w.Counters.Alone);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task WritesThatRunAloneEachCommitInATransactionOfTheirOwn()
+    {
+        var w = _writer = new PgWriter(PgTestDb.Settings());
+        var alone = Enumerable.Range(0, 3).Select(_ => Run(w, SlowTxId)).ToArray();
+        var grouped = Enumerable.Range(0, 3).Select(_ => Run(w, TxId)).ToArray();
+        w.Start(1);
+        var a = (await Task.WhenAll(alone)).Select(r => r.ThrowIfFailed().Value).ToArray();
+        var g = (await Task.WhenAll(grouped)).Select(r => r.ThrowIfFailed().Value).ToArray();
+        Assert.Equal(3, a.Distinct().Count());
+        Assert.Single(g.Distinct()); // the others still share one group commit
+        Assert.Empty(a.Intersect(g));
+        Assert.Equal(3, w.Counters.Alone);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ASlowReadThatRunsAloneHoldsUpNoReadGroup()
+    {
+        var r = _reader = new PgReader(PgTestDb.Settings());
+        r.Start(1);
+        var slow = Run(r, SlowRead, 7);
+        await Task.Delay(50);
+        var reads = Enumerable.Range(0, 20).Select(i => Run(r, Times10, i)).ToArray();
+        var got = await Task.WhenAll(reads);
+        Assert.False(slow.IsCompleted, "the reads waited for the slow one");
+        Assert.Equal(Enumerable.Range(0, 20).Select(i => i * 10L), got.Select(x => x.ThrowIfFailed().Value));
+        Assert.Equal(7, (await slow).ThrowIfFailed().Value);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task CommandsThatRunAloneUseAConnectionOfTheirOwn()
+    {
+        var r = _reader = new PgReader(PgTestDb.Settings());
+        r.Start(1);
+        long loop = (await Run(r, Pid)).ThrowIfFailed().Value;
+        var alone = new System.Collections.Generic.HashSet<long>();
+        for (int i = 0; i < 8; i++) alone.Add((await Run(r, AlonePid)).ThrowIfFailed().Value);
+        // the alone connections (two by default), whichever is free; never the loop's
+        Assert.InRange(alone.Count, 1, 2);
+        Assert.DoesNotContain(loop, alone);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ASlowCommandThatRunsAloneHoldsUpNoOtherThatRunsAlone()
+    {
+        var r = _reader = new PgReader(PgTestDb.Settings());
+        r.Start(1);
+        // both alone connections open (two at once take one each), so none is opened inside the timed part
+        Assert.Equal(2, (await Task.WhenAll(Run(r, SlowPid), Run(r, SlowPid))).Select(x => x.ThrowIfFailed().Value).Distinct().Count());
+        var slow = Run(r, SlowRead, 7);
+        await Task.Delay(50);
+        var started = Stopwatch.GetTimestamp();
+        Assert.True((await Run(r, AlonePid)).IsOk);
+        Assert.False(slow.IsCompleted, "the second command waited for the slow one");
+        Assert.InRange(Stopwatch.GetElapsedTime(started).TotalMilliseconds, 0, 200);
+        Assert.Equal(7, (await slow).ThrowIfFailed().Value);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task TheConnectionsForCommandsThatRunAloneAreAsManyAsTheSettingsSay()
+    {
+        var settings = PgTestDb.Settings();
+        settings.AloneConnections = 3;
+        var r = _reader = new PgReader(settings);
+        r.Start(1);
+        // three slow ones at once run on three connections; a fourth waits for one of them
+        var slow = Enumerable.Range(0, 4).Select(i => Run(r, SlowPid)).ToArray();
+        var pids = (await Task.WhenAll(slow)).Select(x => x.ThrowIfFailed().Value).ToArray();
+        Assert.Equal(3, pids.Distinct().Count());
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task AfterCompleteCommandsThatRunAloneAreStoppedToo()
+    {
+        var w = _writer = new PgWriter(PgTestDb.Settings());
+        w.Start(1);
+        Assert.True((await Run(w, SlowTxId)).IsOk);
+        w.Complete();
+        Assert.Equal(PgStatus.Stopped, (await Run(w, SlowTxId)).Status);
+        Assert.True(w.WaitStopped(TimeSpan.FromSeconds(10)));
+        _writer = null;
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        if (_writer is not null) LoopChecks.Stop(_writer);
+        if (_reader is not null) LoopChecks.Stop(_reader);
+        return default;
+    }
+}

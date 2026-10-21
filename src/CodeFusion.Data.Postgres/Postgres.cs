@@ -36,6 +36,14 @@ public readonly struct Postgres : IDataProvider<Postgres, PgStatement, PgCommand
         return new PgStatement(sql, types);
     }
 
+    /// <inheritdoc/>
+    public static PgStatement Alone(PgStatement statement)
+    {
+        ArgumentNullException.ThrowIfNull(statement);
+        statement.MarkAlone();
+        return statement;
+    }
+
     static PgType TypeOf(DataType type) => type switch
     {
         DataType.Int64 => PgType.Int8,

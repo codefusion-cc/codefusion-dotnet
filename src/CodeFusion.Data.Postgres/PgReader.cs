@@ -19,8 +19,32 @@ public sealed class PgReader : PgLoops
     /// above the workload's few thousand concurrent reads: it only stops a stalled database from piling up requests.</summary>
     public const int MaxQueued = 65536;
 
+    /// <summary>The most groups a loop keeps in flight on its connection: the next goes out while Postgres still
+    /// answers the one before, so the backend never sits a round trip without work.</summary>
+    public const int MaxInFlight = 2;
+
     /// <summary>A reader that connects with <paramref name="settings"/>; <see cref="PgLoops.Start"/> opens its connections.</summary>
     public PgReader(PgSettings settings) : base(settings, MaxGroup, MaxQueued, "pg reader") { }
+
+    private protected override int GroupsInFlight => MaxInFlight;
+
+    private protected override void Send(PgConnection conn, PgJob?[] group, int from, int to)
+    {
+        conn.Begin();
+        for (int i = from; i < to; i++) conn.Add(group[i]!, i);
+        conn.Flush();
+    }
+
+    private protected override int Receive(PgConnection conn, PgJob?[] group, int to)
+    {
+        int failed = conn.ReadReplies(group, keep: false, out var error);
+        if (failed < 0) return -1;
+        // Statement `failed` failed; Postgres skipped the ones after it (the batch has one Sync).
+        var job = group[failed]!;
+        group[failed] = null;
+        job.Complete(job.Failure is null ? new PgResult(PgStatus.ServerError, job.Rows, exception: error) : job.Answer());
+        return failed + 1;
+    }
 
     private protected override void Run(PgConnection conn, PgJob?[] group, int n)
     {

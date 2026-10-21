@@ -837,6 +837,58 @@ hot paths is the same as before: each check is a `[Conditional("DEBUG")]` call, 
 Http 505: all pass in Release (the 7 Debug-only check tests skip) and in Debug (the allocation tests skip), against a
 Postgres 18 with CODEFUSION_TEST_DB and the four CODEFUSION_TEST_PG_* logins set. The allocation tests pass in Release.
 
+### Pipelined reads, shared bursts and RunsAlone (perf/pg-pipelining)
+
+What was decided:
+- **Two groups in flight per read connection** (`PgReader.MaxInFlight`). The loop sends what has queued while Postgres
+  still answers the group before, so a backend never waits a round trip. More than two gained nothing measured.
+- **A group that binds a statement whose Parse is still unanswered waits** for the batches before it. Postgres skips
+  everything after an error up to the Sync, that Parse included, so sending at once would bind a statement that
+  doesn't exist (`PgConnection.BindsPendingParse`).
+- **A failing read's skipped reads go out again** as a new batch behind the rest, in their group. They are back in
+  flight before the send, so a failed send ends them Broken with the rest.
+- **A broken connection fails every command in flight**, and the next group reconnects.
+- **A burst is shared out among the loops asleep**: a loop that finds others asleep takes its share (at least
+  `PgQueue.ShareAtLeast`, 4) and wakes the next.
+- **A batch sent while another is answered takes replies in** whenever the socket is full: those replies can fill our
+  buffers while Postgres waits for us to read them. On Linux this uses MSG_DONTWAIT, which costs no system call.
+- **`RunsAlone` statements run on connections of their own**: `PgSettings.AloneConnections`, 2 by default, made at the
+  first such command. Each runs one command in its own transaction, and the next goes to a free one.
+- **The job pool is bounded**:
+  - by bytes: 32 MB for the shared pool, each job counted whole (about 512 B of its own and its buffers). Past that
+    a returning job grown past 4 KB goes (a job grown for one large command keeps its buffers through every small one
+    after it; shrinking them instead would allocate on a return), and a smaller one takes the place of the least
+    recently used jobs, from the bottom of a ring;
+  - by count: what the started loops can hold (their queues and groups, given back when they complete), at most
+    16,384;
+  - a buffer past 64 KB is never kept;
+  - a thread's cache holds up to 32 jobs whose buffers are 4 KB or less, and goes back from its finalizer;
+  - each loop that starts makes the jobs its groups and its thread's cache can hold (the first loop also a cache's
+    worth for each core's callers), so the shared pool is never empty while other threads' caches hold jobs. Without
+    it, `AllocationTests.QueriesAllocateNothingOnceWarm` failed about one run in three in the full suite: the shared
+    pool held 0 jobs at the end, and 10 to 16 were made in the measured runs.
+
+The review's findings, each test red on the code before its fix:
+
+| Finding | Test | Red before |
+|---|---|---|
+| a rerun whose send failed: its reads never answered, the group lost; after two the loop spun | `PgPipelineTests.ARerunWhoseSendFailsEndsItsReadsBrokenAndTheLoopGoesOn` | timed out (31 reads unanswered) |
+| a small batch sent while another was answered could block on full buffers | `PgPipelineTests.ABatchSentWhileAnotherIsAnsweredTakesRepliesInWhileTheSocketIsFull` | 0 of 5 sends took replies in |
+| one alone loop: a slow report held up every alone command | `PgAloneTests.ASlowCommandThatRunsAloneHoldsUpNoOtherThatRunsAlone`, `TheConnectionsForCommandsThatRunAloneAreAsManyAsTheSettingsSay` | waited; 1 connection for 3 |
+| the pool kept 64 KB buffers for 16,384 jobs | `PgAllocationTests.APoolFilledByLargeCommandsKeepsAtMostItsByteBudget` | 479 MB kept after a burst of 4,096 |
+| (re-review N3) buffers up to 4 KB counted against nothing | `PgAllocationTests.APoolFilledBySmallButNotTinyCommandsStaysBounded` (the live heap after a compacting GC; GC.GetTotalMemory over-reads with regions) | 66 MB kept for 16,384 commands of 3.9 KB |
+| the pool's room never given back | `PgAllocationTests.ThePoolHasRoomForWhatTheLoopsCanHoldAndGivesItBackWhenTheyStop` | room still held after the loops stopped |
+| the reuse guard never saw a reused job (the thread caches) | `PgJobReuseGuardTests` (asserts the job is the same) | another job |
+| the burst test passed without sharing | `PgPipelineTests.ABurstWhileOtherLoopsSleepIsSharedOutAmongThem` (queued under the queue's lock) | 1 group of 32 with sharing off |
+| `Provider.Alone` called on a provider that doesn't declare it: CS0117 | `MinimalProviderTests.QueriesOverAProviderThatDeclaresOnlyWhatItMustCompile` | CS0117 |
+
+`PgAllocationTests.ABurstAllocatesAlmostNothingOnceWarmWithTheThreadCachesOn` measures the production setting (under
+256 KB for 10,240 reads: at most the caches' worth of jobs made), next to the test with the caches off (under 4 KB).
+`PgAloneTests` opens both alone connections before its timed part.
+
+The broken-connection test raced xunit's synchronization context: its reads now go into the queue behind a slow
+read, with no await between. That race can't be shown red on demand.
+
 ## Options for an app's own spec (the feed API)
 
 The $12 contest's feed API couldn't be written with the library: it kept a hand-written auth layer and parsed its
