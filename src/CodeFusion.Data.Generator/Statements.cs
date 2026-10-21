@@ -790,6 +790,8 @@ sealed partial class Translator
         {
             int eq = piece.IndexOf(" = ", StringComparison.Ordinal);
             if (eq < 0 || !names.Contains(piece.Substring(0, eq)) || Parameter(piece.Substring(eq + 3)) is not (>= 0 and var p)) return null;
+            // an update of its own key: which rows the later writes find depends on it, so they can't run at once
+            if (piece.Substring(0, eq) == keySql) return null;
             columns.Add(piece.Substring(0, eq));
             parameters.Add(p);
         }

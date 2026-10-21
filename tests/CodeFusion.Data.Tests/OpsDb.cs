@@ -65,6 +65,31 @@ public sealed class Gadget
     public Utf8 Name { get; init; }
 }
 
+/// <summary>A count that can't go below 0 (a CHECK), with a note that can't be null.</summary>
+[Table("counters")]
+public sealed class Counter
+{
+    public long Id { get; init; }
+    public int N { get; init; }
+    public Utf8? Note { get; init; }
+}
+
+/// <summary>A table with a row trigger and a statement trigger, each logging to audit_log.</summary>
+[Table("audited")]
+public sealed class Audited
+{
+    public long Id { get; init; }
+    public int N { get; init; }
+}
+
+/// <summary>A table with a rule that logs each update to audit_log.</summary>
+[Table("ruled")]
+public sealed class Ruled
+{
+    public long Id { get; init; }
+    public int N { get; init; }
+}
+
 /// <summary>A table of another schema, whose name the search path's schema has too.</summary>
 [Table("items", Schema = "cfdata_ops_tenant")]
 public sealed class TenantItem
@@ -167,6 +192,9 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Table<PersonLabel> PersonLabels => Table<PersonLabel>();
     public Table<Gadget> Gadgets => Table<Gadget>();
     public Table<TenantItem> TenantItems => Table<TenantItem>();
+    public Table<Counter> Counters => Table<Counter>();
+    public Table<Audited> Audits => Table<Audited>();
+    public Table<Ruled> Ruled => Table<Ruled>();
 
     // ---------- Where ----------
 
@@ -345,7 +373,19 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Write SetCard(long id, Utf8? nick, double? score, bool active, Timestamp born) =>
         People.Where(p => p.Id == id).Update(p => new Person { Nick = nick, Score = score, Active = active, Born = born });
 
+    public Write SetCount(long id, int n) => Counters.Where(c => c.Id == id).Update(c => new Counter { N = n });
+
+    public Write SetNote(long id, Utf8? note) => Counters.Where(c => c.Id == id).Update(c => new Counter { Note = note });
+
+    public Write SetAudited(long id, int n) => Audits.Where(a => a.Id == id).Update(a => new Audited { N = n });
+
+    public Write SetRuled(long id, int n) => Ruled.Where(r => r.Id == id).Update(r => new Ruled { N = n });
+
     // not one row by its key with parameters only: never merged
+    public Write MoveCounter(long id, long to) => Counters.Where(c => c.Id == id).Update(c => new Counter { Id = to });
+
+    public Write<Name> SetAgeReturning(long id, int age) => People.Where(p => p.Id == id).Update(p => new Person { Age = age }).Select(p => Name.Of(p));
+
     public Write AgeOneYear(long id) => People.Where(p => p.Id == id).Update(p => new Person { Age = p.Age + 1 });
 
     public Write SetAgeOfName(Utf8 name, int age) => People.Where(p => p.Name == name).Update(p => new Person { Age = age });

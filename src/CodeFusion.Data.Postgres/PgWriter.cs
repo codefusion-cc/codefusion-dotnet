@@ -38,7 +38,9 @@ public sealed class PgWriter : PgLoops
     /// before it wrote the second time needn't be what they wrote in the attempt that rolled back (a sequence keeps
     /// its step, now() moves). Only a write that failed first in its batch gets its error at once: it saw nothing of
     /// the group. So a write runs at most twice before it commits (three times when the writes before the failing
-    /// one then fail together, and each runs alone), and of two writes that conflict the one queued first wins.
+    /// one then fail together, and each runs alone), and of two writes that conflict the one queued first wins. A
+    /// run of keyed updates merged into one statement that fails is tried once more unmerged first, and that is where
+    /// the failing write is found, so a merged write runs once more than that.
     /// </summary>
     private protected override void Run(PgConnection conn, PgJob?[] group, int n)
     {
@@ -47,6 +49,16 @@ public sealed class PgWriter : PgLoops
         {
             int failed = TryCommit(conn, group, from, n, out var error, rerun: from > 0);
             if (failed < 0) return;
+            if (conn.FailedInBatch)
+            {
+                // A merged statement failed: which write is at fault, and what the writes before it would see, the
+                // same writes one by one say. If it was the table that refused merging (its own check, or Postgres:
+                // a rule on it can't take an update in a WITH), its statement never merges again
+                if (error is not null && (error.SqlState == "0A000" || error.Message.Contains(Postgres.NotMergedMarker, StringComparison.Ordinal)))
+                    group[failed]!.Statements[0].Batch = null;
+                failed = TryCommit(conn, group, from, n, out error, merge: false);
+                if (failed < 0) return;
+            }
             if (failed == n)
             {
                 // The commit itself failed after every statement succeeded: no write to blame.
@@ -56,8 +68,7 @@ public sealed class PgWriter : PgLoops
             bool before = failed == from || TryCommit(conn, group, from, failed, out _) < 0;
             if (!before)
                 for (int i = from; i < failed; i++) Alone(conn, group, i);
-            // a merged statement's failure names its run's first write, which may not be the one at fault
-            Alone(conn, group, failed, failed == from && !conn.FailedInBatch ? error : null);
+            Alone(conn, group, failed, failed == from ? error : null);
             from = failed + 1;
         }
     }
@@ -82,8 +93,9 @@ public sealed class PgWriter : PgLoops
     /// Runs writes <paramref name="from"/> to <paramref name="to"/> (exclusive) as one batch and, once committed,
     /// hands each its rows and completes it. On an error from Postgres returns the slot of the write whose statement
     /// failed (<paramref name="to"/> if the commit failed) with the error; nothing committed. -1 when all committed.
+    /// Runs of keyed updates go merged unless <paramref name="merge"/> is false.
     /// </summary>
-    int TryCommit(PgConnection conn, PgJob?[] group, int from, int to, out PgException? error, bool rerun = true)
+    int TryCommit(PgConnection conn, PgJob?[] group, int from, int to, out PgException? error, bool rerun = true, bool merge = true)
     {
         if (rerun) Interlocked.Increment(ref Counters.Reruns);
         conn.Begin();
@@ -93,9 +105,15 @@ public sealed class PgWriter : PgLoops
             job.Restart();
             // a run of one keyed update goes as one statement
             int end = j + 1;
-            if (job.Count == 1 && job.Statements[0].Batch is { } batch)
+            if (merge && job.Count == 1 && job.Statements[0].Batch is { } batch && PgConnection.TryKey(job, batch, out long key))
             {
-                while (end < to && group[end]!.Count == 1 && ReferenceEquals(group[end]!.Statements[0], job.Statements[0])) group[end++]!.Restart();
+                // the run ends where a key comes again: each write updates its row once, and every one is checked
+                var keys = conn.RunKeys;
+                keys.Clear();
+                keys.Add(key);
+                while (end < to && group[end]!.Count == 1 && ReferenceEquals(group[end]!.Statements[0], job.Statements[0])
+                    && PgConnection.TryKey(group[end]!, batch, out key) && keys.Add(key))
+                    group[end++]!.Restart();
                 if (end - j > 1)
                 {
                     conn.AddBatch(group, j, end, batch);

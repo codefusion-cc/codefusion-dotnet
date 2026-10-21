@@ -52,6 +52,8 @@ public sealed class PgStatement
     internal PgStatement? Batch;
     /// <summary>On a <see cref="Batch"/>: each array parameter's element type.</summary>
     internal uint[]? ElementTypes;
+    /// <summary>On a <see cref="Batch"/>: which parameter is the key (an int or a bigint).</summary>
+    internal int KeyParameter;
 
     /// <summary>
     /// Commands of this statement run alone: on a connection of their own, each in a transaction of its own, never in

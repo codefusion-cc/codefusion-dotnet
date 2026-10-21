@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Security.Cryptography;
@@ -408,6 +409,25 @@ sealed class PgConnection : IDisposable
             if (_buildCount == _build.Length) Array.Resize(ref _build, _buildCount * 2);
             _build[_buildCount++] = new Step { Slot = slot, StatementId = s.Id, Parse = parse, Last = i == job.Count - 1 };
         }
+    }
+
+    /// <summary>The keys of the run of keyed updates being merged, so the run ends before a key comes twice.</summary>
+    internal readonly HashSet<long> RunKeys = [];
+
+    /// <summary>The key a keyed update <paramref name="job"/> writes, from its Bind: false when it's null.</summary>
+    internal static bool TryKey(PgJob job, PgStatement batch, out long key)
+    {
+        var buf = job.Buf.AsSpan();
+        int at = 5 + job.Statements[0].BindHead.Length;
+        for (int p = 0; p < batch.KeyParameter; p++) at += 4 + Math.Max(BinaryPrimitives.ReadInt32BigEndian(buf[at..]), 0);
+        int len = BinaryPrimitives.ReadInt32BigEndian(buf[at..]);
+        key = len switch
+        {
+            8 => BinaryPrimitives.ReadInt64BigEndian(buf[(at + 4)..]),
+            4 => BinaryPrimitives.ReadInt32BigEndian(buf[(at + 4)..]),
+            _ => 0,
+        };
+        return len is 4 or 8;
     }
 
     /// <summary>
