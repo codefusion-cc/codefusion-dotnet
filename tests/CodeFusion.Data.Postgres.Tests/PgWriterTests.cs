@@ -425,6 +425,7 @@ public sealed class PgWriterTests : IAsyncDisposable
         for (int attempt = 1; ; attempt++)
         {
             await using var tx = await other.BeginTransactionAsync(TestContext.Current.CancellationToken);
+            long rerunsBefore = w.Counters.Reruns;
             await Exec(other, $"UPDATE {_table} SET v = v WHERE v = 'r2'");
             // locks r1, then waits for r2, which the other transaction holds
             var box = new Box();
@@ -447,7 +448,8 @@ public sealed class PgWriterTests : IAsyncDisposable
             var res = await write;
             Assert.True(res.IsOk, res.ToString());
             Assert.Equal("r2", box.Value);
-            Assert.Equal(1, w.Counters.Reruns); // it lost the deadlock and ran again alone
+            // it lost the deadlock and ran again (an earlier attempt's race can add a rerun of its own, so count this one's)
+            Assert.True(w.Counters.Reruns - rerunsBefore >= 1, $"reruns in this attempt: {w.Counters.Reruns - rerunsBefore}");
             return;
         }
     }

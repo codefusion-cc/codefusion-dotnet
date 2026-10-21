@@ -246,5 +246,7 @@ off). Only a body's own bytes count, not chunk framing, and of a response what t
 byte pays for 1/rate seconds, but no more than `RequestTimeout` (or the grace period, if longer) ahead, so bytes sent
 early can't buy a crawl later, and a client faster than the rate between any two of its sends or reads is never cut
 off. A new connection's first request must arrive within `RequestTimeout`. A request's buffer doubles as its bytes
-come, so a connection holds about what it sent, not what its Content-Length declares. `MaxConnections` is unlimited
-unless set. SECURITY.md says what these do and don't bound.
+come, so a connection holds about what it sent, not what its Content-Length declares. `MaxConnections` defaults to the
+process's descriptor limit less 1024 (less half of a limit under 2048), so past it new connections are closed at once
+instead of failing to be accepted. The server raises the soft limit to the hard one first, as CoreCLR does and
+NativeAOT doesn't. On Windows, 32-bit Linux and FreeBSD there is no default limit. SECURITY.md says what these do and don't bound.

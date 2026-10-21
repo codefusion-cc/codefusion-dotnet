@@ -43,8 +43,12 @@ public sealed class HttpServerOptions
     public MinDataRate? MinResponseDataRate { get; set; } = MinDataRate.Default;
 
     /// <summary>The most connections open at once; past it a new connection is closed as soon as it is accepted.
-    /// Null, the default as in Kestrel, sets no limit, so nothing bounds how many slow clients can each hold their
-    /// connection and its buffers.</summary>
+    /// Null, the default, takes it from the process's descriptor limit (RLIMIT_NOFILE) less 1024, or less half of a
+    /// limit under 2048: past the limit accept fails and the connections waiting hang, and so does whatever else opens
+    /// a descriptor, the runtime included, which has ended the process there. The server first raises the soft limit
+    /// to the hard one (on macOS to at most 10,240), as CoreCLR does as it starts and NativeAOT doesn't, and reports it
+    /// to <see cref="OnError"/> when it did. It reads the limit once, as it is made: each server in a process takes the
+    /// whole of it. On 64-bit Linux and macOS only; elsewhere (Windows, 32-bit Linux, FreeBSD) null sets none.</summary>
     public int? MaxConnections { get; set; }
 
     /// <summary>The request line with its CRLF, in bytes; longer gets 414.</summary>
@@ -117,9 +121,10 @@ public sealed class HttpServerOptions
     public Action<HttpExchange, Exception>? OnHandlerError { get; set; }
 
     /// <summary>Called with what the server caught outside a handler, as a short line and the exception: a
-    /// connection that failed, accepting that fails (once per run of failures, and once when it works again), and a
-    /// handler's exception when <see cref="OnHandlerError"/> is null. It may be called from any thread, and what it
-    /// throws is dropped. By default a line on stderr; null drops them.</summary>
+    /// connection that failed, accepting that fails (once per run of failures, and once when it works again), the
+    /// descriptor limit the server raised (with no exception), and a handler's exception when
+    /// <see cref="OnHandlerError"/> is null. It may be called from any thread, and what it throws is dropped. By
+    /// default a line on stderr; null drops them.</summary>
     public Action<string, Exception?>? OnError { get; set; } = Stderr;
 
     /// <summary>The error hooks' default, and the package's one way to the console: a server that fails quietly
