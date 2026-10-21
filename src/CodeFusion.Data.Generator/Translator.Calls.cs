@@ -44,6 +44,7 @@ sealed partial class Translator
                 "Now" => new SqlValue(D.Now, m.ReturnType, false),
                 _ => throw new Refused(at, $"SqlFunctions.{m.Name}"),
             };
+        if (Known.Same(m.ContainingType, K.Utf8Operators)) return TextFunction(m, inv, args, env);
         if (IsDefinition(m))
         {
             var receiver = inv.Instance is { } i ? Eval(i, env) : args.Count > 0 ? Eval(args[0], env) : null;
@@ -113,6 +114,102 @@ sealed partial class Translator
         else target = $"{m.ContainingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)}.{Names.Identifier(m.Name)}";
         // a call may do anything: its value is the one made where it is written
         return Composite($"{target}({string.Join(", ", parts)})", m.ReturnType, false, null, made.ToArray());
+    }
+
+    /// <summary>
+    /// A text function of Utf8Operators: its SQL, by the dialect's template. Over values known when called it is also
+    /// C#, the method itself, for where C# decides (a ThenIf's condition); in SQL it is still the function over the
+    /// parameters, so the call never runs and nothing is allocated.
+    /// </summary>
+    Value TextFunction(IMethodSymbol m, IInvocationOperation inv, List<IOperation> args, Env env)
+    {
+        var at = inv.Syntax.GetLocation();
+        var values = args.Select(a => Eval(a, env)).ToList();
+        Location Arg(int i) => args[i].Syntax.GetLocation();
+        string Literal(int i, string what) => values[i] is Constant { Constant_: string s } ? s
+            : throw new Refused(Arg(i), $"{m.Name}'s {what} that isn't a constant string (it is checked when the query is compiled)");
+        string template;
+        // the operands' SQL, and the arguments written as SQL literals
+        var operands = new List<int> { 0 };
+        var literals = new List<string>();
+        switch (m.Name)
+        {
+            case "ToLowerAscii":
+                template = D.LowerAscii;
+                break;
+            case "ToUpperAscii":
+                template = D.UpperAscii;
+                break;
+            case "Trim" or "TrimStart" or "TrimEnd":
+            {
+                template = m.Name == "Trim" ? D.Trim : m.Name == "TrimStart" ? D.TrimStart : D.TrimEnd;
+                if (values[1] is not Constant { Constant_: char c })
+                    throw new Refused(Arg(1), $"{m.Name}'s character that isn't a constant");
+                if (char.IsSurrogate(c)) throw new Refused(Arg(1), $"{m.Name} by half a character (a surrogate)");
+                literals.Add(Sql.String(c.ToString()));
+                break;
+            }
+            case "Replace":
+                template = D.Replace;
+                operands.AddRange([1, 2]);
+                break;
+            case "ReplaceMatches":
+            {
+                template = D.RegexReplace;
+                string pattern = Literal(1, "pattern"), replacement = Literal(2, "replacement");
+                if (Patterns.Problem(pattern) is { } problem)
+                    throw new Refused(Arg(1), $"ReplaceMatches with {problem}, which .NET and SQL may read differently, so the pattern");
+                if (Patterns.ReplacementProblem(replacement) is { } bad)
+                    throw new Refused(Arg(2), $"ReplaceMatches with {bad}, which .NET and SQL read differently, so the replacement");
+                literals.Add(Sql.String(pattern));
+                literals.Add(Sql.String(replacement));
+                break;
+            }
+            case "Concat":
+                template = D.Concat;
+                operands.Add(1);
+                break;
+            default:
+                throw new Refused(at, $"Utf8Operators.{m.Name}");
+        }
+        if (template.Length == 0) throw new Refused(at, $"{m.Name} in {D.Name}");
+        string Render()
+        {
+            var sql = operands.Select(i => Operand(values[i], Arg(i))).ToList();
+            if (m.Name == "Concat") return Dialect.Format(template, Chained(sql[0]), Sql.Group(sql[1]));
+            return Dialect.Format(template, sql.Concat(literals).ToArray());
+        }
+        if (values[0] is Host && operands.All(i => values[i] is Host or Constant))
+        {
+            // the method itself in C#: a nullable value's .Value as written (Property gives the value itself)
+            var code = values.Select((v, i) => v is Host h && IsNullable(h.Type) && !IsNullable(m.Parameters[i].Type) ? $"({h.Code}).Value" : Code(v, Arg(i)));
+            return Composite($"global::CodeFusion.Data.Utf8Operators.{m.Name}({string.Join(", ", code)})", m.ReturnType, true, Render, values.ToArray());
+        }
+        return new SqlValue(Render(), m.ReturnType, operands.Any(i => MayBeNull(values[i])));
+    }
+
+    /// <summary>The left side of a concatenation: as it is when it is one term or a chain of concatenations
+    /// (<c>a || b || c</c> is read from the left), else in parentheses.</summary>
+    string Chained(string sql)
+    {
+        if (Sql.Atomic(sql)) return sql;
+        string op = Dialect.Format(D.Concat, "", "");
+        int depth = 0;
+        bool quoted = false;
+        for (int i = 0; i < sql.Length; i++)
+        {
+            char c = sql[i];
+            if (c == '\'') quoted = !quoted;
+            else if (quoted) continue;
+            else if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (depth == 0 && c == ' ')
+            {
+                if (string.CompareOrdinal(sql, i, op, 0, op.Length) != 0) return "(" + sql + ")";
+                i += op.Length - 1;
+            }
+        }
+        return sql;
     }
 
     public IAnonymousFunctionOperation Lambda(IOperation op) =>

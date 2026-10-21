@@ -31,6 +31,17 @@ build error that points at `Sql<T>($"...")`, whose interpolation holes become pa
 strings too, and one where a parameter can't stand, as a table after FROM or a whole ORDER BY item, is a build
 error); a hole calling a `[SqlTemplate]` method is its SQL, the way to share a fragment.
 
+Text is changed by the functions of `Utf8Operators`, each SQL in a query and the same C# anywhere else:
+`ToLowerAscii` and `ToUpperAscii` (A to Z only, `lower(x COLLATE "C")`, alike in every collation), `Trim`,
+`TrimStart` and `TrimEnd` by a constant character, `Replace`, `Concat` of text or a number, and `ReplaceMatches`
+(`regexp_replace`) with a constant pattern of the kind .NET and SQL read alike: literals and ASCII `[...]` classes,
+each once or with `+`, and one `[^...]` class with `+`. The spec's slug rule:
+
+```csharp
+public static Utf8 WithId(Utf8 title, long id) =>
+    title.ReplaceMatches("[^A-Za-z0-9]+", "-").ToLowerAscii().Trim('-').Concat("-"u8).Concat(id);
+```
+
 Entities follow EF's conventions (snake_case names, `AuthorId` with `Author`, `Many<T>` for the other side, and EF's
 attributes) and are never built at run time. Views are `record struct`s of `Utf8`, `Utf8?`, `Timestamp`,
 `RawJson`, numbers, bools and nested views, written as JSON by CodeFusion.Core's rules.

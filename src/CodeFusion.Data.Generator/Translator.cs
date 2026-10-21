@@ -1039,6 +1039,7 @@ sealed partial class Translator
             null => "null",
             bool b => b ? "true" : "false",
             string s => Names.Literal(s),
+            char ch => SymbolDisplay.FormatLiteral(ch, quote: true),
             // each number with its type: C#'s 61 / 2.0 isn't 61 / 2
             long l => Names.Number(l) + "L",
             ulong ul => ul.ToString(CultureInfo.InvariantCulture) + "UL",

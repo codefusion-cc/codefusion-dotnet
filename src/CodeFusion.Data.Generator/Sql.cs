@@ -17,6 +17,10 @@ sealed class Dialect
     // C#'s conversions between integers and floating point ({1} is the SQL type), the smaller and larger of two
     // counts; Postgres's spelling, not a dialect's setting yet
     public string ToFloat = "CAST({0} AS {1})", ToInteger = "CAST(trunc({0}) AS {1})", Least = "LEAST({0}, {1})", Greatest = "GREATEST({0}, {1})";
+    // the text functions of Utf8Operators
+    public string LowerAscii = "lower({0} COLLATE \"C\")", UpperAscii = "upper({0} COLLATE \"C\")";
+    public string Trim = "trim(both {1} from {0})", TrimStart = "trim(leading {1} from {0})", TrimEnd = "trim(trailing {1} from {0})";
+    public string Replace = "replace({0}, {1}, {2})", RegexReplace = "regexp_replace({0}, {1}, {2}, 'g')";
     public bool SelectsConditions = true, ReturningAfter = true;
     public int InsertOrIgnore; // 0 ON CONFLICT DO NOTHING, 1 INSERT OR IGNORE, 2 none
 
@@ -53,6 +57,13 @@ sealed class Dialect
                 case "SelectsConditions": d.SelectsConditions = (bool)v!; break;
                 case "BigIntLiteral": d.BigIntLiteral = (string)v!; break;
                 case "LockRows": d.LockRows = (string)v!; break;
+                case "LowerAscii": d.LowerAscii = (string)v!; break;
+                case "UpperAscii": d.UpperAscii = (string)v!; break;
+                case "Trim": d.Trim = (string)v!; break;
+                case "TrimStart": d.TrimStart = (string)v!; break;
+                case "TrimEnd": d.TrimEnd = (string)v!; break;
+                case "Replace": d.Replace = (string)v!; break;
+                case "RegexReplace": d.RegexReplace = (string)v!; break;
             }
         }
         return d;

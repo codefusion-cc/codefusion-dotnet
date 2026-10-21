@@ -36,7 +36,7 @@ public sealed class AllocationTests(ConduitFixture fixture)
         }
     }
 
-    static readonly Utf8 Slug = U("how-to-train-your-dragon"), Missing = U("no-such-article"), Email = U("bob@example.com"), Dragons = U("dragons");
+    static readonly Utf8 Slug = U("how-to-train-your-dragon"), Missing = U("no-such-article"), Email = U("bob@example.com"), Dragons = U("dragons"), Title = U("Allocation free: an article");
 
     /// <summary>One request of each kind a connection serves, the reads as replies and awaited.</summary>
     static async Task<long> Reads(Connection c, int requests)
@@ -80,14 +80,15 @@ public sealed class AllocationTests(ConduitFixture fixture)
         return bad;
     }
 
-    /// <summary>Writes that change nothing the other tests read: an update to the same values, a favorite toggled twice.</summary>
+    /// <summary>Writes that change nothing the other tests read: an update to the same values, a favorite toggled twice,
+    /// and new articles of dave's, whose slugs no test reads.</summary>
     static async Task<long> Writes(Connection c, int requests)
     {
         long bad = 0;
         for (int i = 0; i < requests; i++)
         {
             c.Next();
-            switch (i % 3)
+            switch (i % 4)
             {
                 case 0:
                     await c.Db.UpdateUser(4, null, null, null, null, null).WriteAsync(c.Response).ConfigureAwait(false);
@@ -97,9 +98,14 @@ public sealed class AllocationTests(ConduitFixture fixture)
                     await c.Db.Favorite(2, Slug).WriteAsync(c.Response).ConfigureAwait(false);
                     if (c.Response.Status != 200) bad++;
                     break;
-                default:
+                case 2:
                     var r = await c.Db.Unfavorite(2, Slug);
                     if (!r.Found) bad++;
+                    break;
+                default:
+                    // a new article of dave's, its slug made by the text functions in SQL
+                    await c.Db.CreateArticle(4, Title, Title, Title, Utf8List.Empty).WriteAsync(c.Response).ConfigureAwait(false);
+                    if (c.Response.Status != 200) bad++;
                     break;
             }
         }

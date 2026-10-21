@@ -61,10 +61,9 @@ public readonly record struct UserRow(Utf8 Username, Utf8 Email, Utf8? Bio, Utf8
     public static UserRow Of(User u) => new(u.Username, u.Email, u.Bio, u.Image);
 }
 
-/// <summary>SQL the query definitions use.</summary>
+/// <summary>The spec's slug rule, in the text functions of Utf8Operators: SQL in a query, and C# anywhere else.</summary>
 public static class Slugs
 {
-    /// <summary>The title as a slug, then "-" and the article's id: unique, as the id is.</summary>
-    [SqlTemplate("trim(both '-' from lower(regexp_replace({0}, '[^A-Za-z0-9]+', '-', 'g'))) || '-' || {1}")]
-    public static Utf8 WithId(Utf8 title, long id) => throw new NotSupportedException();
+    /// <summary>The title as a slug, then "-" and the article's id: unique, as the id is (the spec's SLUGIFY).</summary>
+    public static Utf8 WithId(Utf8 title, long id) => title.ReplaceMatches("[^A-Za-z0-9]+", "-").ToLowerAscii().Trim('-').Concat("-"u8).Concat(id);
 }

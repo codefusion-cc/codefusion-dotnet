@@ -145,6 +145,14 @@ public readonly record struct Settable
     public Utf8 Name { get; init; }
 }
 
+public readonly record struct Trimmed(Utf8 Both, Utf8 Start, Utf8 End);
+
+/// <summary>The spec's slug rule, in the functions of Utf8Operators: it runs as C# too.</summary>
+public static class Slugs
+{
+    public static Utf8 WithId(Utf8 title, long id) => title.ReplaceMatches("[^A-Za-z0-9]+", "-").ToLowerAscii().Trim('-').Concat("-"u8).Concat(id);
+}
+
 public static class SqlText
 {
     [SqlTemplate("lower({0})")]
@@ -385,6 +393,30 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Write ActiveIfPetOwner(int age) => People.Where(p => p.Age == age).Update(p => new Person { Active = SqlText.HasPets(p.Id) });
 
     public One<long> DeleteIfPetless(long id) => People.Where(p => p.Id == id).DeleteIf(p => !p.Pets.Any()).Select(p => p.Id).One();
+
+    // ---------- text functions ----------
+
+    public One<Utf8> LowerOf(Utf8 text) => People.Where(p => p.Id == 1).Select(p => text.ToLowerAscii()).One();
+
+    public One<Utf8> UpperOf(Utf8 text) => People.Where(p => p.Id == 1).Select(p => text.ToUpperAscii()).One();
+
+    public One<Trimmed> TrimmedOf(Utf8 text) => People.Where(p => p.Id == 1).Select(p => new Trimmed(text.Trim('-'), text.TrimStart('é'), text.TrimEnd('\''))).One();
+
+    public One<Utf8> ReplacedOf(Utf8 text, Utf8 oldValue, Utf8 newValue) => People.Where(p => p.Id == 1).Select(p => text.Replace(oldValue, newValue)).One();
+
+    public One<Utf8> SlugOf(Utf8 title, long id) => People.Where(p => p.Id == 1).Select(p => Slugs.WithId(title, id)).One();
+
+    public Many<Name> NameTags() =>
+        People.OrderBy(p => p.Id).Select(p => new Name(p.Id, p.Name.ToUpperAscii().Concat(":"u8).Concat(p.Age).Replace("N"u8, "n"u8).Concat(p.Nick ?? Utf8.Empty))).Many();
+
+    public Write<Name> AddSlugged(Utf8 title) =>
+        Insert(People, n => new Person { Name = Slugs.WithId(title, n.Id), Age = 2, Active = true, Born = SqlFunctions.Now() })
+            .ThenSelect(n => Name.Of(n));
+
+    /// <summary>A text function where C# decides: the method itself runs.</summary>
+    public Write AddIfLowered(Utf8 name, Utf8 lowered) =>
+        Insert(People, new Person { Name = name, Age = 3, Active = true, Born = SqlFunctions.Now() })
+            .ThenIf(name.ToLowerAscii() == lowered, Sql($"UPDATE people SET nick = 'lowered' WHERE name = {name}"));
 
     // ---------- SQL ----------
 

@@ -11,7 +11,7 @@ sealed class Known
     public readonly Compilation Compilation;
     public readonly INamedTypeSymbol Utf8, Timestamp, RawJson, DataContext, DataContextOf, Many, One, Page, WriteOf, Write;
     public readonly INamedTypeSymbol Query, OrderedQuery, Table, PageQuery, DeleteQuery, WriteQuery, UpdateQuery, Insert, SqlQuery, SqlString;
-    public readonly INamedTypeSymbol QueryOperators, QueryDefinition, SqlTemplate, JoinTable, JsonList, SqlDialect, Provider, SqlFunctions;
+    public readonly INamedTypeSymbol QueryOperators, QueryDefinition, SqlTemplate, JoinTable, JsonList, SqlDialect, Provider, SqlFunctions, Utf8Operators;
     public readonly INamedTypeSymbol? JsonEnvelope, JsonPropertyName, JsonIgnore, TableAttribute, ColumnAttribute, KeyAttribute, ForeignKey, InverseProperty, NotMapped;
 
     Known(Compilation c)
@@ -47,6 +47,7 @@ sealed class Known
         SqlDialect = T("CodeFusion.Data.SqlDialectAttribute");
         Provider = T("CodeFusion.Data.IDataProvider`3");
         SqlFunctions = T("CodeFusion.Data.SqlFunctions");
+        Utf8Operators = T("CodeFusion.Data.Utf8Operators");
         JsonPropertyName = c.GetTypeByMetadataName("System.Text.Json.Serialization.JsonPropertyNameAttribute");
         JsonIgnore = c.GetTypeByMetadataName("System.Text.Json.Serialization.JsonIgnoreAttribute");
         TableAttribute = c.GetTypeByMetadataName("System.ComponentModel.DataAnnotations.Schema.TableAttribute");

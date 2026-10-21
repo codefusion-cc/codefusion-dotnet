@@ -253,6 +253,8 @@ CodeFusion.Data.SqlDialectAttribute.LockRows.get -> string!
 CodeFusion.Data.SqlDialectAttribute.LockRows.init -> void
 CodeFusion.Data.SqlDialectAttribute.Limit.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Limit.init -> void
+CodeFusion.Data.SqlDialectAttribute.LowerAscii.get -> string!
+CodeFusion.Data.SqlDialectAttribute.LowerAscii.init -> void
 CodeFusion.Data.SqlDialectAttribute.Name.get -> string!
 CodeFusion.Data.SqlDialectAttribute.NextKey.get -> string!
 CodeFusion.Data.SqlDialectAttribute.NextKey.init -> void
@@ -266,11 +268,23 @@ CodeFusion.Data.SqlDialectAttribute.Parameter.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Parameter.init -> void
 CodeFusion.Data.SqlDialectAttribute.Quotes.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Quotes.init -> void
+CodeFusion.Data.SqlDialectAttribute.RegexReplace.get -> string!
+CodeFusion.Data.SqlDialectAttribute.RegexReplace.init -> void
+CodeFusion.Data.SqlDialectAttribute.Replace.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Replace.init -> void
 CodeFusion.Data.SqlDialectAttribute.Returning.get -> CodeFusion.Data.SqlReturning
 CodeFusion.Data.SqlDialectAttribute.Returning.init -> void
 CodeFusion.Data.SqlDialectAttribute.SelectsConditions.get -> bool
 CodeFusion.Data.SqlDialectAttribute.SelectsConditions.init -> void
 CodeFusion.Data.SqlDialectAttribute.SqlDialectAttribute(string! name) -> void
+CodeFusion.Data.SqlDialectAttribute.Trim.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Trim.init -> void
+CodeFusion.Data.SqlDialectAttribute.TrimEnd.get -> string!
+CodeFusion.Data.SqlDialectAttribute.TrimEnd.init -> void
+CodeFusion.Data.SqlDialectAttribute.TrimStart.get -> string!
+CodeFusion.Data.SqlDialectAttribute.TrimStart.init -> void
+CodeFusion.Data.SqlDialectAttribute.UpperAscii.get -> string!
+CodeFusion.Data.SqlDialectAttribute.UpperAscii.init -> void
 CodeFusion.Data.SqlFunctions
 CodeFusion.Data.SqlInsertOrIgnore
 CodeFusion.Data.SqlInsertOrIgnore.InsertOrIgnore = 1 -> CodeFusion.Data.SqlInsertOrIgnore
@@ -296,6 +310,7 @@ CodeFusion.Data.Table<T>
 CodeFusion.Data.UpdateQuery<T>
 CodeFusion.Data.UpdateQuery<T>.Select<TResult>(System.Func<T, TResult>! selector) -> CodeFusion.Data.Write<TResult>
 CodeFusion.Data.Utf8ListOperators
+CodeFusion.Data.Utf8Operators
 CodeFusion.Data.Write
 CodeFusion.Data.Write.Conflict(CodeFusion.ErrorReply! reply) -> CodeFusion.Data.Write
 CodeFusion.Data.Write.GetAwaiter() -> System.Runtime.CompilerServices.ValueTaskAwaiter<CodeFusion.Data.DataResult>
@@ -359,6 +374,15 @@ static CodeFusion.Data.RowJson.TimestampValue<TRow>(System.Text.Json.Utf8JsonWri
 static CodeFusion.Data.SqlFunctions.Now() -> CodeFusion.Timestamp
 static CodeFusion.Data.UpdateQuery<T>.implicit operator CodeFusion.Data.Write(CodeFusion.Data.UpdateQuery<T>! update) -> CodeFusion.Data.Write
 static CodeFusion.Data.Utf8ListOperators.Contains(this CodeFusion.Utf8List list, CodeFusion.Utf8 text) -> bool
+static CodeFusion.Data.Utf8Operators.Concat(this CodeFusion.Utf8 text, long number) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.Concat(this CodeFusion.Utf8 text, System.ReadOnlySpan<byte> other) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.Replace(this CodeFusion.Utf8 text, System.ReadOnlySpan<byte> oldValue, System.ReadOnlySpan<byte> newValue) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.ReplaceMatches(this CodeFusion.Utf8 text, string! pattern, string! replacement) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.ToLowerAscii(this CodeFusion.Utf8 text) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.ToUpperAscii(this CodeFusion.Utf8 text) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.Trim(this CodeFusion.Utf8 text, char trimChar) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.TrimEnd(this CodeFusion.Utf8 text, char trimChar) -> CodeFusion.Utf8
+static CodeFusion.Data.Utf8Operators.TrimStart(this CodeFusion.Utf8 text, char trimChar) -> CodeFusion.Utf8
 virtual CodeFusion.Data.QueryOps.Begin(System.Text.Json.Utf8JsonWriter! json) -> void
 virtual CodeFusion.Data.QueryOps.End(System.Text.Json.Utf8JsonWriter! json, in CodeFusion.Data.DataResult result) -> void
 virtual CodeFusion.Data.QueryOps.HasSource.get -> bool

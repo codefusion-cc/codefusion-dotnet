@@ -727,6 +727,45 @@ What the fixes decided:
 - CI runs the test projects in Debug as well, as matrix entries beside Release on both architectures, so the Debug
   invariant and pool checks run on Linux and the wall time stays one run's. Debug skips the pack.
 
+### LINQ shapes the Conduit port wrote as SQL
+
+The Conduit context had five queries in `Sql(...)` because the translator had no form for them. Each shape below
+has execution tests on Postgres (both a C-collation database and an ICU one, as CI's), generator tests of its SQL and
+of the variants it refuses (CFDATA001, with what to write instead), a `PlanTests` row against the contest's
+statement, and an `AllocationTests` row. Each test was red first: built against the code without the shape (the
+query was refused, or its SQL or rows differed), or, for the properties, with the shape's code broken on purpose.
+
+**Text functions** (`Utf8Operators`, `TextFunctionTests`, `ShapeGeneratorTests.TextFunctions*`). A C# method that SQL
+can't match exactly isn't mapped: no SQL `lower` lowers as `ToLowerInvariant` does (a collation lowers by its locale:
+ICU gives `ς` for a final Σ and `i̇` for İ, the C collation lowers A to Z only), so the function is `ToLowerAscii`,
+`lower(x COLLATE "C")`, alike in every collation and in SQLite. Each function also runs as C#, so the property tests
+compare the database's result with the method's for random text of ASCII, letters only a locale lowers, ß, ǅ, astral
+characters and combining marks.
+
+| Test | Red with |
+|---|---|
+| `ForAnyTextEachFunctionsSqlGivesTheMethodsResult` (ICU database) | `lower({0})` for `LowerAscii`: `𐐨é` for `𐐀É` |
+| `APatternTakenIsReadAlikeByDotNetAndSql` (400 patterns from a grammar wider than the accepted one) | the `[^...]` class without `+` accepted: `/[^ ]/` on Ä, two combining marks, two 𐐀 and a mark: SQL 6 dashes, .NET 8 |
+| `APatternRefusedIsOneTheyReadDifferently` | (pins why each refusal is needed: `[^a]`, `[^a]+[^b]+`, `.` on an astral character, `a$` before a newline) |
+| `TextFunctionsAreTheirSql`, `ATextFunctionSqlWouldReadOtherwiseIsRefused` (15 variants) | the mapping taken out: CFDATA001 on every query using one |
+| `TheSlugRuleGivesWhatTheSpecsSlugifyGives` | (the spec's SLUGIFY run by the database beside ours, five titles) |
+
+What it decided:
+
+- A function over values known when called is still SQL (`lower($1 COLLATE "C")`): the call never runs, so it
+  allocates nothing. Where C# decides (a ThenIf's condition) the method itself runs, a nullable's `.Value` as written.
+- `ReplaceMatches` takes the patterns .NET and Postgres's AREs read alike: literals, escaped punctuation, `[...]`
+  classes of ASCII characters and ranges, once or with `+`, and at most one `[^...]` class, with `+` (.NET reads a
+  character outside the BMP as two halves; one greedy class takes both, a second one or one without `+` can split
+  it). `\d`, `\w` and `.` are refused: in Postgres they follow the collation (an ICU database's `\d` matches `٣`). The
+  replacement has no `$` (.NET's substitutions) and no `\` (SQL's back references).
+- `Trim` by a constant character, any but a surrogate (UTF-8 is self-synchronizing, so trimming whole sequences of
+  bytes is trimming the character). `Replace` with an empty old value replaces nothing, as SQL's does.
+- Each is a dialect template (`SqlDialectAttribute.LowerAscii`, `Trim`, `RegexReplace` and the rest); an empty
+  `RegexReplace` refuses `ReplaceMatches`, which SQLite will need.
+- The Conduit context's slug rule is LINQ now (`Slugs.WithId`); its insert has the contest's plan (`PlanTests`
+  `CreateArticle`), and `AllocationTests` creates articles with it.
+
 ### Release cost
 
 Release keeps: a few fields (a bool per connection and per pooled box; a byte, an int and a reference per pooled job;
