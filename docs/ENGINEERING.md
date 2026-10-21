@@ -949,9 +949,10 @@ What the fixes decided:
   or on any table a delete reaches from it key after key (a recursive CTE over the foreign keys that cascade, set
   NULL or set a default, found through pg_depend's index), such a foreign key into a table the Select reads (the
   found table and the table written included), and, for a corrected read, row security on it or a column the insert sets with a type
-  modifier or a type that may store another value than the one bound. Any of them casts
-  `'CodeFusion: the Select after Then can't read <table> as the write left it ...'` to an integer, which fails the
-  statement (22P02) before its write commits. The check is a few catalog lookups by index per statement, run only
+  modifier, a type that may store another value than the one bound, or a collation other than the default (a
+  nondeterministic one compares the snapshot's rows otherwise than the correction compares the row written). Any of them
+  casts `'CodeFusion: the Select after Then can't read <table> as the write left it ...'` to an integer, which fails
+  the statement (22P02) before its write commits. The check is a few catalog lookups by index per statement, run only
   for a Then whose Select reads a table or is corrected; PlanTests compare with the contest's statements so checked.
 - A correction is taken also where every row found makes the same write: the same delete, which reads nothing of
   the row found, or an ignored insert of the same key.

@@ -276,6 +276,42 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
         }
     }
 
+    [Fact]
+    public async Task ACorrectedReadOfAColumnInAnotherCollationFailsTheStatement()
+    {
+        TestDb.Require();
+        const string schema = "cfdata_guard_columns";
+        await using var admin = TestDb.Admin();
+        await admin.Execute($"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; SET search_path = {schema}; {OpsFixture.Schema}; {OpsFixture.Seed}; " +
+            "CREATE COLLATION ci (provider = icu, locale = 'und-u-ks-level2', deterministic = false)");
+        await using var db0 = TestDb.Admin(schema);
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<DataResult>();
+        var source = Source(schema, failures);
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            async Task<Row<Tally>> Add(long id)
+            {
+                _response.Next();
+                return await db.AddPetCounted(U("ann"), id);
+            }
+            // the snapshot compares in the column's collation, the correction in the value's
+            await db0.Execute("ALTER TABLE pets ALTER COLUMN name TYPE text COLLATE ci");
+            FailedByTheGuard(await Add(8801), failures);
+            await db0.Execute("ALTER TABLE pets ALTER COLUMN name TYPE text COLLATE \"C\"");
+            FailedByTheGuard(await Add(8802), failures);
+            Assert.Equal(0L, await db0.Scalar("SELECT count(*) FROM pets WHERE id IN (8801, 8802)"));
+            // in the default collation the pet is written and counted
+            await db0.Execute("ALTER TABLE pets ALTER COLUMN name TYPE text COLLATE \"default\"");
+            Assert.Equal(DataStatus.Ok, (await Add(8803)).Status);
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
+    }
+
     /// <summary>Waits until a backend of this database waits for a lock: the statement under test is blocked.</summary>
     static async Task Blocked(Npgsql.NpgsqlDataSource admin)
     {

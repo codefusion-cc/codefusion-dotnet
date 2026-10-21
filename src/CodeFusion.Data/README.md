@@ -72,8 +72,8 @@ After a delete, the Select may not read a table whose rows lead to the table del
 changed it). What the model can't see the statement checks first, in the catalog: a rule or trigger on the table
 written or on any table the delete cascades into, key after key, a foreign key by which the delete reaches a table
 read, and, for a corrected read, row security or a
-column that may store another value than the one written. Any of them fails the statement with a message starting
-`CodeFusion: the Select after Then can't read`, and nothing is written.
+column that may store another value than the one written, or compare it in a collation other than the default. Any of
+them fails the statement with a message starting `CodeFusion: the Select after Then can't read`, and nothing is written.
 
 A page of each row's children is `SelectMany` of a navigation, the child itself as its result, before one OrderBy of
 the child's key and the page. Each source row's children come from a lateral join that takes, in the page's order,

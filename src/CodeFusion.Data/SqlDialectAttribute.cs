@@ -141,9 +141,9 @@ public sealed class SqlDialectAttribute : Attribute
     /// Select can't read the tables as the write left them: a rule or trigger on the table written, or on a table a
     /// delete cascades into, key by key; a foreign key by which such a delete reaches a table the Select reads; row
     /// security on a table whose read is corrected; or a column the insert sets that may store another value than the
-    /// one written (a type modifier such as numeric(5,2), a type other than the one bound). {0} is the table written, {1}
-    /// the columns the insert sets, {2} the tables the Select reads, each a string literal; {3} whether the write
-    /// deletes, {4} whether a read is corrected, each a boolean.
+    /// one written (a type modifier such as numeric(5,2), a type other than the one bound) or compare it in another
+    /// collation than the default. {0} is the table written, {1} the columns the insert sets, {2} the tables the Select
+    /// reads, each a string literal; {3} whether the write deletes, {4} whether a read is corrected, each a boolean.
     /// The Postgres check reads the catalog by its indexes. Empty: such a Then is refused.
     /// </summary>
     public string ThenGuard { get; init; } =
@@ -153,7 +153,7 @@ public sealed class SqlDialectAttribute : Attribute
         "SELECT 1 FROM r JOIN pg_class x ON x.oid = r.oid WHERE x.relhasrules OR EXISTS (SELECT 1 FROM pg_trigger g WHERE g.tgrelid = r.oid AND NOT g.tgisinternal) " +
         "OR {3} AND EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = ANY (ARRAY[{2}]::regclass[]) AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd'))) " +
         "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname IN ({1}) " +
-        "AND (a.atttypmod <> -1 OR a.atttypid NOT IN (16, 17, 20, 21, 23, 25, 701, 1184, 2950)))) " +
+        "AND (a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid NOT IN (16, 17, 20, 21, 23, 25, 701, 1184, 2950)))) " +
         "THEN ('CodeFusion: the Select after Then can''t read ' || c.relname || ' as the write left it (a rule, a trigger, row security, a foreign key that cascades " +
         "into a table it reads, or a column that may store another value than the one written)')::int ELSE 0 END FROM pg_class c WHERE c.oid = {0}::regclass) = 0";
 
