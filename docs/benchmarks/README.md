@@ -24,6 +24,13 @@ is the GC collections and allocation rate of the CodeFusion process during a sus
 The CodeFusion build is every performance branch merged: the event loop, pg-pipelining, data-batched-updates, two
 readers per core and four writers. These are reduced-rig numbers; the TechEmpower rounds run on larger hardware.
 
+Two things the table leaves out:
+- **The fastest overall is in C, not Rust, on two tests.** libreactor does 9,461,172 on plaintext and 1,483,605 on
+  JSON on the same rig. On single query, multiple queries and updates CodeFusion leads every entry measured; on
+  fortunes, xitca-web leads.
+- **On single query, multiple queries and updates, Postgres is the limit.** Its 8 vCPUs ran 93 to 100% busy for the
+  leaders, so a larger database machine could reorder them.
+
 ## Iterations
 
 | Date | File | What was tested | Result |
