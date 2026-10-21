@@ -189,7 +189,14 @@ public sealed class RequestContext : IResponse, IValueTaskSource
 
     /// <summary>The request body, for a body binder.</summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
-    public BodySource RequestBody => new(_x.RequestBuffer, _x.RequestBodyOffset, _x.RequestBodyLength, _arena, _app.Errors.InvalidBody);
+    public BodySource RequestBody
+    {
+        get
+        {
+            HttpAppErrors e = _app.Errors;
+            return new(_x.RequestBuffer, _x.RequestBodyOffset, _x.RequestBodyLength, _arena, e.InvalidBody, e.MalformedBody, e.MissingBody);
+        }
+    }
 
     /// <summary>The connection's <typeparamref name="T"/>, made the first time and bound to this request.</summary>
     [EditorBrowsable(EditorBrowsableState.Never)]

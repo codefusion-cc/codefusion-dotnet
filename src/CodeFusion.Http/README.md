@@ -107,6 +107,18 @@ builder.Errors.InvalidTokenPayload = Errors.InvalidPayload; // genuine, but sub 
 `InvalidTokenPayload` falls back to `InvalidToken`, then to `Unauthorized`. A header that is present but carries no
 valid token is a 401 on an `AuthOptional` endpoint too; only a request with no header at all is anonymous.
 
+A body's failures can be told apart the same way. `Errors.InvalidBody` (422) answers JSON of another shape (an
+array, a missing envelope) and a field its struct names no reply for. Two more replies are null unless set:
+
+```csharp
+builder.Errors.MalformedBody = Errors.Malformed; // not JSON: cut short, trailing bytes, a bad escape, past depth 64
+builder.Errors.MissingBody = Errors.NoBody;      // no body at all, or Content-Length: 0
+```
+
+A null `MissingBody` answers as `MalformedBody` does, and a null `MalformedBody` as before: the struct's own
+`static ErrorReply InvalidBody`, then `Errors.InvalidBody`. A reason the app sets wins over a struct's own reply,
+which keeps answering the bodies of another shape.
+
 A body or `[FromQuery]` struct is bound through its public fields and its public properties with a public setter,
 and nothing else, so a request can't set a member the struct keeps to itself. A number's `[Range]` holds in the body
 as in the query, in each of the attribute's forms, exclusive ends included.

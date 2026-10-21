@@ -442,13 +442,18 @@ internal static class Emitter
         w.Line("[global::System.ComponentModel.EditorBrowsable(global::System.ComponentModel.EditorBrowsableState.Never)]");
         w.Open($"internal static global::CodeFusion.ErrorReply? __BindBody(in {Http}.BodySource source, out {b.Home.FullName} value)");
         w.Line("value = default;");
+        w.Line($"if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? {structural};");
         w.Line($"var b = new {Http}.JsonBody(source);");
         w.Line($"global::System.Span<byte> name = stackalloc byte[{buffer}];");
         Locals(w, b);
         if (b.Envelope is not null) w.Line("bool found = false;");
         w.Line("try");
         w.Open("");
-        w.Line($"if (!b.ReadRootObject()) return {structural};");
+        w.Line("if (!b.ReadRootObject())");
+        w.Open("");
+        w.Line("b.ReadToEnd(); // JSON of another shape, unless the rest is malformed");
+        w.Line($"return {structural};");
+        w.Close();
         if (b.Envelope is not null)
         {
             w.Line("while (b.NextProperty())");
@@ -470,7 +475,7 @@ internal static class Emitter
         w.Close();
         w.Line("catch (global::System.Text.Json.JsonException)");
         w.Open("");
-        w.Line($"return {structural};");
+        w.Line($"return source.MalformedBody ?? {structural};");
         w.Close();
         if (b.Envelope is not null) w.Line($"if (!found) return {structural};");
         Validate(w, b, i => b.Fields[i].Error ?? fieldError, nested: false);

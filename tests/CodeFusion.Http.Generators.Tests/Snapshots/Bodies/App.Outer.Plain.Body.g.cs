@@ -11,12 +11,17 @@ partial class Outer
         internal static global::CodeFusion.ErrorReply? __BindBody(in global::CodeFusion.Http.BodySource source, out global::App.Outer.Plain value)
         {
             value = default;
+            if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? source.InvalidBody;
             var b = new global::CodeFusion.Http.JsonBody(source);
             global::System.Span<byte> name = stackalloc byte[24];
             global::CodeFusion.Http.BodyValue f0 = default;
             try
             {
-                if (!b.ReadRootObject()) return source.InvalidBody;
+                if (!b.ReadRootObject())
+                {
+                    b.ReadToEnd(); // JSON of another shape, unless the rest is malformed
+                    return source.InvalidBody;
+                }
                 while (b.NextProperty())
                 {
                     global::System.ReadOnlySpan<byte> n = b.PropertyName(name);
@@ -27,7 +32,7 @@ partial class Outer
             }
             catch (global::System.Text.Json.JsonException)
             {
-                return source.InvalidBody;
+                return source.MalformedBody ?? source.InvalidBody;
             }
             if (!f0.IsValue) return source.InvalidBody;
             value = new() { Flag = f0.BoolValue };

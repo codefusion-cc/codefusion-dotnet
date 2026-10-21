@@ -14,6 +14,12 @@ public readonly struct BodySource
     /// strings are unescaped into <paramref name="arena"/>. <paramref name="invalidBody"/> answers a body that isn't
     /// the JSON its struct describes, unless the struct names its own.</summary>
     public BodySource(byte[] buffer, int start, int length, IRequestArena arena, ErrorReply invalidBody)
+        : this(buffer, start, length, arena, invalidBody, null, null) { }
+
+    /// <summary><see cref="BodySource(byte[], int, int, IRequestArena, ErrorReply)"/>, with the app's replies to a body
+    /// that isn't JSON (<paramref name="malformedBody"/>) and to no body (<paramref name="missingBody"/>); null
+    /// leaves each to the next reply in line.</summary>
+    public BodySource(byte[] buffer, int start, int length, IRequestArena arena, ErrorReply invalidBody, ErrorReply? malformedBody, ErrorReply? missingBody)
     {
         ArgumentNullException.ThrowIfNull(buffer);
         ArgumentNullException.ThrowIfNull(arena);
@@ -25,6 +31,8 @@ public readonly struct BodySource
         Length = length;
         Arena = arena;
         InvalidBody = invalidBody;
+        MalformedBody = malformedBody;
+        MissingBody = missingBody;
     }
 
     internal byte[] Buffer { get; }
@@ -34,6 +42,15 @@ public readonly struct BodySource
 
     /// <summary>The app's reply to a body that isn't the JSON its struct describes.</summary>
     public ErrorReply InvalidBody { get; }
+
+    /// <summary>The app's reply to a body that isn't JSON at all, or null when it set none.</summary>
+    public ErrorReply? MalformedBody { get; }
+
+    /// <summary>The app's reply to a request without a body, or null when it set none.</summary>
+    public ErrorReply? MissingBody { get; }
+
+    /// <summary>The request has no body: none was sent, or it was empty.</summary>
+    public bool IsEmpty => Length == 0;
 }
 
 /// <summary>What a body field held.</summary>

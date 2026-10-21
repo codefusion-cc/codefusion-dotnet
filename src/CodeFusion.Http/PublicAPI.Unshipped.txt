@@ -18,7 +18,11 @@ CodeFusion.Http.BodyKind.Value = 3 -> CodeFusion.Http.BodyKind
 CodeFusion.Http.BodySource
 CodeFusion.Http.BodySource.BodySource() -> void
 CodeFusion.Http.BodySource.BodySource(byte[]! buffer, int start, int length, CodeFusion.IRequestArena! arena, CodeFusion.ErrorReply! invalidBody) -> void
+CodeFusion.Http.BodySource.BodySource(byte[]! buffer, int start, int length, CodeFusion.IRequestArena! arena, CodeFusion.ErrorReply! invalidBody, CodeFusion.ErrorReply? malformedBody, CodeFusion.ErrorReply? missingBody) -> void
 CodeFusion.Http.BodySource.InvalidBody.get -> CodeFusion.ErrorReply!
+CodeFusion.Http.BodySource.IsEmpty.get -> bool
+CodeFusion.Http.BodySource.MalformedBody.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.BodySource.MissingBody.get -> CodeFusion.ErrorReply?
 CodeFusion.Http.BodyValue
 CodeFusion.Http.BodyValue.BodyValue() -> void
 CodeFusion.Http.BodyValue.BoolValue.get -> bool
@@ -88,6 +92,10 @@ CodeFusion.Http.HttpAppErrors.InvalidTokenPayload.get -> CodeFusion.ErrorReply?
 CodeFusion.Http.HttpAppErrors.InvalidTokenPayload.set -> void
 CodeFusion.Http.HttpAppErrors.Log.get -> System.Action<CodeFusion.Http.HttpExchange!, System.Exception!>?
 CodeFusion.Http.HttpAppErrors.Log.set -> void
+CodeFusion.Http.HttpAppErrors.MalformedBody.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.HttpAppErrors.MalformedBody.set -> void
+CodeFusion.Http.HttpAppErrors.MissingBody.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.HttpAppErrors.MissingBody.set -> void
 CodeFusion.Http.HttpAppErrors.MissingToken.get -> CodeFusion.ErrorReply?
 CodeFusion.Http.HttpAppErrors.MissingToken.set -> void
 CodeFusion.Http.HttpAppErrors.NotFound.get -> CodeFusion.ErrorReply!

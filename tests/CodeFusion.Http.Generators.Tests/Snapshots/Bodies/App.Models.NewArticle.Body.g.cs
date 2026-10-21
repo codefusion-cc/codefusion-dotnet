@@ -9,6 +9,7 @@ partial struct NewArticle
     internal static global::CodeFusion.ErrorReply? __BindBody(in global::CodeFusion.Http.BodySource source, out global::App.Models.NewArticle value)
     {
         value = default;
+        if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? InvalidBody;
         var b = new global::CodeFusion.Http.JsonBody(source);
         global::System.Span<byte> name = stackalloc byte[66];
         global::CodeFusion.Http.BodyValue f0 = default;
@@ -29,7 +30,11 @@ partial struct NewArticle
         bool found = false;
         try
         {
-            if (!b.ReadRootObject()) return InvalidBody;
+            if (!b.ReadRootObject())
+            {
+                b.ReadToEnd(); // JSON of another shape, unless the rest is malformed
+                return InvalidBody;
+            }
             while (b.NextProperty())
             {
                 if (!global::System.MemoryExtensions.SequenceEqual(b.PropertyName(name), "article"u8))
@@ -72,7 +77,7 @@ partial struct NewArticle
         }
         catch (global::System.Text.Json.JsonException)
         {
-            return InvalidBody;
+            return source.MalformedBody ?? InvalidBody;
         }
         if (!found) return InvalidBody;
         if (!f0.IsRequiredText) return Invalid;

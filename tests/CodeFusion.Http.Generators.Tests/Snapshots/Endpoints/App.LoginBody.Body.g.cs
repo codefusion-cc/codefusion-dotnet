@@ -9,6 +9,7 @@ partial struct LoginBody
     internal static global::CodeFusion.ErrorReply? __BindBody(in global::CodeFusion.Http.BodySource source, out global::App.LoginBody value)
     {
         value = default;
+        if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? source.InvalidBody;
         var b = new global::CodeFusion.Http.JsonBody(source);
         global::System.Span<byte> name = stackalloc byte[48];
         global::CodeFusion.Http.BodyValue f0 = default;
@@ -16,7 +17,11 @@ partial struct LoginBody
         bool found = false;
         try
         {
-            if (!b.ReadRootObject()) return source.InvalidBody;
+            if (!b.ReadRootObject())
+            {
+                b.ReadToEnd(); // JSON of another shape, unless the rest is malformed
+                return source.InvalidBody;
+            }
             while (b.NextProperty())
             {
                 if (!global::System.MemoryExtensions.SequenceEqual(b.PropertyName(name), "user"u8))
@@ -41,7 +46,7 @@ partial struct LoginBody
         }
         catch (global::System.Text.Json.JsonException)
         {
-            return source.InvalidBody;
+            return source.MalformedBody ?? source.InvalidBody;
         }
         if (!found) return source.InvalidBody;
         if (!f0.IsRequiredText) return source.InvalidBody;

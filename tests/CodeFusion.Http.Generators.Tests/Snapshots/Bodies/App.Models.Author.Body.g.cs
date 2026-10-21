@@ -9,13 +9,18 @@ partial struct Author
     internal static global::CodeFusion.ErrorReply? __BindBody(in global::CodeFusion.Http.BodySource source, out global::App.Models.Author value)
     {
         value = default;
+        if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? source.InvalidBody;
         var b = new global::CodeFusion.Http.JsonBody(source);
         global::System.Span<byte> name = stackalloc byte[24];
         global::CodeFusion.Http.BodyValue f0 = default;
         global::CodeFusion.Http.BodyValue f1 = default;
         try
         {
-            if (!b.ReadRootObject()) return source.InvalidBody;
+            if (!b.ReadRootObject())
+            {
+                b.ReadToEnd(); // JSON of another shape, unless the rest is malformed
+                return source.InvalidBody;
+            }
             while (b.NextProperty())
             {
                 global::System.ReadOnlySpan<byte> n = b.PropertyName(name);
@@ -27,7 +32,7 @@ partial struct Author
         }
         catch (global::System.Text.Json.JsonException)
         {
-            return source.InvalidBody;
+            return source.MalformedBody ?? source.InvalidBody;
         }
         if (!f0.IsRequiredText) return source.InvalidBody;
         if (!f1.IsValue) return BadAge;

@@ -342,6 +342,12 @@ public sealed class HttpAppErrors
     /// for. 422 by default.</summary>
     public ErrorReply InvalidBody { get; set; } = Make(422, "invalid body");
 
+    /// <summary>stub</summary>
+    public ErrorReply? MalformedBody { get; set; }
+
+    /// <summary>stub</summary>
+    public ErrorReply? MissingBody { get; set; }
+
     /// <summary>A handler threw. 500 by default.</summary>
     public ErrorReply Internal { get; set; } = Make(500, "internal error");
 

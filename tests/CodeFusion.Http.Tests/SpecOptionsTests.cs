@@ -22,14 +22,18 @@ public class SpecOptionsTests
         return b;
     }
 
-    internal static async Task<Response> Send(HttpApp app, string method, string target, string? auth = null, string? body = null)
+    internal static Task<Response> Send(HttpApp app, string method, string target, string? auth = null, string? body = null) =>
+        Send(app, method, target, auth, body is null ? null : Encoding.UTF8.GetBytes(body));
+
+    /// <summary>One request on a new connection; a null body sends no Content-Length.</summary>
+    internal static async Task<Response> Send(HttpApp app, string method, string target, string? auth, byte[]? body)
     {
         using Client c = await Client.ConnectAsync(app.LocalEndPoint);
-        byte[] b = body is null ? [] : Encoding.UTF8.GetBytes(body);
-        await c.SendAsync($"{method} {target} HTTP/1.1\r\nHost: x\r\n"
+        string head = $"{method} {target} HTTP/1.1\r\nHost: x\r\n"
             + (auth is null ? "" : $"Authorization: {auth}\r\n")
-            + (body is null ? "" : $"Content-Length: {b.Length}\r\n")
-            + "\r\n" + (body ?? ""));
+            + (body is null ? "" : $"Content-Length: {body.Length}\r\n")
+            + "\r\n";
+        await c.SendAsync([.. Encoding.UTF8.GetBytes(head), .. body ?? []]);
         return await c.ReadAsync();
     }
 
@@ -280,6 +284,152 @@ public class SpecOptionsTests
         Assert.Equal(204, (await Send(app, "GET", "/required", "Token " + Token(b.JwtPrototype!))).Status);
     }
 
+    // ---- the body ----
+
+    /// <summary>Each body sent to POST /posts, and what it is: no body, not JSON, JSON of another shape, a bad field, or fine.</summary>
+    public static TheoryData<string, string?, string> Bodies() => new()
+    {
+        { "no body", null, "missing" },
+        { "Content-Length: 0", "", "missing" },
+        { "a space", " ", "malformed" },
+        { "a BOM alone", "{bom}", "malformed" },
+        { "an open brace", "{", "malformed" },
+        { "cut short", """{"body":"x" """, "malformed" },
+        { "cut in a string", """{"body":"x""", "malformed" },
+        { "something after it", """{"body":"x"} x""", "malformed" },
+        { "a brace too many", """{"body":"x"}}""", "malformed" },
+        { "an array cut short", "[1,", "malformed" },
+        { "a word cut short", "nul", "malformed" },
+        { "a bad escape", """{"body":"\x"}""", "malformed" },
+        { "a single quote", "{'body':'x'}", "malformed" },
+        { "a trailing comma", """{"body":"x",}""", "malformed" },
+        { "past the depth limit", "{deep}", "malformed" },
+        { "an array", "[]", "shape" },
+        { "a string", "\"text\"", "shape" },
+        { "null", "null", "shape" },
+        { "a number", "5", "shape" },
+        { "an array after a BOM", "{bom}[1]", "shape" },
+        { "no field", "{}", "field" },
+        { "a number field", """{"body":5}""", "field" },
+        { "an empty field", """{"body":""}""", "field" },
+        { "a field that isn't UTF-8", "{ff}", "field" },
+        { "fine", """{"body":"hi"}""", "ok" },
+        { "fine after a BOM", """{bom}{"body":"hi"}""", "ok" },
+        { "fine and deep", """{"x":{deep63},"body":"hi"}""", "ok" },
+    };
+
+    static byte[]? BodyBytes(string? template)
+    {
+        if (template is null) return null;
+        string deep63 = new string('[', 62) + new string(']', 62);
+        string text = template.Replace("{deep}", "{\"body\":" + new string('[', 64) + new string(']', 64) + "}", StringComparison.Ordinal)
+            .Replace("{deep63}", deep63, StringComparison.Ordinal);
+        byte[] b = Encoding.UTF8.GetBytes(text.Replace("{ff}", """{"body":"a?b"}""", StringComparison.Ordinal));
+        if (text.Contains("{ff}", StringComparison.Ordinal)) b[Array.IndexOf(b, (byte)'?')] = 0xFF;
+        return text.StartsWith("{bom}", StringComparison.Ordinal) ? [0xEF, 0xBB, 0xBF, .. b[5..]] : b;
+    }
+
+    static HttpApp BodyApp(Action<HttpAppErrors> errors)
+    {
+        HttpAppBuilder b = Builder();
+        errors(b.Errors);
+        HttpApp app = b.Build();
+        app.MapPost("/posts", static (NewPost p) => Reply.Created(new PostEcho(p.Body)));
+        app.MapPost("/wrapped", static (WrappedPost p) => Reply.Created(new PostEcho(p.Body)));
+        app.Start();
+        return app;
+    }
+
+    const string InvalidBody = """{"error":"invalid body"}""";
+
+    static (int, string) BodyOutcome(string outcome, ErrorReply? missing, ErrorReply? malformed) => outcome switch
+    {
+        "ok" => (201, """{"body":"hi"}"""),
+        "field" => (400, """{"error":"body is required"}"""),
+        "shape" => (422, InvalidBody),
+        "missing" when missing is not null => (missing.Status, Encoding.UTF8.GetString(missing.Body)),
+        "missing" or "malformed" when malformed is not null => (malformed.Status, Encoding.UTF8.GetString(malformed.Body)),
+        _ => (422, InvalidBody),
+    };
+
+    [Theory]
+    [MemberData(nameof(Bodies))]
+    public async Task EachBodyFailureHasItsOwnReply(string name, string? body, string outcome)
+    {
+        await using HttpApp app = BodyApp(e =>
+        {
+            e.MalformedBody = SpecErrors.Malformed;
+            e.MissingBody = SpecErrors.NoBody;
+        });
+        await using var check = new AppCheck(app);
+        Response r = await Send(app, "POST", "/posts", null, BodyBytes(body));
+        Assert.Equal(BodyOutcome(outcome, SpecErrors.NoBody, SpecErrors.Malformed), (r.Status, r.Text));
+        Assert.NotNull(name);
+    }
+
+    [Theory]
+    [MemberData(nameof(Bodies))]
+    public async Task UnsetBodyReasonsAnswerWithInvalidBodyAsBefore(string name, string? body, string outcome)
+    {
+        await using HttpApp app = BodyApp(_ => { });
+        await using var check = new AppCheck(app);
+        Response r = await Send(app, "POST", "/posts", null, BodyBytes(body));
+        Assert.Equal(BodyOutcome(outcome, null, null), (r.Status, r.Text));
+        Assert.Null(app.Errors.MalformedBody);
+        Assert.Null(app.Errors.MissingBody);
+        Assert.NotNull(name);
+    }
+
+    [Theory]
+    [MemberData(nameof(Bodies))]
+    public async Task NoBodyIsMalformedUnlessTheAppSaysOtherwise(string name, string? body, string outcome)
+    {
+        await using HttpApp app = BodyApp(e => e.MalformedBody = SpecErrors.Malformed);
+        await using var check = new AppCheck(app);
+        Response r = await Send(app, "POST", "/posts", null, BodyBytes(body));
+        Assert.Equal(BodyOutcome(outcome, null, SpecErrors.Malformed), (r.Status, r.Text));
+        Assert.NotNull(name);
+    }
+
+    // A struct's own InvalidBody answers a body of another shape, and a malformed or missing one when the app set no
+    // reply of its own for that: the reason the app names wins over the place.
+    [Theory]
+    [InlineData(false, null, 422, """{"error":"not a post"}""")]
+    [InlineData(false, "", 422, """{"error":"not a post"}""")]
+    [InlineData(false, """{"post":""", 422, """{"error":"not a post"}""")]
+    [InlineData(false, """{"other":1}""", 422, """{"error":"not a post"}""")]
+    [InlineData(true, null, 400, """{"error":"no body"}""")]
+    [InlineData(true, "", 400, """{"error":"no body"}""")]
+    [InlineData(true, """{"post":""", 400, """{"error":"malformed JSON body"}""")]
+    [InlineData(true, """{"post":{"body":"x"}""", 400, """{"error":"malformed JSON body"}""")]
+    [InlineData(true, """{"other":1}""", 422, """{"error":"not a post"}""")]
+    [InlineData(true, """{"post":[]}""", 422, """{"error":"not a post"}""")]
+    [InlineData(true, "[]", 422, """{"error":"not a post"}""")]
+    [InlineData(true, """{"post":{"body":5}}""", 422, InvalidBody)]
+    [InlineData(true, """{"post":{"body":"hi"}}""", 201, """{"body":"hi"}""")]
+    public async Task AStructsOwnInvalidBodyGivesWayToTheAppsReasons(bool reasons, string? body, int status, string text)
+    {
+        await using HttpApp app = BodyApp(e =>
+        {
+            if (!reasons) return;
+            e.MalformedBody = SpecErrors.Malformed;
+            e.MissingBody = SpecErrors.NoBody;
+        });
+        await using var check = new AppCheck(app);
+        Response r = await Send(app, "POST", "/wrapped", null, BodyBytes(body));
+        Assert.Equal((status, text), (r.Status, r.Text));
+    }
+
+    [Fact]
+    public void ABodySourceMadeWithoutReasonsHasNone()
+    {
+        var arena = new JwtClaimTests.CountingArena();
+        var s = new BodySource([1, 2], 0, 2, arena, SpecErrors.NoBody);
+        Assert.Equal((false, (ErrorReply?)null, (ErrorReply?)null), (s.IsEmpty, s.MalformedBody, s.MissingBody));
+        var t = new BodySource([], 0, 0, arena, SpecErrors.NoBody, SpecErrors.Malformed, null);
+        Assert.Equal((true, SpecErrors.Malformed, (ErrorReply?)null), (t.IsEmpty, t.MalformedBody, t.MissingBody));
+    }
+
     [Fact]
     public void AViewerMadeByHandHasNoClaims()
     {
@@ -297,3 +447,28 @@ internal readonly record struct Named(long Id, Utf8 Username);
 internal readonly record struct Has(bool Found, Utf8 Username);
 
 internal readonly record struct Issued(Utf8 Token);
+
+internal readonly record struct PostEcho(Utf8 Body);
+
+internal static class SpecErrors
+{
+    public static readonly ErrorReply Malformed = new(400, """{"error":"malformed JSON body"}"""u8);
+    public static readonly ErrorReply NoBody = new(400, """{"error":"no body"}"""u8);
+    public static readonly ErrorReply BodyRequired = new(400, """{"error":"body is required"}"""u8);
+    public static readonly ErrorReply NotAPost = new(422, """{"error":"not a post"}"""u8);
+}
+
+internal partial struct NewPost
+{
+    [BodyError(nameof(Required))] public Utf8 Body;
+
+    static ErrorReply Required => SpecErrors.BodyRequired;
+}
+
+[JsonEnvelope("post")]
+internal partial struct WrappedPost
+{
+    public Utf8 Body;
+
+    static ErrorReply InvalidBody => SpecErrors.NotAPost;
+}
