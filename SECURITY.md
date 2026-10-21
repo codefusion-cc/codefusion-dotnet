@@ -35,7 +35,8 @@ Fixes go into the latest release only.
   behind such a request is seen on Linux and macOS only), so a handler that passes the token on stops work nobody
   waits for, behind a proxy too. The cancel's callbacks never run on the heartbeat's thread, so a handler can't stall
   the timeouts above. After a close the answer is still sent if the handler finishes; after a reset it is dropped.
-- **Event loops** (`HttpTransport.EventLoop`, Linux and macOS). Connections share their loop's thread.
+- **Event loops** (`HttpTransport.EventLoop`: the default on Linux, an option on macOS). Connections share their
+  loop's thread.
   - A handler that blocks before its first await holds every connection on its loop until it returns.
   - One connection gets at most 16 reads and 16 handler calls per wake-up of its loop. Past either it waits until
     the loop's other ready connections have had theirs and their answers are sent. So a neighbour waits at most for

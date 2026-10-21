@@ -143,8 +143,10 @@ connection and Kestrel about 17.6 KB (`HttpIdleBenchmarks`, measured on the cont
 
 ## Event loops on Linux and macOS
 
-`HttpServerOptions.Transport = HttpTransport.EventLoop` swaps .NET's sockets for the server's own threads, each waiting
-on epoll (Linux) or kqueue (macOS) for its share of the connections (`EventLoops`, one per core by default). A
+On Linux the server runs on its own threads by default (`HttpTransport.EventLoop`), each waiting on epoll for its share
+of the connections (`EventLoops`, one per core); on macOS `Transport = HttpTransport.EventLoop` does the same with
+kqueue, and everywhere else .NET's sockets serve. On 8 cores it measured 20% more plaintext requests, 42% more JSON
+and 9% more database ones than .NET's sockets (TechEmpower's tests). A
 request then costs one receive call instead of two, and its handler runs on the loop's thread until it first awaits,
 with no hop through the runtime's socket thread or the thread pool. Every answer finished on a loop's thread waits
 for the batch's actions (`OnEventLoopBatch`, and the app's `IServiceRegistry.OnEventLoopBatch` registrations), where a
@@ -157,8 +159,10 @@ writes in groups), which is correct but later than the loop's batch. On Linux ev
 on the port itself (SO_REUSEPORT) and accepts its own connections, unless `ListenerPerLoop` is off. Idle connections
 still hold no buffer.
 
-The loop's thread is shared, so a handler that blocks it holds up every connection on that loop: keep the default
-`Sockets` for code that blocks. The rest is guarded: one connection gets at most 16 reads and 16 handler calls per
+The loop's thread is shared, so choose `Transport = HttpTransport.Sockets` when handlers block before their first
+await (one that blocks holds up every connection on its loop), or when the p99 under a mixed load matters more than
+throughput (a slow request holds its loop's neighbours, where sockets spread them over the thread pool). The rest is
+guarded: one connection gets at most 16 reads and 16 handler calls per
 wake-up before its neighbours' turn, `Aborted`'s callbacks run on the thread pool, and a stop gives a loop a handler
 holds a second, as it gives the handler.
 

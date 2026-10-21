@@ -1016,7 +1016,9 @@ running. Descriptors are `SafeFileHandle`s, so an `Add` racing the end gets `Obj
 closes quietly) rather than a reused descriptor; a refused `epoll_ctl` is an `IOException`, reported as a failed
 connection. `struct epoll_event` is 12 bytes on x86 and x86-64 (packed) and 16 elsewhere; CI runs the suite on both.
 
-A handler that blocks its thread holds up every connection on its loop: Sockets stays the default.
+A handler that blocks its thread holds up every connection on its loop. The default became EventLoop on Linux once
+the 8-core TechEmpower run measured it (plaintext +20%, json +42%, db and fortunes +9% over Sockets); Sockets stays the
+default elsewhere, and the choice for handlers that block or apps that put the p99 under a mixed load first.
 
 ### Direct calls, batches and listeners (later on the same branch)
 

@@ -372,9 +372,11 @@ public sealed class EventLoopTests
     }
 
     [Fact]
-    public void TheLoopCountIsChecked()
+    public void TheDefaultsAreTheEventLoopOnLinuxOnlyAndTheLoopCountIsChecked()
     {
-        Assert.Equal(HttpTransport.Sockets, new HttpServerOptions().Transport);
+        // measured: the event loop wins on Linux, one loop per core (docs/benchmarks); Sockets everywhere else
+        Assert.Equal(OperatingSystem.IsLinux() ? HttpTransport.EventLoop : HttpTransport.Sockets, new HttpServerOptions().Transport);
+        Assert.True(new HttpServerOptions().ListenerPerLoop);
         Assert.Equal(Environment.ProcessorCount, new HttpServerOptions().EventLoops);
         Assert.Throws<ArgumentException>(() => new HttpServer(new HttpServerOptions { EventLoops = 0 }, Path));
         Assert.Throws<ArgumentException>(() => new HttpServer(new HttpServerOptions { Transport = (HttpTransport)7 }, Path));
