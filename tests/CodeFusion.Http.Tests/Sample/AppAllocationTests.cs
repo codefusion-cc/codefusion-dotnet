@@ -44,10 +44,40 @@ public class AppAllocationTests(ITestOutputHelper output)
         { "error reply", 1 },
         { "no route: 404", 1 },
         { "invalid token: 401", 1 },
+        { "feed: post with a Bearer token and a claim, 201", 1 },
+        { "feed: post with a Bearer token and a claim, 201", 8 },
+        { "feed: like after auth, 200", 1 },
+        { "feed: no bearer token, 401", 1 },
+        { "feed: invalid token, 401", 1 },
+        { "feed: invalid token payload, 401", 1 },
+        { "feed: malformed body, 400", 1 },
+        { "feed: no body, 400", 1 },
+        { "feed: invalid post id after auth, 400", 1 },
+        { "feed: post id out of range, 400", 1 },
     };
+
+    static readonly string FeedToken = "Bearer " + FeedAppTests.Token(user: 12345);
+
+    static string Feed(string method, string target, string? auth, string? body)
+    {
+        byte[] b = body is null ? [] : Encoding.UTF8.GetBytes(body);
+        return $"{method} {target} HTTP/1.1\r\nHost: localhost:3000\r\nUser-Agent: k6/0.50\r\n"
+            + (auth is null ? "" : $"Authorization: {auth}\r\n")
+            + (body is null ? "" : $"Content-Type: application/json\r\nContent-Length: {b.Length}\r\n")
+            + "\r\n" + (body ?? "");
+    }
 
     static string RequestFor(string name) => name switch
     {
+        "feed: post with a Bearer token and a claim, 201" => Feed("POST", "/posts", FeedToken, """{"body":"  hello \"world\" é "}"""),
+        "feed: like after auth, 200" => Feed("POST", "/posts/7/like", FeedToken, ""),
+        "feed: no bearer token, 401" => Feed("POST", "/posts", "Token " + FeedToken[7..], """{"body":"x"}"""),
+        "feed: invalid token, 401" => Feed("POST", "/posts", FeedToken[..^4] + "AAAA", """{"body":"x"}"""),
+        "feed: invalid token payload, 401" => Feed("POST", "/posts", "Bearer " + JwtClaimTests.Signed(System.Text.Encoding.UTF8.GetBytes($$"""{"sub":"0","username":"jake","exp":{{DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 3600}}}"""), secret: FeedApp.Secret), """{"body":"x"}"""),
+        "feed: malformed body, 400" => Feed("POST", "/posts", FeedToken, """{"body":"x"""),
+        "feed: no body, 400" => Feed("POST", "/posts", FeedToken, ""),
+        "feed: invalid post id after auth, 400" => Feed("POST", "/posts/abc/like", FeedToken, ""),
+        "feed: post id out of range, 400" => Feed("GET", "/posts/0", null, null),
         "route, query, viewer, singleton, JSON" => Request("GET", "/api/articles/how-to-train-your-dragon?tag=dragons&by=jake+o%27&limit=7"),
         "body with escapes and tags, token issued into the arena" => Request("POST", "/api/articles",
             """{"article":{"title":"How to \"train\" your dragon","description":"Ever wonder how?","tagList":["dragons","training","é"],"meta":{"pinned":true,"score":2.5,"rank":3},"count":12}}"""),
@@ -65,7 +95,7 @@ public class AppAllocationTests(ITestOutputHelper output)
     public async Task KeepAliveRequestsAllocateNothing(string name, int connections)
     {
         Assert.SkipWhen(AllocationTests.Debugger(), "Debug builds make every async method's state machine a class: run in Release");
-        await using HttpApp app = SampleApp.Build();
+        await using HttpApp app = name.StartsWith("feed:", StringComparison.Ordinal) ? FeedApp.Build() : SampleApp.Build();
         await using var check = new AppCheck(app);
         app.Start();
         byte[] request = Encoding.UTF8.GetBytes(RequestFor(name));
@@ -75,6 +105,7 @@ public class AppAllocationTests(ITestOutputHelper output)
         {
             sockets[i] = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
             sockets[i].Connect(app.LocalEndPoint);
+            if (name.StartsWith("feed: like", StringComparison.Ordinal)) AllocationTests.FirstResponseLength(sockets[i], request); // the first like is a 201, the rest 200s
             responseLength[i] = AllocationTests.FirstResponseLength(sockets[i], request);
         }
 

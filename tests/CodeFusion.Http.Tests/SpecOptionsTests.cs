@@ -302,6 +302,20 @@ public class SpecOptionsTests
         { "an array cut short", "[1,", "malformed" },
         { "a word cut short", "nul", "malformed" },
         { "a bad escape", """{"body":"\x"}""", "malformed" },
+        { "a raw control character in a string", "{ctl}", "malformed" },
+        { "a raw tab in a string", "{tab}", "malformed" },
+        { "a raw DEL in a string", "{del}", "ok" },
+        { "a leading zero", """{"n":01,"body":"hi"}""", "malformed" },
+        { "a bare minus", """{"n":-,"body":"hi"}""", "malformed" },
+        { "a point without digits", """{"n":1.,"body":"hi"}""", "malformed" },
+        { "an exponent without digits", """{"n":1e,"body":"hi"}""", "malformed" },
+        { "a comment", """{"body":"hi"} // x""", "malformed" },
+        { "a short unicode escape", """{"body":"\u12"}""", "malformed" },
+        { "a lone surrogate escape", """{"x":"\ud800","body":"hi"}""", "ok" },
+        { "numbers of every form", """{"n":[0,-0,12,-3.25,1e5,1E+5,2e-3,0.5e10],"body":"hi"}""", "ok" },
+        { "literals", """{"n":[true,false,null],"body":"hi"}""", "ok" },
+        { "every escape", """{"body":"hi","e":"\"\\\/\b\f\n\r\t\u00e9"}""", "ok" },
+        { "whitespace everywhere", " \t\r\n{ \"body\" : \"hi\" , \"n\" : [ 1 , 2 ] } \n", "ok" },
         { "a single quote", "{'body':'x'}", "malformed" },
         { "a trailing comma", """{"body":"x",}""", "malformed" },
         { "past the depth limit", "{deep}", "malformed" },
@@ -317,14 +331,20 @@ public class SpecOptionsTests
         { "fine", """{"body":"hi"}""", "ok" },
         { "fine after a BOM", """{bom}{"body":"hi"}""", "ok" },
         { "fine and deep", """{"x":{deep63},"body":"hi"}""", "ok" },
+        { "fine at depth 64", """{"x":{deep64},"body":"hi"}""", "ok" },
     };
 
     static byte[]? BodyBytes(string? template)
     {
         if (template is null) return null;
         string deep63 = new string('[', 62) + new string(']', 62);
+        string deep64 = new string('[', 63) + new string(']', 63);
         string text = template.Replace("{deep}", "{\"body\":" + new string('[', 64) + new string(']', 64) + "}", StringComparison.Ordinal)
-            .Replace("{deep63}", deep63, StringComparison.Ordinal);
+            .Replace("{deep63}", deep63, StringComparison.Ordinal)
+            .Replace("{deep64}", deep64, StringComparison.Ordinal)
+            .Replace("{ctl}", "{\"body\":\"a\u0001b\"}", StringComparison.Ordinal)
+            .Replace("{tab}", "{\"body\":\"a\tb\"}", StringComparison.Ordinal)
+            .Replace("{del}", "{\"body\":\"hi\",\"x\":\"\u007f\"}", StringComparison.Ordinal);
         byte[] b = Encoding.UTF8.GetBytes(text.Replace("{ff}", """{"body":"a?b"}""", StringComparison.Ordinal));
         if (text.Contains("{ff}", StringComparison.Ordinal)) b[Array.IndexOf(b, (byte)'?')] = 0xFF;
         return text.StartsWith("{bom}", StringComparison.Ordinal) ? [0xEF, 0xBB, 0xBF, .. b[5..]] : b;

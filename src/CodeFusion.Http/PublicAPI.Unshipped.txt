@@ -186,6 +186,7 @@ CodeFusion.Http.IEndpointRouteBuilder.MapGroup(string! prefix) -> CodeFusion.Htt
 CodeFusion.Http.IReplySender<T>
 CodeFusion.Http.IReplySender<T>.Send(T reply, CodeFusion.Http.RequestContext! context) -> System.Threading.Tasks.ValueTask
 CodeFusion.Http.JsonBody
+CodeFusion.Http.JsonBody.IsWellFormed() -> bool
 CodeFusion.Http.JsonBody.JsonBody() -> void
 CodeFusion.Http.JsonBody.JsonBody(in CodeFusion.Http.BodySource source) -> void
 CodeFusion.Http.JsonBody.NextProperty() -> bool

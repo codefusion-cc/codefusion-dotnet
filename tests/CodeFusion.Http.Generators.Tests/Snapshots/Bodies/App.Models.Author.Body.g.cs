@@ -11,6 +11,7 @@ partial struct Author
         value = default;
         if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? source.InvalidBody;
         var b = new global::CodeFusion.Http.JsonBody(source);
+        if (!b.IsWellFormed()) return source.MalformedBody ?? source.InvalidBody;
         global::System.Span<byte> name = stackalloc byte[24];
         global::CodeFusion.Http.BodyValue f0 = default;
         global::CodeFusion.Http.BodyValue f1 = default;

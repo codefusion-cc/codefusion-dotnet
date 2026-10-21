@@ -189,8 +189,10 @@ reset it is dropped (`x.IsAborted`). A close behind a pipelined request is seen 
 `AllocationTests` counts every byte the whole process allocates (`GC.GetTotalAllocatedBytes`) over thousands of
 keep-alive requests after warm-up, with sync and async handlers, on 1 and 8 connections: 0 B per request.
 `AppAllocationTests` does the same for generated endpoints: route values, the query, bodies with escapes and lists,
-tokens issued into the arena, async handlers whose waits end on other threads, replies whose writes wait, 401 and 404. A new
-connection object (about 1 KB) is made only when the pool of 4,096 is empty.
+tokens issued into the arena, async handlers whose waits end on other threads, replies whose writes wait, 401 and 404,
+and the feed sample (`FeedApp`): Bearer tokens with a claim read in the handler, each 401 reason, a malformed body and
+no body, route values out of range before and after auth. A malformed body costs no exception: the binder checks its
+syntax first. A new connection object (about 1 KB) is made only when the pool of 4,096 is empty.
 
 Against Kestrel answering the same JSON (BenchmarkDotNet short run, load client in the same process, Apple M-series
 with 8 cores shared with other work; CPU per request is the whole process's, the client's share included):

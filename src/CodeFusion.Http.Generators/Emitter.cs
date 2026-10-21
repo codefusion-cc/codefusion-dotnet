@@ -448,6 +448,7 @@ internal static class Emitter
         w.Line("value = default;");
         w.Line($"if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? {structural};");
         w.Line($"var b = new {Http}.JsonBody(source);");
+        w.Line($"if (!b.IsWellFormed()) return source.MalformedBody ?? {structural};");
         w.Line($"global::System.Span<byte> name = stackalloc byte[{buffer}];");
         Locals(w, b);
         if (b.Envelope is not null) w.Line("bool found = false;");

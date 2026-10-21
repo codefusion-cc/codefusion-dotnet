@@ -849,6 +849,7 @@ Each test was red first: on a stub of the API that compiled but didn't do it.
 | one 401 body for every reason | `HttpAppErrors.MissingToken`, `InvalidToken`, `InvalidTokenPayload`, null by default | `SpecOptionsTests.EachRefusalHasItsOwnBody` (16 headers against a required and an optional endpoint: none, empty, spaces, another scheme, its case, the scheme alone, two spaces, not a JWT, forged, expired, bad sub, no claim, a claim of the wrong type, expired with a bad payload, valid), `UnsetReasonsAnswerWithUnauthorizedAsBefore`, `AnUnsetPayloadReasonAnswersAsAnInvalidToken`, `TheDefault401IsTheSameBytesForEveryReason` | 16 of 39 on properties that dispatch didn't read |
 | a body that isn't JSON and no body were the 422 of a body of another shape | `HttpAppErrors.MalformedBody`, `MissingBody`; `BodySource.MalformedBody`, `MissingBody`, `IsEmpty` and a constructor that takes them | `SpecOptionsTests.EachBodyFailureHasItsOwnReply`, `UnsetBodyReasonsAnswerWithInvalidBodyAsBefore`, `NoBodyIsMalformedUnlessTheAppSaysOtherwise` (27 bodies each: none, empty, a space, a BOM alone, cut short in five ways, trailing bytes, a bad escape, single quotes, a trailing comma, depth 65 and 63, every non-object root, missing and bad fields, raw invalid UTF-8 in a string), `AStructsOwnInvalidBodyGivesWayToTheAppsReasons`; the generator's snapshots | 34 of 134, among them `[1,`, which today's binder answered as another shape without reading on |
 | a route value that didn't bind was the app's 404, and nothing bounded one | `HttpAppErrors.InvalidRouteValue` (null: `NotFound`), `EndpointBuilder.WithInvalidRouteValue`; `[Range]` on a `long` or `int` route parameter; `RequestContext.RejectRouteValue` for the generated code | `SpecOptionsTests.ARouteValueThatDoesntBindGetsTheAppsReply` (23 paths: 0, -1, `+1`, `1.5`, `1e3`, `0x10`, spaces escaped either side, one past a long, Arabic-Indic and fullwidth digits, `%31`, leading zeros, int bounds and one past), `UnsetARouteValueThatDoesntBindIsANotFoundAsBefore`, `AuthIsCheckedBeforeTheRouteValue`, `AnEndpointCanNameItsOwnReply`, `AnEndpointsReplyIsCheckedWhenItIsSet`; `SnapshotTests.RouteValues`, `DiagnosticTests.RouteValueRangesItCantUse` and `RouteValueRangesItUses` | 23 of 170 on a stub; 7 of 11 diagnostic cases with the analysis taken out |
+| the feed API itself | `tests/CodeFusion.Http.Tests/Sample/FeedApp.cs`: the spec on these options alone, with an in-memory store | `FeedAppTests` (the spec's error table row by row: 15 auth failures on two endpoints, auth before the id, every body failure, trimming and the 500-character limit, likes); 10 `AppAllocationTests` cases | 1,176 B per request for a malformed body: a `JsonException` each |
 
 What it decided:
 
@@ -881,10 +882,20 @@ What it decided:
   `[Range]` emits the same check as before. A `[Range]` on a `Utf8` route value, one the generator can't read, and
   one that leaves no value of digits are CFH0103. The reply is the endpoint's, then the app's, then `NotFound`, one
   `??` chain in `RejectRouteValue`. Auth runs in the dispatcher before the endpoint binds anything, as before.
+- A malformed body cost a `JsonException` (1,176 B per request in `AppAllocationTests`), as it had since the binders
+  were written; it mattered once a malformed body had its own reply. The binder now checks the body's syntax first,
+  without throwing (`JsonSyntax`, about 150 lines, one pass), and answers a malformed body before the reader sees it.
+  The check is never stricter than the reader: `JsonSyntaxTests` (60 cases, 25,000 generated inputs, depth 63 to
+  1,000) and the `json-syntax` fuzz target hold them to the same verdict, and the binder keeps its `catch` for
+  anything the check lets through. Broken on purpose (leading zeros taken, the depth limit one off), the property
+  test failed. A well-formed body is now read twice; nothing was measured for it here, so no figure is claimed.
+- `FeedApp` is the proof that the spec needs nothing app-specific: it reads no header and parses no id itself. What
+  it still does by hand is the spec's own: trimming the post and counting its characters, which copies the trimmed
+  text into the arena because `Utf8` has no slice.
 
 ## Fuzzing (tests/CodeFusion.Fuzz)
 
-Coverage-guided fuzzing of everything that reads network bytes: 11 SharpFuzz targets (the table is in
+Coverage-guided fuzzing of everything that reads network bytes: 13 SharpFuzz targets (the table is in
 `tests/CodeFusion.Fuzz/README.md`). Each throws when an invariant breaks, and the same `Run` serves three engines:
 
 - `dotnet test`: `Corpus/<target>/` (551 seeds taken from the existing tests' inputs, plus the regressions below) and a
@@ -913,8 +924,9 @@ Directory.Packages.props: nothing else uses it.
 | 3 | `PgConnection.Fill` | `R` + length 0x3FFFFFFF (5 bytes) | allocated 1 GB before any of the message came; without TLS anyone on the path can send it | Fixed: the buffer doubles as the message's bytes fill it, up to its length. `PgProtocolTests.AnAnnouncedGigabyteIsNotAllocatedBeforeItArrives`, `AMessageLargerThanTheBufferGrowsItAsItArrives` |
 | 4 | `PgConnection.CheckParameter` | ParameterStatus `integer_datetimes\0` (a name, no value) | `ArgumentOutOfRangeException` from the value's slice, at startup and mid-query | Fixed: refused as malformed. `AParameterStatusWithoutAValueIsMalformed`, rows in `BadStartups` and `Malformed` |
 | 5 | `PgSettings.Parse` | `Port=9999999993` | `OverflowException` where callers expect `FormatException` | Fixed. `MalformedSettingsAreRefused` rows |
+| 6 | `Jwt` payload and header (`jwt-claims`, on its first replay) | `{"sub":"2","user\u006eame":"","exp":1700000600}+`, and a 0xBF byte after the object | taken: the reader stopped at the root object's end and never read what followed, so a signed payload or header with trailing bytes verified. Only the secret's holder could make one, and every token issued here ends at its `}` | Fixed: whatever follows must be whitespace, as `JsonDocument` requires. `JwtClaimTests.AnythingAfterThePayloadOrHeaderMakesTheTokenInvalid`, `ARawByteAfterThePayloadIsInvalid` |
 
-All five were red before their fix. Each minimized input is in `Corpus/` as `regression.*`. Nothing committed in either tree.
+All six were red before their fix. Each minimized input is in `Corpus/` as `regression.*`. Nothing committed in either tree.
 
 Seen, not changed then: `PgRow.GetUnixMicroseconds` added the 1970-to-2000 offset unchecked, so a value in Postgres's
 last 30 years wrapped silently. Fixed with the Postgres client's review fixes.

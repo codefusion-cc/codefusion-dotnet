@@ -10,6 +10,8 @@ invariant breaks; the same targets run under libFuzzer and in the test suite.
 | `http-kestrel` | the same bytes through Kestrel's HTTP/1.1 connection, in process | where both take the request: same method, decoded path, query, body and end byte. Where one refuses, the class is recorded, not failed |
 | `json-body` | the sample app's generated body binders (`NewArticle`, `Login`) | no exception; a 4xx or a body that meets the type's rules; invalid JSON never binds; texts are UTF-8 |
 | `json-endpoint` | the sample app over loopback: `POST /api/articles`, `/api/users/login`, `/api/slow` | never a 500 or a logged exception; the reply is JSON |
+| `json-syntax` | `JsonSyntax.IsValid`, the binders' exception-free check of a body | the same verdict as `Utf8JsonReader` with the binders' options |
+| `jwt-claims` | the bytes as a signed token's payload through `Jwt.Check`, with a required `username` of at most 64 bytes | no exception; `Verify` agrees; what `JsonDocument` can't parse is invalid; a valid token's `sub` and `username` are the last of each as `JsonDocument` reads them; a token past 4 KB is invalid |
 | `pg-row` | `PgRow.Parse` and every getter | only `PgConnectionException`, and `InvalidCastException` from a getter; columns tile the row |
 | `pg-error` | `PgConnection.ParseError` | only `PgConnectionException` |
 | `pg-startup` | `PgConnection.Open` against a transport that replies with the bytes | only `PgConnectionException` or the server's `PgException`; no more memory than the bytes justify |
