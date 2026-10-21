@@ -14,8 +14,10 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="CodeFusion.Core.Tests" />
-    <!-- Its tests act as an event loop's thread (EventLoopThread.Enter), as only a server's loops do otherwise. -->
+    <!-- The SQLite tests and their crash child act as an event loop's thread (EventLoopThread.Enter), as only a
+         server's loops do otherwise. -->
     <InternalsVisibleTo Include="CodeFusion.Data.Sqlite.Tests" />
+    <InternalsVisibleTo Include="CodeFusion.Data.Sqlite.CrashChild" />
     <!-- The packages are released together: they share the internal ValueTask source core and Utf8List's unchecked
          constructor. -->
     <InternalsVisibleTo Include="CodeFusion.Http" />
