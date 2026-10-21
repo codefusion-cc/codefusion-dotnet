@@ -929,6 +929,19 @@ What it decided:
   including `int.MaxValue`, JSON whitespace only, a property test against `Span.Trim`, no allocation; 21 of 48 red
   on a stub).
 
+### Second security review (d1a1f85)
+
+Twelve findings: 0 critical, 0 high, 1 medium, 6 low, 5 info. `JsonCursor` held: no divergence from `Utf8JsonReader`
+was found, and no invalid UTF-8 reaches a handler or a response. Each fix's test was red on the code before it,
+except where the row says the test is a guard.
+
+| # | Finding | Fix | Test | Red before |
+|---|---|---|---|---|
+| 1 | A `Viewer` read from another thread checked the generation once, then read the claim's place: it could read the next request's place, or a torn one | a seqlock: the generation is read (`Volatile.Read`) before and after the place, with a full fence between; `HandlerDone` bumps it first with `Interlocked.Increment` | `SpecOptionsTests.AViewerReadFromAnotherThreadThrowsOrReadsItsOwnRequest`: 16 threads read a kept `Viewer` for 3 s while one connection alternates alice and bob | 1,891 and 55,215 bad reads in two runs (absent, bob's place, `ArgumentOutOfRangeException`); 0 in three runs after |
+| 5 | A `Viewer` made by hand read every claim as absent, so a typo passed its unit test | every name throws on a `Viewer` the dispatcher didn't make | `AViewerMadeByHandHasNoClaimsSoEveryNameThrows` | no exception |
+| 12 | The claim ranges started at 0, "present at 0, length 0" | they start at -1 | the claim tests, as a guard | (hardening) |
+| 2 | `Issue` held only the payload to the token's limit before asking the arena: a 2,950 to 4,010-byte value took 4 to 5 KB, then was refused | the exact token, numbers at their real length, is checked before anything is written or allocated | `ATokenPastItsLimitIsRefusedBeforeTheArenaIsAsked` (a 3,200-byte value at `MaxBytes` 4096), `ATokenIsRefusedExactlyWhenItWouldPassTheLimit` (2,900 to 3,100 bytes against the formula, a guard) | 1 allocation |
+| 9 | `Issue` wrote `"sub":"0"` and `"sub":"-5"`, which every request then refused | a user ≤ 0 throws `ArgumentOutOfRangeException`, before the arena | `AUserTheVerifierWouldRefuseIsntIssued` (0, -5, `long.MinValue`) | issued |
 ## Fuzzing (tests/CodeFusion.Fuzz)
 
 Coverage-guided fuzzing of everything that reads network bytes: 13 SharpFuzz targets (the table is in

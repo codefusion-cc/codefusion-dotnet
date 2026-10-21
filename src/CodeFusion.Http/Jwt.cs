@@ -154,12 +154,15 @@ public sealed class Jwt : IRequestScoped
 
     /// <summary>A token for <paramref name="userId"/> carrying <paramref name="claims"/>, the declared claims' values
     /// in their order (or none, when none is required), issued now in the request's arena: valid until the response
-    /// has been sent. Only on the instance a handler was given.</summary>
+    /// has been sent. Only on the instance a handler was given. A value, user or token the verifier would refuse throws
+    /// before the arena is asked for anything.</summary>
     public Utf8 Issue(long userId, params ReadOnlySpan<Utf8> claims)
     {
         if (_response is null) throw new InvalidOperationException("only the Jwt a handler is given can issue a token into its request's arena");
-        ArenaBytes dest = _response.Arena.Allocate(MaxIssuedBytesWith(claims));
-        int n = Issue(userId, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), claims, dest.Span);
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        int size = ExactPayload(userId, now, claims); // everything is checked before the arena is asked
+        ArenaBytes dest = _response.Arena.Allocate(ExactTokenBytes(size));
+        int n = Issue(userId, now, claims, dest.Span);
         return dest.Text(0, n);
     }
 
@@ -217,6 +220,24 @@ public sealed class Jwt : IRequestScoped
         return n;
     }
 
+    /// <summary>The payload's exact bytes for this user, time and these claims, once all are checked: a positive user,
+    /// claims as <see cref="PayloadBytes"/> takes them, and a whole token no longer than <see cref="MaxTokenBytes"/>.</summary>
+    int ExactPayload(long userId, long now, ReadOnlySpan<Utf8> claims)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(userId); // the verifier refuses a sub that isn't positive
+        int n = PayloadBytes(claims) - MaxPayloadBytes + 24 + Digits(userId) + Digits(now) + Digits(now + _ttl);
+        if (ExactTokenBytes(n) > MaxTokenBytes) throw TooLong();
+        return n;
+    }
+
+    static int ExactTokenBytes(int payload) => 36 + 1 + Base64Url.GetEncodedLength(payload) + 1 + 43;
+
+    static int Digits(long v)
+    {
+        Span<byte> text = stackalloc byte[20];
+        return Number(v, text);
+    }
+
     static ArgumentException TooLong() =>
         new($"the claims make a token longer than {MaxTokenBytes} bytes, which no verifier here takes", "claims");
 
@@ -224,13 +245,14 @@ public sealed class Jwt : IRequestScoped
     /// Writes a token for <paramref name="userId"/>, issued at <paramref name="now"/> (Unix seconds), into
     /// <paramref name="dest"/> (at least <see cref="MaxIssuedBytesWith"/>) and returns its length.
     /// <paramref name="claims"/> are the declared claims' values in their order, or none when none is required; each
-    /// must be UTF-8 within its claim's lengths, and the token no longer than <see cref="MaxTokenBytes"/>, as the
-    /// verifier would require. Every declared claim is written when values are passed.
+    /// must be UTF-8 within its claim's lengths, the user positive, and the whole token no longer than
+    /// <see cref="MaxTokenBytes"/>, as the verifier would require; all of it is checked before anything is written.
+    /// Every declared claim is written when values are passed.
     /// </summary>
     public int Issue(long userId, long now, ReadOnlySpan<Utf8> claims, Span<byte> dest)
     {
-        int size = PayloadBytes(claims); // checks the claims first
-        if (dest.Length < TokenBytes(size)) throw new ArgumentException("dest is too small", nameof(dest));
+        int size = ExactPayload(userId, now, claims); // checks the user, the claims and the token's length first
+        if (dest.Length < ExactTokenBytes(size)) throw new ArgumentException("dest is too small", nameof(dest));
         Span<byte> payload = stackalloc byte[size];
         int p = 0;
         "{\"sub\":\""u8.CopyTo(payload);
@@ -259,7 +281,6 @@ public sealed class Jwt : IRequestScoped
         int n = HeaderB64.Length;
         dest[n++] = (byte)'.';
         n += Base64Url.EncodeToUtf8(payload[..p], dest[n..]);
-        if (n + 1 + 43 > MaxTokenBytes) throw TooLong();
         Span<byte> mac = stackalloc byte[32];
         Sign(dest[..n], mac);
         dest[n++] = (byte)'.';

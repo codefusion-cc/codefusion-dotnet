@@ -377,7 +377,8 @@ public sealed class JwtClaimTests
         Assert.Throws<ArgumentException>(() => jwt.Issue(42, Now, [U("")], dest));            // under MinBytes
         Assert.Throws<ArgumentException>(() => jwt.Issue(42, Now, [U("123456789")], dest));   // over MaxBytes
         Assert.Throws<ArgumentException>(() => jwt.Issue(42, Now, [new Utf8([0xFF], 0, 1)], dest)); // not UTF-8
-        Assert.Throws<ArgumentException>(() => jwt.Issue(42, Now, [U("ok")], new byte[jwt.MaxIssuedBytesWith([U("ok")]) - 1]));
+        Assert.Throws<ArgumentException>(() => jwt.Issue(42, Now, [U("ok")], new byte[100]));       // dest too small
+        Assert.True(jwt.Issue(42, Now, [U("ok")], new byte[jwt.MaxIssuedBytesWith([U("ok")])]) <= jwt.MaxIssuedBytesWith([U("ok")]));
         Assert.Throws<ArgumentException>(() => jwt.Issue(42, Now, dest));                      // the old overload has no claims
         Assert.True(jwt.Issue(42, Now, [U("12345678")], dest) > 0);
 
@@ -428,6 +429,60 @@ public sealed class JwtClaimTests
         Utf8 token = jwt.Issue(42, U("jake"));
         Assert.Equal(1, response.Counted.Allocations);
         Assert.Equal(TokenCheck.Valid, Read(jwt, token.ToString(), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).Check);
+    }
+
+    // Found in the second review: only the payload was held to the token's limit before the arena was asked, so a value
+    // of about 2,950 to 4,010 bytes took 4 to 5 KB and was refused after it was written.
+    [Fact]
+    public void ATokenPastItsLimitIsRefusedBeforeTheArenaIsAsked()
+    {
+        Jwt jwt = Username(maxBytes: 4096);
+        var response = new ArenaOnly();
+        jwt.Bind(response);
+        byte[] big = Encoding.ASCII.GetBytes(new string('x', 3200));
+        Assert.Throws<ArgumentException>(() => jwt.Issue(42, new Utf8(big, 0, big.Length)));
+        Assert.Equal(0, response.Counted.Allocations);
+    }
+
+    // The limit is the real token's, its numbers as long as they are: a value refused would have made a token past 4 KB,
+    // and one taken makes exactly the token this formula says.
+    [Fact]
+    public void ATokenIsRefusedExactlyWhenItWouldPassTheLimit()
+    {
+        Jwt jwt = Username(maxBytes: 4096);
+        var dest = new byte[8192];
+        int refused = 0;
+        for (int n = 2900; n <= 3100; n++)
+        {
+            byte[] v = Encoding.ASCII.GetBytes(new string('x', n));
+            int payload = $"{{\"sub\":\"42\",\"iat\":{Now},\"exp\":{Now + 30L * 24 * 3600},\"username\":\"".Length + n + 2; // the closing quote and brace
+            int expected = 36 + 1 + (payload * 4 + 2) / 3 + 1 + 43;
+            if (expected > Jwt.MaxTokenBytes)
+            {
+                Assert.Throws<ArgumentException>(() => jwt.Issue(42, Now, [new Utf8(v, 0, v.Length)], dest));
+                refused++;
+            }
+            else Assert.Equal(expected, jwt.Issue(42, Now, [new Utf8(v, 0, v.Length)], dest));
+        }
+        Assert.InRange(refused, 1, 200);
+    }
+
+    // Found in the second review: Issue wrote "sub":"0" and "sub":"-5", tokens the verifier refuses on every request.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    [InlineData(long.MinValue)]
+    public void AUserTheVerifierWouldRefuseIsntIssued(long user)
+    {
+        var plain = new Jwt(JwtTests.Secret);
+        var dest = new byte[Jwt.MaxIssuedBytes];
+        Assert.Throws<ArgumentOutOfRangeException>(() => plain.Issue(user, Now, dest));
+        Assert.Throws<ArgumentOutOfRangeException>(() => plain.Issue(user, dest));
+        var response = new ArenaOnly();
+        plain.Bind(response);
+        Assert.Throws<ArgumentOutOfRangeException>(() => plain.Issue(user));
+        Assert.Equal(0, response.Counted.Allocations);
+        Assert.Equal(1, plain.Verify(dest.AsSpan(0, plain.Issue(1, Now, dest)), NowMs));
     }
 
     // Found in review: the overloads that take a lifetime named "options" in their exception, a parameter they don't have.
