@@ -56,6 +56,7 @@ public sealed class RequestContext : IResponse, IValueTaskSource
         _scoped = new object?[app.PerConnectionCount];
         _route = new int[2 * Math.Max(1, app.MaxRouteValues)];
         _claims = new int[2 * (app.Jwt?.ClaimCount ?? 0)];
+        _claims.AsSpan().Fill(-1); // absent until a check says otherwise
         _onWritten = OnWritten;
     }
 
@@ -149,12 +150,20 @@ public sealed class RequestContext : IResponse, IValueTaskSource
         value = default;
         int i = _app.Jwt?.ClaimIndex(name) ?? -1;
         if (i < 0) throw new ArgumentException($"the claim '{System.Text.Encoding.UTF8.GetString(name)}' isn't declared on JwtOptions.Claims", nameof(name));
-        if (generation != _generation) throw new InvalidOperationException("the Viewer's request is over: its claims went with it (copy a claim while the request is handled to keep it)");
-        int start = _claims[2 * i];
+        // A seqlock: the place is read between two reads of the generation, and taken only if neither saw the request
+        // end, from whatever thread the Viewer is read on. The fence keeps the place's reads before the second check.
+        if (Volatile.Read(ref _generation) != generation) throw Stale();
+        int start = _claims[2 * i], length = _claims[2 * i + 1];
+        ArenaBytes payload = _claimPayload;
+        Interlocked.MemoryBarrier();
+        if (Volatile.Read(ref _generation) != generation) throw Stale();
         if (!authenticated || start < 0) return false;
-        value = _claimPayload.Text(start, _claims[2 * i + 1]);
+        value = payload.Text(start, length);
         return true;
     }
+
+    static InvalidOperationException Stale() =>
+        new("the Viewer's request is over: its claims went with it (copy a claim while the request is handled to keep it)");
 
     Utf8 Token()
     {
@@ -313,6 +322,8 @@ public sealed class RequestContext : IResponse, IValueTaskSource
     /// <summary>The handler is done: what the JSON writer holds goes into the body, and the arena is let go.</summary>
     internal void HandlerDone()
     {
+        // first, and a full fence: a Viewer on another thread that reads a claim's place after this sees it changed
+        Interlocked.Increment(ref _generation);
         if (_jsonInUse)
         {
             _json.Flush();
@@ -322,7 +333,6 @@ public sealed class RequestContext : IResponse, IValueTaskSource
         _viewer = 0;
         _claimPayload = default;
         _claims.AsSpan().Fill(-1);
-        _generation++;
     }
 
     /// <summary>The connection is idle or closed: the arena's kept chunk goes back to the pool.</summary>

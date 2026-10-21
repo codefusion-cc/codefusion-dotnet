@@ -635,12 +635,78 @@ public class SpecOptionsTests
     }
 
     [Fact]
-    public void AViewerMadeByHandHasNoClaims()
+    public void AViewerMadeByHandHasNoClaimsSoEveryNameThrows()
     {
-        var v = new Viewer(5, default);
-        Assert.False(v.TryGetClaim("username"u8, out Utf8 value));
-        Assert.True(value.IsEmpty);
-        Assert.True(v.Claim("anything"u8).IsEmpty);
+        // found in review: a typo read as empty in a unit test that built its own Viewer, and threw only in production
+        foreach (Viewer v in new[] { new Viewer(5, default), default })
+        {
+            Assert.Throws<ArgumentException>(() => v.Claim("username"u8));
+            Assert.Throws<ArgumentException>(() => v.TryGetClaim("usernme"u8, out _));
+        }
+    }
+
+    // Found in review: the generation was checked once, before the claim's place was read, so a Viewer kept by another
+    // thread could read the next request's place. Every read must throw or give the place it had while live: here,
+    // alice's 5 bytes, never an absent claim nor bob's 15.
+    [Fact]
+    public async Task AViewerReadFromAnotherThreadThrowsOrReadsItsOwnRequest()
+    {
+        HttpAppBuilder b = Builder(Feed());
+        await using HttpApp app = b.Build();
+        await using var check = new AppCheck(app);
+        app.MapGet("/keep", static (Viewer v) =>
+        {
+            if (v.Claim("username"u8).Length == 5) Kept.Viewers[0] = v;
+            return Reply.NoContent();
+        }).AuthRequired();
+        app.Start();
+        string alice = "Bearer " + FeedToken(username: "\"alice\""), bob = "Bearer " + FeedToken(username: "\"bobby-long-name\"", sub: "\"7\"");
+        var request = new StringBuilder();
+        for (int i = 0; i < 200; i++) request.Append($"GET /keep HTTP/1.1\r\nHost: x\r\nAuthorization: {(i % 2 == 0 ? alice : bob)}\r\n\r\n");
+        byte[] batch = Encoding.ASCII.GetBytes(request.ToString());
+
+        using var stop = new CancellationTokenSource();
+        int wrong = 0, read = 0, stale = 0;
+        string? first = null;
+        var readers = new Thread[16];
+        for (int t = 0; t < readers.Length; t++)
+        {
+            readers[t] = new Thread(() =>
+            {
+                while (!stop.IsCancellationRequested)
+                {
+                    Viewer v = Kept.Viewers[0];
+                    try
+                    {
+                        bool found = v.TryGetClaim("username"u8, out Utf8 name);
+                        if (found && name.Length == 5) Interlocked.Increment(ref read);
+                        else if (Interlocked.Increment(ref wrong) == 1) first = found ? $"{name.Length} bytes" : "absent";
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        Interlocked.Increment(ref stale);
+                    }
+                    catch (Exception e) when (e is ArgumentException or NullReferenceException or IndexOutOfRangeException)
+                    {
+                        if (Interlocked.Increment(ref wrong) == 1) first = e.GetType().Name;
+                    }
+                }
+            }) { IsBackground = true };
+        }
+        using Client c = await Client.ConnectAsync(app.LocalEndPoint);
+        await c.SendAsync("GET /keep HTTP/1.1\r\nHost: x\r\nAuthorization: " + alice + "\r\n\r\n");
+        await c.ReadAsync();
+        foreach (Thread t in readers) t.Start();
+        var until = DateTime.UtcNow.AddSeconds(3);
+        while (DateTime.UtcNow < until)
+        {
+            await c.SendAsync(batch);
+            for (int i = 0; i < 200; i++) await c.ReadAsync();
+        }
+        stop.Cancel();
+        foreach (Thread t in readers) t.Join();
+        Assert.True(wrong == 0, $"{wrong} reads gave another request's place or failed oddly (first: {first}); {read} read alice, {stale} threw as stale");
+        Assert.True(stale > 0);
     }
 }
 

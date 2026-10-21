@@ -61,7 +61,12 @@ Fixes go into the latest release only.
   valid UTF-8 (raw bytes or a lone surrogate escape), or outside its byte lengths, makes the payload invalid. Every
   copy of a repeated claim is checked, so a bad first copy can't hide behind a good last one. A token is at most 4 KB,
   which bounds a claim. Values are unescaped into the request's arena and are valid only while the request is
-  handled, like any `Utf8` of it; a `Viewer` kept past its request throws rather than read the next request's claims.
+  handled, like any `Utf8` of it. A `Viewer` used after its request throws rather than read the next request's claims,
+  on any thread: the claim's place is read between two reads of the request's generation (a seqlock), and the
+  connection bumps the generation, with a full fence, before it frees or reuses anything. What it guarantees is the
+  place: a value taken while the request was live is still a view of the arena, and its bytes change once the
+  response is sent, so a handler copies a claim before handing it to other work. An undeclared name throws, also on a
+  `Viewer` made by hand.
   Declared names can't be `sub`, `iat`, `exp` or `nbf`, and are compared after unescaping, case included.
 - **401 reasons.** An app may answer a missing token, an invalid one and an invalid payload with different bodies
   (`HttpAppErrors.MissingToken`, `InvalidToken`, `InvalidTokenPayload`); by default all three are the one

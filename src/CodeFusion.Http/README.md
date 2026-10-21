@@ -84,9 +84,10 @@ app.MapPost("/posts", static (NewPost body, Viewer viewer, Posts posts) =>
 A token is invalid when its signature, header, JSON, `exp` or `nbf` fails. When those pass, its payload is still
 invalid if `sub` isn't a positive integer string, or a declared claim is missing (when required), isn't a string, isn't
 valid text, or is outside `MinBytes` and `MaxBytes` once unescaped. If a claim appears twice, the last one counts, and
-any bad copy makes the payload invalid. `viewer.Claim(name)` throws for a name that wasn't declared and gives an empty
-value for an anonymous viewer; `TryGetClaim` tells an absent optional claim from an empty one. `jwt.Issue(userId,
-username)` issues a token carrying the claims, and refuses values the verifier would refuse.
+any bad copy makes the payload invalid. `viewer.Claim(name)` throws for a name that wasn't declared, and for any name
+on a `Viewer` made by hand, which declares none; it gives an empty value for an anonymous viewer, and `TryGetClaim`
+tells an absent optional claim from an empty one. A `Viewer` used after its request throws, from any thread.
+`jwt.Issue(userId, username)` issues a token carrying the claims, and refuses values the verifier would refuse.
 
 The generator replaces each `MapGet`/`MapPost`/`MapPut`/`MapDelete` call with an endpoint that binds the parameters
 and writes the reply with no reflection and nothing looked up per request. Routes are literal templates; a literal

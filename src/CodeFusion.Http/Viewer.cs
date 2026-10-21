@@ -42,8 +42,10 @@ public readonly struct Viewer
     /// The value of the claim <see cref="JwtOptions.Claims"/> declared as <paramref name="name"/>, such as
     /// <c>viewer.Claim("username"u8)</c>: unescaped UTF-8 in the request's arena, valid until the response has been
     /// sent. Empty when anonymous, or when an optional claim is absent (<see cref="TryGetClaim"/> tells those apart).
-    /// A name that wasn't declared throws, so a misspelling can't read as empty, and so does a Viewer kept past its
-    /// request, which would otherwise read the next request's claims.
+    /// <para>Throws <see cref="ArgumentException"/> for a name that wasn't declared, and for every name on a Viewer made
+    /// by hand (<c>new Viewer(id, token)</c> or <c>default</c>), which declares none, so a misspelling fails in a unit
+    /// test too. Throws <see cref="InvalidOperationException"/> for a Viewer used after its request, on any thread. The
+    /// value itself is a view: copy it to keep it past the response, or to hand it to another thread.</para>
     /// </summary>
     public Utf8 Claim(ReadOnlySpan<byte> name)
     {
@@ -52,10 +54,10 @@ public readonly struct Viewer
     }
 
     /// <summary>The value of the declared claim <paramref name="name"/>: false when anonymous or when an optional
-    /// claim is absent. A name that wasn't declared throws.</summary>
+    /// claim is absent. Throws as <see cref="Claim"/> does.</summary>
     public bool TryGetClaim(ReadOnlySpan<byte> name, out Utf8 value)
     {
-        value = default;
-        return _request is not null && _request.TryGetClaim(name, IsAuthenticated, _generation, out value);
+        if (_request is null) throw new ArgumentException("this Viewer was made by hand, so it declares no claims: only one the dispatcher gives a handler carries them", nameof(name));
+        return _request.TryGetClaim(name, IsAuthenticated, _generation, out value);
     }
 }
