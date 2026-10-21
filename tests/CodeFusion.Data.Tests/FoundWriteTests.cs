@@ -64,7 +64,7 @@ public sealed class FoundWriteTests(OpsFixture fixture)
     {
         Assert.Equal(Q.GivePetStrict, "WITH t AS (SELECT p.id, p.name, p.team_id FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (id, owner_id, name, legs) SELECT $2, t.id, t.name, 3 FROM t) " +
             "SELECT t.name, t2.name FROM t LEFT JOIN teams t2 ON t2.id = t.team_id" +
-            Guards.Then("pets", ["id", "owner_id", "name", "legs"], ["teams", "pets", "people"], delete: false, corrected: false) + " ORDER BY t.id LIMIT 1");
+            Guards.Then("pets", [("id", "bigint"), ("owner_id", "bigint"), ("name", "text"), ("legs", "integer")], ["teams", "pets", "people"], delete: false, corrected: false) + " ORDER BY t.id LIMIT 1");
         var db = Db();
         Assert.Equal("""{"name":"ben","team":"blue"}""", await Json(db.GivePetStrict(U("ben"), 8003)));
         Assert.Equal("""{"name":"cid","team":null}""", await Json(db.GivePetStrict(U("cid"), 8004)));

@@ -53,7 +53,7 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
         Assert.Equal(Q.GiveLabel, "WITH t AS (SELECT p.id FROM people p WHERE p.name = $1), w AS (INSERT INTO person_labels (person_id, label_id) SELECT t.id, $2 FROM t " +
             "ON CONFLICT (person_id, label_id) DO NOTHING) SELECT t.id, ((SELECT count(*) FROM person_labels pl WHERE pl.person_id = t.id) + " +
             "CASE WHEN NOT EXISTS (SELECT 1 FROM person_labels pl2 WHERE pl2.person_id = t.id AND pl2.label_id = $2) THEN 1 ELSE 0 END), true FROM t" +
-            Guards.Then("person_labels", ["person_id", "label_id"], ["person_labels", "people"], delete: false, corrected: true) + " ORDER BY t.id LIMIT 1");
+            Guards.Then("person_labels", [("person_id", "bigint"), ("label_id", "integer")], ["person_labels", "people"], delete: false, corrected: true) + " ORDER BY t.id LIMIT 1");
         string name = await Person(9801, 1);
         var db = Db();
         Assert.Equal(new Tally(9801, 2, true), await Tally(db.GiveLabel(U(name), 2)));
@@ -305,6 +305,43 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
             // in the default collation the pet is written and counted
             await db0.Execute("ALTER TABLE pets ALTER COLUMN name TYPE text COLLATE \"default\"");
             Assert.Equal(DataStatus.Ok, (await Add(8803)).Status);
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
+    }
+
+    [Fact]
+    public async Task ACorrectedReadOfAColumnOfAnotherTypeThanTheValueBoundFailsTheStatement()
+    {
+        TestDb.Require();
+        const string schema = "cfdata_guard_types";
+        await using var admin = TestDb.Admin();
+        await admin.Execute($"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; SET search_path = {schema}; {OpsFixture.Schema}; {OpsFixture.Seed}");
+        await using var db0 = TestDb.Admin(schema);
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<DataResult>();
+        var source = Source(schema, failures);
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            async Task<Row<Tally>> Add(long id)
+            {
+                _response.Next();
+                return await db.AddPetCounted(U("ann"), id);
+            }
+            // Pet.Legs is an int, bound as integer: a column of another type, whatever it stores, isn't compared as bound
+            await db0.Execute("ALTER TABLE pets ALTER COLUMN legs TYPE double precision");
+            FailedByTheGuard(await Add(8901), failures);
+            await db0.Execute("ALTER TABLE pets ALTER COLUMN legs TYPE bigint");
+            FailedByTheGuard(await Add(8902), failures);
+            // and Pet.Id a long, bound as bigint
+            await db0.Execute("ALTER TABLE pets ALTER COLUMN legs TYPE integer, ALTER COLUMN id TYPE integer");
+            FailedByTheGuard(await Add(8903), failures);
+            Assert.Equal(0L, await db0.Scalar("SELECT count(*) FROM pets WHERE id IN (8901, 8902, 8903)"));
+            await db0.Execute("ALTER TABLE pets ALTER COLUMN id TYPE bigint");
+            Assert.Equal(DataStatus.Ok, (await Add(8904)).Status);
         }
         finally
         {

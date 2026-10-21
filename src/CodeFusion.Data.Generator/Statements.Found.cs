@@ -27,9 +27,9 @@ sealed class WriteEffect(EntityInfo table)
     public string Found { get; init; } = "";
     public EntityInfo FoundEntity { get; init; } = null!;
     public ISymbol FoundParameter { get; init; } = null!;
-    /// <summary>The columns the insert sets, by name; whether a read of the table written is corrected; and the tables the
+    /// <summary>The columns the insert sets; whether a read of the table written is corrected; and the tables the
     /// Select reads, as SQL, for the statement's own check.</summary>
-    public List<string> Columns { get; init; } = new();
+    public List<ColumnInfo> Columns { get; init; } = new();
     public bool Corrected { get; set; }
     public List<string> Reads { get; } = new();
 
@@ -149,7 +149,8 @@ sealed partial class Translator
                 if (D.ThenGuard.Length == 0) throw new Refused(at, $"Then whose Select reads tables in {D.Name}, which can't check its tables' triggers and foreign keys, so it");
                 written.Read(TableSql(written.Table));
                 written.Read(TableSql(e));
-                string columns = written.Columns.Count == 0 ? "''" : string.Join(", ", written.Columns.Select(Sql.String));
+                string columns = written.Columns.Count == 0 ? "('', 'text')"
+                    : string.Join(", ", written.Columns.Select(c => $"({Sql.String(c.Name)}, {Sql.String(Dialect.BoundType(c.Kind))})"));
                 final.Where.Add(Dialect.Format(D.ThenGuard, Sql.String(TableSql(written.Table)), columns, string.Join(", ", written.Reads.Select(Sql.String)),
                     written.Deleted is not null ? D.True : D.False, written.Corrected ? D.True : D.False));
             }
@@ -192,7 +193,7 @@ sealed partial class Translator
                 written = new WriteEffect(i.Entity)
                 {
                     Inserted = row, Row = i.Row, Env = i.Env, Ignored = ignore, KeyConflict = keyConflict, Found = found, FoundEntity = foundEntity, FoundParameter = foundParameter,
-                    Columns = row.Members.Select(m => i.Entity.Columns.TryGetValue(m.Name, out var c) ? c.Name : null).OfType<string>().Distinct().ToList(),
+                    Columns = row.Members.Select(m => i.Entity.Columns.TryGetValue(m.Name, out var c) ? c : null).OfType<ColumnInfo>().Distinct().ToList(),
                 };
                 var (cols, vals) = Values(row, i.Entity, i.At);
                 return $"{head} ({string.Join(", ", cols)}) SELECT {string.Join(", ", vals)} FROM {found}{tail}";

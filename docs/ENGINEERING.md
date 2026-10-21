@@ -949,7 +949,7 @@ What the fixes decided:
   or on any table a delete reaches from it key after key (a recursive CTE over the foreign keys that cascade, set
   NULL or set a default, found through pg_depend's index), such a foreign key into a table the Select reads (the
   found table and the table written included), and, for a corrected read, row security on it or a column the insert sets with a type
-  modifier, a type that may store another value than the one bound, or a collation other than the default (a
+  modifier, a type other than the one its value is bound as (a long into an integer column), or a collation other than the default (a
   nondeterministic one compares the snapshot's rows otherwise than the correction compares the row written). Any of them
   casts `'CodeFusion: the Select after Then can't read <table> as the write left it ...'` to an integer, which fails
   the statement (22P02) before its write commits. The check is a few catalog lookups by index per statement, run only
