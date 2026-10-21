@@ -30,6 +30,8 @@ static class Targets
         new("http-kestrel", KestrelDifferential.Run, 4096, 2500),
         new("json-body", JsonBodyTarget.Run, 4096, 6000),
         new("json-endpoint", JsonEndpointTarget.Run, 4096, 800),
+        new("json-syntax", JsonSyntaxTarget.Run, 4096, 6000),
+        new("jwt-claims", JwtClaimsTarget.Run, 3000, 6000),
         new("pg-row", PgTargets.Row, 4096, 6000),
         new("pg-error", PgTargets.Error, 4096, 6000),
         new("pg-startup", PgTargets.Startup, 4096, 1500),

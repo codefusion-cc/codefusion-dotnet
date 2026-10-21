@@ -492,7 +492,7 @@ public class BinderPropertyTests
     static void AssertSameViewer(string? header)
     {
         long contest = ContestAuth.Viewer(header is not null, header is null ? default : B(header));
-        long ours = OurJwt.Viewer(header is not null, header is null ? default : B(header));
+        long ours = JwtSchemeTests.Dispatched(OurJwt, header); // through the dispatcher's own calls
         Assert.Equal(contest, ours);
         if (contest > 0) Assert.Equal(Encoding.ASCII.GetString(ContestAuth.Token(B(header!))), Encoding.ASCII.GetString(B(header!).AsSpan().Trim(" \t"u8)[6..]));
     }

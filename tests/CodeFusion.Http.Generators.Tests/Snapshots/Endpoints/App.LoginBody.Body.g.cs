@@ -9,40 +9,35 @@ partial struct LoginBody
     internal static global::CodeFusion.ErrorReply? __BindBody(in global::CodeFusion.Http.BodySource source, out global::App.LoginBody value)
     {
         value = default;
+        if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? source.InvalidBody;
         var b = new global::CodeFusion.Http.JsonBody(source);
         global::System.Span<byte> name = stackalloc byte[48];
         global::CodeFusion.Http.BodyValue f0 = default;
         global::CodeFusion.Http.BodyValue f1 = default;
         bool found = false;
-        try
+        // one pass reads and checks the body: a syntax error stops the reads, and ReadToEnd reports it, never a throw
+        if (!b.ReadRootObject()) return b.ReadToEnd() ? source.InvalidBody : source.MalformedBody ?? source.InvalidBody;
+        while (b.NextProperty())
         {
-            if (!b.ReadRootObject()) return source.InvalidBody;
+            if (!global::System.MemoryExtensions.SequenceEqual(b.PropertyName(name), "user"u8))
+            {
+                b.SkipValue();
+                continue;
+            }
+            // a later wrapper replaces an earlier one, fields and all
+            f0 = default;
+            f1 = default;
+            found = b.ReadObject();
+            if (!found) continue;
             while (b.NextProperty())
             {
-                if (!global::System.MemoryExtensions.SequenceEqual(b.PropertyName(name), "user"u8))
-                {
-                    b.SkipValue();
-                    continue;
-                }
-                // a later wrapper replaces an earlier one, fields and all
-                f0 = default;
-                f1 = default;
-                found = b.ReadObject();
-                if (!found) continue;
-                while (b.NextProperty())
-                {
-                    global::System.ReadOnlySpan<byte> n = b.PropertyName(name);
-                    if (global::System.MemoryExtensions.SequenceEqual(n, "email"u8)) f0 = b.ReadText();
-                    else if (global::System.MemoryExtensions.SequenceEqual(n, "password"u8)) f1 = b.ReadText();
-                    else b.SkipValue();
-                }
+                global::System.ReadOnlySpan<byte> n = b.PropertyName(name);
+                if (global::System.MemoryExtensions.SequenceEqual(n, "email"u8)) f0 = b.ReadText();
+                else if (global::System.MemoryExtensions.SequenceEqual(n, "password"u8)) f1 = b.ReadText();
+                else b.SkipValue();
             }
-            b.ReadToEnd();
         }
-        catch (global::System.Text.Json.JsonException)
-        {
-            return source.InvalidBody;
-        }
+        if (!b.ReadToEnd()) return source.MalformedBody ?? source.InvalidBody;
         if (!found) return source.InvalidBody;
         if (!f0.IsRequiredText) return source.InvalidBody;
         if (!f1.IsRequiredText) return source.InvalidBody;

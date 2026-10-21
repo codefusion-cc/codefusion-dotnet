@@ -57,11 +57,37 @@ Fixes go into the latest release only.
   the server faces the internet.
 - **Paths** are decoded once, in place, with `%2F` kept escaped and `.` and `..` segments removed, so a handler sees
   the path a proxy would.
-- **Tokens** (`AddJwtAuth`, `Jwt`) are HS256 only, signed with a secret of at least 32 bytes, and carry only `sub`,
-  `iat` and `exp`: no `iss`, `aud` or `jti`, so any app sharing the secret accepts them. Nothing revokes one before
-  its `exp` except changing the secret, which ends every session. They live 30 days unless `AddJwtAuth(secret,
-  lifetime)` says otherwise. A signature has one spelling: base64url with nonzero spare bits is refused, and it is
-  compared in constant time.
+- **Tokens** (`AddJwtAuth`, `Jwt`) are HS256 only, signed with a secret of at least 32 bytes, and carry `sub`, `iat`,
+  `exp` and the string claims the app declares: no `iss`, `aud` or `jti`, so any app sharing the secret accepts
+  them. Nothing revokes one before its `exp` except changing the secret, which ends every session. They live 30 days
+  unless `AddJwtAuth(secret, lifetime)` says otherwise. A signature has one spelling: base64url with nonzero spare
+  bits is refused, and it is compared in constant time.
+- **The scheme** (`JwtOptions.Scheme`, `Token` unless set) is matched byte for byte after the header's surrounding
+  spaces and tabs are trimmed, then exactly one space: `bearer`, `Bearer  <jwt>` and `Bearer<jwt>` are refused, not
+  read leniently, so the app and a proxy in front of it can't disagree about which token a header carries. A scheme
+  must be one RFC 9110 token, checked when the app starts.
+- **Claims** beyond `sub`, `iat`, `exp` and `nbf` are read only when the app declares them (`JwtOptions.Claims`,
+  string claims only), and only after the signature has been checked in constant time and the header found to be
+  HS256: nothing of a forged token is decoded into the arena or parsed. A header or payload with anything after its
+  object but whitespace is invalid, as JSON is. One pass reads the payload. A name that
+  doesn't unescape, an `exp` or `nbf` that isn't a number, or JSON that doesn't parse makes the token invalid. A
+  `sub` that isn't a positive integer string, or a declared claim that is absent (when required), not a string, not
+  valid UTF-8 (raw bytes or a lone surrogate escape), or outside its byte lengths, makes the payload invalid, and so
+  does an `exp` or `nbf` past what a Double holds (`1e400` reads as an infinity, which would never expire). Every
+  copy of a repeated claim is checked, so a bad first copy can't hide behind a good last one. A token is at most 4 KB,
+  which bounds a claim. Values are unescaped into the request's arena and are valid only while the request is
+  handled, like any `Utf8` of it. A `Viewer` used after its request throws rather than read the next request's claims,
+  on any thread: the claim's place is read between two reads of the request's generation (a seqlock), and the
+  connection bumps the generation, with a full fence, before it frees or reuses anything. What it guarantees is the
+  place: a value taken while the request was live is still a view of the arena, and its bytes change once the
+  response is sent, so a handler copies a claim before handing it to other work. An undeclared name throws, also on a
+  `Viewer` made by hand.
+  Declared names can't be `sub`, `iat`, `exp` or `nbf`, and are compared after unescaping, case included.
+- **401 reasons.** An app may answer a missing token, an invalid one and an invalid payload with different bodies
+  (`HttpAppErrors.MissingToken`, `InvalidToken`, `InvalidTokenPayload`); by default all three are the one
+  `Unauthorized` body. The payload reason is reachable only with a token the secret signed, so it tells a client
+  nothing it couldn't learn from its own token. Forged, malformed and expired tokens share the invalid reason, and a
+  bad payload in an expired token is reported as expired.
 - **A short secret** is refused unless the app passes `allowShortSecret: true` (`AddJwtAuth(secret, lifetime, true)`
   or the `Jwt` constructor), for a deployment handed a fixed one, such as the Conduit contest's 26 bytes. An empty
   one is refused even then. The tokens are standard HMAC-SHA256 (a key shorter than the 64-byte block is padded with
