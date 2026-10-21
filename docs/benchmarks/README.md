@@ -10,18 +10,6 @@ The goal: CodeFusion as fast as possible with zero allocations, beating or comin
 row is the latest measured result on the same machine and method; the iteration files have the details. Allocation
 is the GC collections and allocation rate of the CodeFusion process during a sustained run.
 
-| Workload | Machine | CodeFusion | Best Rust (entry) | Gap | Allocation | Iteration |
-|---|---|---|---|---|---|---|
-| 2026-10-21 | [2026-10-21-pg-job-cache.md](2026-10-21-pg-job-cache.md) | A per-thread cache in front of the job pool, TechEmpower db and fortunes | db +8.3% (692,778), fortunes +2.1% |
-| 2026-10-21 | [2026-10-21-pg-read-burst.md](2026-10-21-pg-read-burst.md) | 32 reads queued at once on idle loops, before and after pipelining and shared bursts | 162-172 µs to 70-87 µs per read; Npgsql 106-122 |
-| Multicore contest: Conduit on Postgres, users at the 5-minute hold | GCP c4-highcpu-8 | not measured yet | not measured yet | | | |
-| $12 contest: feed on SQLite, users at the 5-minute hold | GCP C4 held to 1 vCPU / 2 GB | not measured yet | not measured yet | | | |
-| TechEmpower plaintext (pipelined), requests/s | GCP C4 | not measured yet | not measured yet | | | |
-| TechEmpower JSON, requests/s | GCP C4 | not measured yet | not measured yet | | | |
-| TechEmpower single query, requests/s | GCP C4 | not measured yet | not measured yet | | | |
-| TechEmpower multiple queries (20), requests/s | GCP C4 | not measured yet | not measured yet | | | |
-| TechEmpower fortunes, requests/s | GCP C4 | not measured yet | not measured yet | | | |
-| TechEmpower updates (20), requests/s | GCP C4 | not measured yet | not measured yet | | | |
 | Workload | Machine | CodeFusion | Best Rust (entry) | Gap to Rust | Best other .NET (entry) | Allocation | Iteration |
 |---|---|---|---|---|---|---|---|
 | Multicore contest: Conduit on Postgres, users at the 5-minute hold | GCP c4-highcpu-8 | not measured yet | not measured yet | | | | |
@@ -40,6 +28,8 @@ readers per core and four writers. These are reduced-rig numbers; the TechEmpowe
 
 | Date | File | What was tested | Result |
 |---|---|---|---|
+| 2026-10-21 | [2026-10-21-pg-job-cache.md](2026-10-21-pg-job-cache.md) | A per-thread cache in front of the job pool, TechEmpower db and fortunes | db +8.3% (692,778), fortunes +2.1% |
+| 2026-10-21 | [2026-10-21-pg-read-burst.md](2026-10-21-pg-read-burst.md) | 32 reads queued at once on idle loops, before and after pipelining and shared bursts | 162-172 µs to 70-87 µs per read; Npgsql 106-122 |
 
 ## Template
 

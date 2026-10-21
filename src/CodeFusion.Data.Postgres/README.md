@@ -81,9 +81,10 @@ Postgres on the same 8 cores limits. One at a time, most of the CPU is the bench
 "Allocated" for this client reads 180 to 350 B per operation: that is the benchmark's own async methods and arrays,
 the same for both clients.
 
-One case is slower: an idle burst of 32 reads takes 155 µs per read against Npgsql's 96, because one loop runs the
-whole burst on one backend while Npgsql spreads it over several. Under load, one Sync per group is what saves
-Postgres CPU.
+An idle burst of 32 reads takes 70 to 87 µs per read against Npgsql's 106 to 122: the burst is shared out among the
+loops asleep, so it runs on several backends at once (it took 155 to 172 µs on one before,
+[2026-10-21-pg-read-burst.md](../../docs/benchmarks/2026-10-21-pg-read-burst.md)). Under load, one Sync per group is
+what saves Postgres CPU.
 
 ## Limits
 
