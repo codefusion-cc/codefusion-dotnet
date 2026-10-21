@@ -46,6 +46,8 @@ Two things the table leaves out:
 | 2026-10-21 | [2026-10-21-body-syntax-check.md](2026-10-21-body-syntax-check.md) | body binding: before the spec options, with the syntax check first, and binding first | check first: valid bodies 65-75% slower, malformed 0 B; binding first: valid within 2-8% of the base, malformed back to one 1,192 B exception |
 | 2026-10-21 | [2026-10-21-body-syntax-check.md](2026-10-21-body-syntax-check.md#second-iteration-one-reader-that-binds-and-checks-in-a-single-pass) | body binding through one non-throwing reader in a single pass, against the three above | 7-20% faster than the base on valid and bad-field bodies; malformed 0.1-0.25 µs, 0 B, no exception |
 | 2026-10-21 | [2026-10-21-body-syntax-check.md](2026-10-21-body-syntax-check.md#third-iteration-realistic-bodies-three-rounds-median) | the single pass on realistic bodies (to 2 KB, numbers, nested, skipped keys), early and late malformation, three rounds | valid and bad-field bodies within noise to 35% faster than the base; malformed 23 ns to 1.4 µs, 0 B |
+| 2026-10-21 | [twelve-entry-connection-memory](2026-10-21-twelve-entry-connection-memory.md) | The $12 entry at 10k, 50k and 100k concurrent load.js users, one CPU and 2 GB: memory, latency, CPU | about 5.5 KB a connection (3.0-3.4 KB process, 1.8-2.3 KB kernel); idle connections hold no buffer; latency here was the Mac's noise |
+| 2026-10-21 | [twelve-entry-fd-limit-crash](2026-10-21-twelve-entry-fd-limit-crash.md) | The $12 entry past a 65,535 descriptor limit, the GCP crash at 80k users | out of descriptors the runtime aborts; a connection cap 1,024 below the limit keeps it up (64,511 held, p99 41 ms) |
 
 ## Template
 
