@@ -12,6 +12,7 @@ is the GC collections and allocation rate of the CodeFusion process during a sus
 
 | Workload | Machine | CodeFusion | Best Rust (entry) | Gap | Allocation | Iteration |
 |---|---|---|---|---|---|---|
+| 2026-10-21 | [2026-10-21-pg-read-burst.md](2026-10-21-pg-read-burst.md) | 32 reads queued at once on idle loops, before and after pipelining and shared bursts | 162-172 µs to 70-87 µs per read; Npgsql 106-122 |
 | Multicore contest: Conduit on Postgres, users at the 5-minute hold | GCP c4-highcpu-8 | not measured yet | not measured yet | | | |
 | $12 contest: feed on SQLite, users at the 5-minute hold | GCP C4 held to 1 vCPU / 2 GB | not measured yet | not measured yet | | | |
 | TechEmpower plaintext (pipelined), requests/s | GCP C4 | not measured yet | not measured yet | | | |
