@@ -1077,6 +1077,7 @@ Each fix had its test first, seen failing on the code before it (`EventLoopGuara
 | 7 (low): hash spreading, resets on a failed loop, no real fallback | `ListenerPerLoop` (on by default) keeps one listener and turns when off; a failed loop hands its listener to the runtime's accepts; with every loop failed, connections fall back to Sockets' waits | `WithOneListenerConnectionsGoToTheLoopsInTurn`, `ALoopThatFailsTakesNoNewConnections(listenerPerLoop)`, `WhenEveryLoopFailsConnectionsFallBackToSockets` |
 | 8 (low): test gaps | The Linux accept tests above; the stop test's bound 4 s; EventLoop allocation rows for a body, an error, a 404 and a 401 | |
 | 9 (low): stale docs | This section, the package README, SECURITY.md (the exact bound, and port sharing for both transports) | |
+| (coordinator) a connection's first request ran on the pool thread that started it, outside any batch | A new connection starts with no edge (epoll's ADD and kqueue's EV_ADD report bytes already waiting), and one the runtime accepted is started on its loop's thread (a queue per loop, and its wake) | `AConnectionsFirstRequestIsHandledInABatch`, for both listener settings (red before) |
 
 ### Tests
 

@@ -260,6 +260,34 @@ public sealed class EventLoopBatchTests
         }
     }
 
+    // A connection's first request is handled on its loop, in a batch, like the rest: whoever starts the connection,
+    // the loop is told of bytes already waiting when it adds the socket.
+    [Theory(Timeout = 20_000)]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AConnectionsFirstRequestIsHandledInABatch(bool listenerPerLoop)
+    {
+        var loops = new ConcurrentQueue<int>();
+        await using var t = TestServer.Start(x =>
+        {
+            loops.Enqueue(EventLoopThread.Current);
+            return Path(x);
+        }, o =>
+        {
+            TestTransport.Use(o, HttpTransport.EventLoop);
+            o.EventLoops = 2;
+            o.ListenerPerLoop = listenerPerLoop;
+        });
+        for (int i = 0; i < 20; i++)
+        {
+            using Client c = await t.ConnectAsync();
+            await c.SendAsync(Get("/first"));
+            Assert.Equal("/first", (await c.ReadAsync()).Text);
+        }
+        Assert.Equal(20, loops.Count);
+        Assert.DoesNotContain(-1, loops);
+    }
+
     // What CodeFusion.Data's providers use: actions an app's services register, run after the options' hook in their
     // order, each with the loop's index, on that loop's thread; none after Build.
     [Fact(Timeout = 20_000)]

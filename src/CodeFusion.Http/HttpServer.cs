@@ -306,7 +306,10 @@ public sealed class HttpServer : IAsyncDisposable
                 continue;
             }
             AcceptWorks();
-            if (Admit(s, null) is { } c) ThreadPool.UnsafeQueueUserWorkItem(c, preferLocal: false);
+            if (Admit(s, null) is not { } c) continue;
+            // on its loop's thread, so its first request is handled in a batch as every later one is
+            if (c.Loop is { } loop) loop.Post(c);
+            else ThreadPool.UnsafeQueueUserWorkItem(c, preferLocal: false);
         }
     }
 

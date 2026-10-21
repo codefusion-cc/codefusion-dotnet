@@ -281,8 +281,10 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
 
     internal void Attach(Socket socket)
     {
-        // bytes may have come before the loop watches the socket: the first wait reads at once
-        _edge = Edge; // its count starts again: only Kick and the loop's own events read it
+        // No edge yet: bytes that came before the loop watches the socket are reported when it adds it (epoll's ADD
+        // and kqueue's EV_ADD both report readiness already there), so even the first request is read on the loop,
+        // in a batch, wherever the connection was started
+        _edge = NoEdge;
         Volatile.Write(ref _socket, socket);
     }
 

@@ -372,7 +372,14 @@ public sealed class EventLoopGuaranteeTests
         for (int i = 0; i < 40 && Volatile.Read(ref failed) == 0; i++)
         {
             using Client c = await t.ConnectAsync();
-            await Ask(c, "/wake");
+            try
+            {
+                await Ask(c, "/wake");
+            }
+            catch (Exception e) when (e is System.Net.Sockets.SocketException or System.IO.EndOfStreamException)
+            {
+                // the connection that woke loop 0 is closed with it
+            }
         }
         await TestServer.Until(() => t.Server.EventLoopsRunning == 1, 5000, () => $"{t.Server.EventLoopsRunning} loops running");
         for (int i = 0; i < 20; i++)

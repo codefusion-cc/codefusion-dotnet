@@ -44,6 +44,9 @@ internal abstract unsafe class EventLoop
     // next round, after a wait that doesn't block, takes them up once the others had their turn.
     (HttpExchange X, uint Id, bool Parked)[] _later = new (HttpExchange, uint, bool)[16], _taking = new (HttpExchange, uint, bool)[16];
     int _laterCount;
+    // Connections another thread accepted, to start on this loop's thread (Post): their first request then runs here,
+    // in a batch, as every later one does.
+    readonly System.Collections.Concurrent.ConcurrentQueue<HttpExchange> _starts = new();
     // A wake-up whose rounds ran out with work left (EndBatch): the next wait doesn't block.
     bool _pending;
     // Handlers started on this loop's thread so far: a round that started one needs the batch's actions again.
@@ -208,6 +211,8 @@ internal abstract unsafe class EventLoop
                     ulong token = TokenAt(events, i, out bool readable, out bool writable, out bool closed);
                     if (token == WakeToken)
                     {
+                        ClearWake();
+                        StartPosted();
                         stop = _stopping;
                         continue;
                     }
@@ -245,7 +250,41 @@ internal abstract unsafe class EventLoop
             if (held) Queue.DangerousRelease();
             Closed();
             Queue.Dispose();
+            // connections posted as it ended start on the pool: their run finds the loop closed, and closes
+            while (_starts.TryDequeue(out HttpExchange? x)) ThreadPool.UnsafeQueueUserWorkItem(x, preferLocal: false);
             _exited.TrySetResult();
+        }
+    }
+
+    /// <summary>From any thread: starts <paramref name="x"/>, just accepted, on this loop's thread. A loop that has
+    /// ended or failed starts it on the pool instead, where its run finds out.</summary>
+    public void Post(HttpExchange x)
+    {
+        _starts.Enqueue(x);
+        try
+        {
+            Wake();
+        }
+        catch (ObjectDisposedException)
+        {
+            // ended: the thread started what it found as it ended, and nothing dequeues now
+            if (_starts.TryDequeue(out HttpExchange? left)) ThreadPool.UnsafeQueueUserWorkItem(left, preferLocal: false);
+        }
+    }
+
+    void StartPosted()
+    {
+        while (_starts.TryDequeue(out HttpExchange? x))
+        {
+            try
+            {
+                x.StartRun();
+            }
+            catch (Exception e)
+            {
+                Interlocked.Increment(ref _server.FailedConnections);
+                _server.Report("http event loop failed", e);
+            }
         }
     }
 
@@ -527,6 +566,9 @@ internal abstract unsafe class EventLoop
     /// <summary>Makes the thread's wait return a <see cref="WakeToken"/> event.</summary>
     protected abstract void Wake();
 
+    /// <summary>On the thread, after a <see cref="WakeToken"/> event: the wake can come again.</summary>
+    protected virtual void ClearWake() { }
+
     /// <summary>The thread has ended: what the loop owns besides its queue goes.</summary>
     protected virtual void Closed() { }
 
@@ -637,6 +679,22 @@ internal abstract unsafe class EventLoop
 
         protected override void Closed() => _wake.Dispose();
 
+        // the eventfd is level-triggered: read it back to zero, or every wait returns at once
+        protected override void ClearWake()
+        {
+            bool held = false;
+            try
+            {
+                _wake.DangerousAddRef(ref held);
+                ulong value;
+                _ = read((int)_wake.DangerousGetHandle(), &value, sizeof(ulong));
+            }
+            finally
+            {
+                if (held) _wake.DangerousRelease();
+            }
+        }
+
         // SafeDirectories: never a library planted next to the app; libc comes from the system.
         [DllImport("libc", SetLastError = true), DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
         static extern int epoll_create1(int flags);
@@ -655,6 +713,9 @@ internal abstract unsafe class EventLoop
 
         [DllImport("libc", SetLastError = true), DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
         static extern nint write(int fd, void* buffer, nint count);
+
+        [DllImport("libc", SetLastError = true), DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+        static extern nint read(int fd, void* buffer, nint count);
     }
 
     /// <summary>macOS: kqueue, with EV_CLEAR for edges and a user event to wake it.</summary>
