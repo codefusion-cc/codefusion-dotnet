@@ -311,7 +311,11 @@ includes the client's own receive buffer, which takes the first hundreds of KB w
 on macOS loopback, 2.4 MB with its buffer left to grow): before it fills, a client that reads nothing looks like one
 that reads slowly. Once it has, a client that reads nothing acknowledges nothing, and `RequestTimeout` ends it. The
 cut, like a stop's hard abort, closes with a reset (linger 0), so the kernel drops what it still holds for the client.
-A plain close reset only when a receive or send was pending (.NET closes abortively when it cancels one). A client
+A plain close reset only when a receive or send was pending (.NET closes abortively when it cancels one, unless the
+send side was shut down first). A timeout's close shuts the send side down first, so it ends with a FIN: off a loop it
+used to close the run's pending zero-byte receive with a reset, which reached a connection the server had just
+accepted and failed its client's connect (`RandomBytesNeverHurtTheServer`, Linux CI arm64, Sockets).
+`ATimeoutClosesWithAFin` failed on Sockets before, for a new connection and a kept-alive one. A client
 whose window is shut when the reset comes drops it, since its sequence lies past the window, and hears only the
 answer to its own next segment, which macOS may rate-limit (`net.inet.tcp.rst_rlc_enable`): a client that reads
 nothing for seconds may not hear the abort at all, though the server's side is gone (netstat showed only the client's
