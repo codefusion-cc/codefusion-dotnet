@@ -288,16 +288,38 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         Volatile.Write(ref _socket, socket);
     }
 
+    /// <summary>A connection admitted but never started, or whose run couldn't begin: its socket closed, and its
+    /// object given back.</summary>
+    internal void Abandon()
+    {
+        Volatile.Read(ref _socket)?.Dispose();
+        Volatile.Write(ref _socket, null);
+        Loop = null; // all it took from Rent that the pool doesn't keep
+        _server.Release(this);
+    }
+
     /// <summary>Runs the connection on this thread until its first wait: a loop that accepted it.</summary>
     internal void StartRun() => ((IThreadPoolWorkItem)this).Execute();
 
     void IThreadPoolWorkItem.Execute()
     {
         RunStarted();
-        // Kept to be consumed exactly once, in RunCompleted.
+        try
+        {
+            // Kept to be consumed exactly once, in RunCompleted.
 #pragma warning disable CA2012
-        _run = RunAsync();
+            _run = RunAsync();
 #pragma warning restore CA2012
+        }
+        catch (Exception e)
+        {
+            // only its builder throws here (out of memory for its state): the run never began, and ends now
+            Interlocked.Increment(ref _server.FailedConnections);
+            _server.Report("http connection failed", e);
+            RunEnded();
+            Abandon();
+            return;
+        }
         if (_run.IsCompleted) RunCompleted();
         else _run.GetAwaiter().UnsafeOnCompleted(_onRunCompleted);
     }

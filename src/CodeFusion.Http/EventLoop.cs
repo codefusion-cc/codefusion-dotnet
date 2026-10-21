@@ -65,6 +65,9 @@ internal abstract unsafe class EventLoop
     // resume can't land between the two and leave it off for good.
     const int Accepting = 0, Paused = 1;
     int _acceptState;
+    // Paused with the listener out of the set, not just off (turning it off failed): the resume adds it back. Written
+    // before Paused is published, and by the resume only before it turns the listener on.
+    bool _listenerOut;
     /// <summary>The epoll or kqueue descriptor; closed by the thread as it ends, once no Add holds it.</summary>
     protected readonly SafeFileHandle Queue;
     volatile bool _stopping;
@@ -376,9 +379,15 @@ internal abstract unsafe class EventLoop
     public void ResumeAccept()
     {
         if (_listener is not { } l || Interlocked.CompareExchange(ref _acceptState, Accepting, Paused) != Paused) return;
+        bool add = _listenerOut;
+        _listenerOut = false;
         try
         {
-            if (Watch(l, add: false, on: true) < 0) Interlocked.Exchange(ref _acceptState, Paused); // the next beat tries again
+            if (Watch(l, add, on: true) < 0)
+            {
+                _listenerOut = add;
+                Interlocked.Exchange(ref _acceptState, Paused); // the next beat tries again
+            }
         }
         catch (ObjectDisposedException)
         {
@@ -386,7 +395,8 @@ internal abstract unsafe class EventLoop
         }
     }
 
-    int Watch(Socket listener, bool add, bool on)
+    /// <summary>Adds the listener, turns it on or off, or takes it out of the set (<paramref name="remove"/>).</summary>
+    int Watch(Socket listener, bool add, bool on, bool remove = false)
     {
         SafeSocketHandle s = listener.SafeHandle;
         bool socketHeld = false, queueHeld = false;
@@ -394,7 +404,8 @@ internal abstract unsafe class EventLoop
         {
             s.DangerousAddRef(ref socketHeld);
             Queue.DangerousAddRef(ref queueHeld);
-            return Watch((int)Queue.DangerousGetHandle(), (int)s.DangerousGetHandle(), ListenToken, add, on);
+            int queue = (int)Queue.DangerousGetHandle(), fd = (int)s.DangerousGetHandle();
+            return remove ? Unwatch(queue, fd) : Watch(queue, fd, ListenToken, add, on);
         }
         finally
         {
@@ -408,9 +419,17 @@ internal abstract unsafe class EventLoop
     void Pause(Socket listener, Exception failure)
     {
         _server.AcceptFailed(failure);
+        bool fail = false;
+        ListenerOffFails(ref fail);
         try
         {
-            if (Watch(listener, add: false, on: false) < 0) return; // still watched: the next wake tries again
+            if (fail || Watch(listener, add: false, on: false) < 0)
+            {
+                // still on, and level-triggered: it would wake the loop at once, again and again. Taking it out of the
+                // set frees memory rather than needing it; if even that fails, the next wake tries again
+                if (Watch(listener, add: false, on: false, remove: true) < 0) return;
+                _listenerOut = true;
+            }
         }
         catch (ObjectDisposedException)
         {
@@ -428,6 +447,12 @@ internal abstract unsafe class EventLoop
 
     [System.Diagnostics.Conditional("DEBUG")]
     void Pausing() => _server.PauseHook?.Invoke(this);
+
+    [System.Diagnostics.Conditional("DEBUG")]
+    void ListenerOffFails(ref bool fail)
+    {
+        if (_server.ListenerOffHook is { } hook) fail = hook(_index);
+    }
 
     /// <summary>Takes what the listener holds, up to <see cref="AcceptsPerWakeUp"/>, and starts each connection here.</summary>
     void AcceptAll()
@@ -467,20 +492,30 @@ internal abstract unsafe class EventLoop
                 return;
             }
             _server.AcceptWorks();
-            HttpExchange? c;
+            HttpExchange? c = null;
             try
             {
                 // Admit owns the socket: it closes it, or its connection does
 #pragma warning disable CA2000
                 c = Wrap(fd) is { } s ? _server.Admit(s, this) : null;
 #pragma warning restore CA2000
+                if (c is null) continue;
+                _server.Starting(c);
             }
             catch (Exception e)
             {
-                Pause(l, e); // out of memory for the connection, say: closed, and the listener rests till the heartbeat
+                // out of memory for the connection, say: closed, and the listener rests till the heartbeat
+                try
+                {
+                    c?.Abandon();
+                }
+                finally
+                {
+                    Pause(l, e);
+                }
                 return;
             }
-            c?.StartRun();
+            c.StartRun(); // a run that can't begin ends as a failed connection, given back
         }
     }
 
@@ -488,22 +523,24 @@ internal abstract unsafe class EventLoop
     /// the connection was reset before the runtime could look at it.</summary>
     static Socket? Wrap(int fd)
     {
-        // the Socket owns the handle once made; until then the catch closes it
-#pragma warning disable CA2000
-        var handle = new SafeSocketHandle(fd, ownsHandle: true);
-#pragma warning restore CA2000
+        // the Socket owns the handle once made; until then the catch closes it, or the descriptor if there's no handle
+        SafeSocketHandle? handle = null;
         try
         {
+#pragma warning disable CA2000
+            handle = new SafeSocketHandle(fd, ownsHandle: true);
+#pragma warning restore CA2000
             return new Socket(handle);
         }
         catch (SocketException)
         {
-            handle.Dispose();
+            handle!.Dispose();
             return null;
         }
         catch
         {
-            handle.Dispose();
+            if (handle is null) FileDescriptors.Close(fd);
+            else handle.Dispose();
             throw;
         }
     }
@@ -583,6 +620,9 @@ internal abstract unsafe class EventLoop
     /// (<paramref name="on"/>), or none. -1 and errno on failure.</summary>
     protected virtual int Watch(int queue, int fd, ulong token, bool add, bool on) => throw new PlatformNotSupportedException();
 
+    /// <summary>Takes the listener out of the set. -1 and errno on failure.</summary>
+    protected virtual int Unwatch(int queue, int fd) => throw new PlatformNotSupportedException();
+
     /// <summary>accept4, non-blocking and close-on-exec; -1 and errno on failure.</summary>
     protected virtual int Accept(int listener) => throw new PlatformNotSupportedException();
 
@@ -606,7 +646,7 @@ internal abstract unsafe class EventLoop
     sealed class Epoll : EventLoop
 #pragma warning restore CA1001
     {
-        const int EpollCtlAdd = 1, EpollCtlMod = 3, CloExec = 0x80000; // EPOLL_CLOEXEC and EFD_CLOEXEC are O_CLOEXEC
+        const int EpollCtlAdd = 1, EpollCtlDel = 2, EpollCtlMod = 3, CloExec = 0x80000; // EPOLL_CLOEXEC and EFD_CLOEXEC are O_CLOEXEC
         const int SockNonBlock = 0x800, SockCloExec = 0x80000;
         const int EAgain = 11, ENFile = 23, EMFile = 24, ENoMem = 12, ENoBufs = 105;
         const uint EpollIn = 0x001, EpollOut = 0x004, EpollErr = 0x008, EpollHup = 0x010, EpollRdHup = 0x2000, EpollEt = 1u << 31;
@@ -665,6 +705,8 @@ internal abstract unsafe class EventLoop
             Event(ev, on ? EpollIn : 0, token);
             return epoll_ctl(queue, add ? EpollCtlAdd : EpollCtlMod, fd, ev);
         }
+
+        protected override int Unwatch(int queue, int fd) => epoll_ctl(queue, EpollCtlDel, fd, null);
 
         protected override int Accept(int listener) => accept4(listener, null, null, SockNonBlock | SockCloExec);
 

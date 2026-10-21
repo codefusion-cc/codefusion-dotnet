@@ -53,7 +53,7 @@ Fixes go into the latest release only.
   connection holds at most about twice what it has sent, whatever its Content-Length declares. A response is built
   whole in memory and kept until the socket has taken it: a client reading at 240 B/s holds a 1 MB response for up to
   73 minutes. `MaxConnections` caps open connections; past it a new connection is closed at once. By default it is the
-  process's descriptor limit less 1024 (Unix), which keeps the process working past it but bounds memory only as far
+  process's descriptor limit less 1024 (64-bit Linux and macOS; none on Windows, 32-bit Linux or FreeBSD), which keeps the process working past it but bounds memory only as far
   as that limit does: set it lower, or use a proxy's limits, when the server faces the internet.
 - **Paths** are decoded once, in place, with `%2F` kept escaped and `.` and `..` segments removed, so a handler sees
   the path a proxy would.

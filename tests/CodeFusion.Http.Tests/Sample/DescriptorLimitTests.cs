@@ -43,6 +43,21 @@ public class DescriptorLimitTests
         Assert.Equal(5, set.ConnectionLimit);
     }
 
+    // CoreCLR raises the soft limit to the hard one as it starts (on macOS up to OPEN_MAX); NativeAOT doesn't, so an
+    // AOT app under systemd's soft 1024 would get 512 connections. The server raises it the same way, never lowers it.
+    [Theory]
+    [InlineData(1024L, 524288L, false, 524288L)] // systemd's default
+    [InlineData(1024L, -1L, false, -1L)]         // RLIM_INFINITY
+    [InlineData(65535L, 65535L, false, 65535L)]
+    [InlineData(-1L, -1L, false, -1L)]
+    [InlineData(256L, 1024L, true, 1024L)]
+    [InlineData(256L, long.MaxValue, true, 10240L)] // macOS's RLIM_INFINITY: up to OPEN_MAX
+    [InlineData(2560L, 10240L, true, 10240L)]
+    [InlineData(10240L, long.MaxValue, true, 10240L)]
+    [InlineData(65536L, long.MaxValue, true, 65536L)] // already past OPEN_MAX: left alone
+    public void TheSoftLimitIsRaisedToTheHardOne(long soft, long hard, bool macOS, long raised)
+        => Assert.Equal(raised, FileDescriptors.Raised(soft, hard, macOS));
+
     // The sample app under `ulimit -n 256`: past its 128 connections a new one is closed at once, the ones it holds
     // are still answered, and once they go new ones are taken again. Without the default it ran out of descriptors.
     [Fact(Timeout = 60_000)]
@@ -53,7 +68,9 @@ public class DescriptorLimitTests
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            Environment = { ["PORT"] = "0", ["HOST"] = "127.0.0.1" },
+            // each loop holds descriptors of its own (Linux: its queue, its wake and its listener): a fixed count of
+            // them keeps the 128 left for the rest of the process enough on a machine with any number of cores
+            Environment = { ["PORT"] = "0", ["HOST"] = "127.0.0.1", ["EVENT_LOOPS"] = "2" },
         };
         using Process app = Process.Start(start)!;
         var clients = new List<Client>();
@@ -106,6 +123,33 @@ public class DescriptorLimitTests
         catch (Exception e) when (e is SocketException or EndOfStreamException or IOException)
         {
             return false;
+        }
+    }
+}
+
+/// <summary>Lowers the process's own soft limit for a moment, so it runs alone.</summary>
+[Collection(Quiet.Name)]
+public class DescriptorLimitRaiseTests
+{
+    [Fact]
+    public void AServerWithoutAMaxConnectionsRaisesALowSoftLimitAndSaysSo()
+    {
+        Assert.SkipUnless(FileDescriptors.Limits(out long soft, out long hard), "no descriptor limit here");
+        long lowered = soft - 1, raised = FileDescriptors.Raised(lowered, hard, OperatingSystem.IsMacOS());
+        Assert.SkipUnless(lowered > 0 && raised > lowered, $"soft {soft}, hard {hard}: nothing to raise");
+        Assert.True(FileDescriptors.SetLimits(lowered, hard));
+        try
+        {
+            var reports = new List<string>();
+            var server = new HttpServer(new HttpServerOptions { OnError = (what, _) => reports.Add(what) }, static _ => default);
+            Assert.True(FileDescriptors.Limits(out long now, out _));
+            Assert.Equal(raised, now);
+            Assert.Equal(FileDescriptors.MaxConnections(raised), server.ConnectionLimit);
+            Assert.Equal([$"http descriptor limit raised from {lowered} to {raised}"], reports);
+        }
+        finally
+        {
+            FileDescriptors.SetLimits(soft, hard);
         }
     }
 }

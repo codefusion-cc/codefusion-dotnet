@@ -136,6 +136,19 @@ public sealed class HttpServer : IAsyncDisposable
     /// another loop's admission could land. Release builds make no such calls.</summary>
     internal Action<EventLoop?>? AdmitHook;
 
+    /// <summary>Debug builds call it as an admitted connection is started (posted to its loop, queued on the pool,
+    /// or run on the loop that accepted it); what it throws is taken as that start's failure. Release builds make no
+    /// such calls.</summary>
+    internal Action<HttpExchange>? StartHook;
+
+    /// <summary>Debug builds call it as the runtime's accept backs off after a failure; what it throws is taken as the
+    /// wait's failure (out of memory for its timer). Release builds make no such calls.</summary>
+    internal Action? BackoffHook;
+
+    /// <summary>Debug builds call it on a loop's thread as it turns its listener off; true makes that fail as epoll_ctl
+    /// out of memory would. Release builds make no such calls.</summary>
+    internal Func<int, bool>? ListenerOffHook;
+
     readonly Lock _lock = new();
     HttpExchange?[] _slots = new HttpExchange?[256];
     int _slotCount;            // slots in use or freed, high-water mark
@@ -173,7 +186,16 @@ public sealed class HttpServer : IAsyncDisposable
         RequestBuffers = new BufferPool(options.RequestBufferSize, options.MaxPooledBuffers);
         ResponseBuffers = new BufferPool(options.ResponseBufferSize, options.MaxPooledBuffers);
         _pool = new HttpExchange[options.MaxPooledConnections];
-        _maxConnections = options.MaxConnections ?? FileDescriptors.MaxConnections(FileDescriptors.SoftLimit());
+        _maxConnections = options.MaxConnections ?? DefaultMaxConnections();
+    }
+
+    /// <summary>The soft descriptor limit, raised to the hard one, less a reserve. CoreCLR has raised it as it
+    /// started; NativeAOT hasn't, and under systemd's soft 1024 this server would take 512 connections.</summary>
+    int DefaultMaxConnections()
+    {
+        (long before, long after) = FileDescriptors.RaiseSoftLimit();
+        if (after != before) Report($"http descriptor limit raised from {before} to {after}", null);
+        return FileDescriptors.MaxConnections(after);
     }
 
     internal bool Stopping => _stopping;
@@ -311,14 +333,15 @@ public sealed class HttpServer : IAsyncDisposable
         int backoff = MinAcceptBackoffMs;
         while (!_stopping)
         {
-            HttpExchange? c;
+            Exception failure;
             try
             {
                 RuntimeAccepting();
                 Socket s = await listener.AcceptAsync(CancellationToken.None).ConfigureAwait(false);
                 AcceptWorks();
                 backoff = MinAcceptBackoffMs;
-                c = Admit(s, null);
+                if (Admit(s, null) is { } c) StartAccepted(c);
+                continue;
             }
             catch (ObjectDisposedException)
             {
@@ -334,16 +357,40 @@ public sealed class HttpServer : IAsyncDisposable
             }
             catch (Exception e)
             {
-                // Out of descriptors or memory, or anything else: accepting must not end while the server runs.
-                AcceptFailed(e);
-                await Task.Delay(backoff).ConfigureAwait(false);
-                backoff = Math.Min(backoff * 2, MaxAcceptBackoffMs);
-                continue;
+                failure = e; // out of descriptors or memory, or anything else: accepting must not end while the server runs
             }
-            if (c is null) continue;
-            // on its loop's thread, so its first request is handled in a batch as every later one is
+            AcceptFailed(failure);
+            try
+            {
+                BackingOff();
+                await Task.Delay(backoff).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // out of memory for the timer: this thread waits instead, at most a second, and only then
+#pragma warning disable CA1849
+                Thread.Sleep(backoff);
+#pragma warning restore CA1849
+            }
+            backoff = Math.Min(backoff * 2, MaxAcceptBackoffMs);
+        }
+    }
+
+    /// <summary>Starts <paramref name="c"/>, just admitted by the runtime's accept: on its loop's thread, so its first
+    /// request is handled in a batch as every later one is, or on the pool. What it throws (out of memory for the
+    /// queue) it throws with the connection closed and given back.</summary>
+    void StartAccepted(HttpExchange c)
+    {
+        try
+        {
+            Starting(c);
             if (c.Loop is { } loop) loop.Post(c);
             else ThreadPool.UnsafeQueueUserWorkItem(c, preferLocal: false);
+        }
+        catch
+        {
+            c.Abandon();
+            throw;
         }
     }
 
@@ -351,6 +398,12 @@ public sealed class HttpServer : IAsyncDisposable
 
     [Conditional("DEBUG")]
     void RuntimeAccepting() => RuntimeAcceptHook?.Invoke();
+
+    [Conditional("DEBUG")]
+    void BackingOff() => BackoffHook?.Invoke();
+
+    [Conditional("DEBUG")]
+    internal void Starting(HttpExchange c) => StartHook?.Invoke(c);
 
     /// <summary>One line per run of accept failures, not one per retry, from whichever thread accepts.</summary>
     internal void AcceptFailed(Exception e)
