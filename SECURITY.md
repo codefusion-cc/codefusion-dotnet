@@ -58,7 +58,8 @@ Fixes go into the latest release only.
   object but whitespace is invalid, as JSON is. One pass reads the payload. A name that
   doesn't unescape, an `exp` or `nbf` that isn't a number, or JSON that doesn't parse makes the token invalid. A
   `sub` that isn't a positive integer string, or a declared claim that is absent (when required), not a string, not
-  valid UTF-8 (raw bytes or a lone surrogate escape), or outside its byte lengths, makes the payload invalid. Every
+  valid UTF-8 (raw bytes or a lone surrogate escape), or outside its byte lengths, makes the payload invalid, and so
+  does an `exp` or `nbf` past what a Double holds (`1e400` reads as an infinity, which would never expire). Every
   copy of a repeated claim is checked, so a bad first copy can't hide behind a good last one. A token is at most 4 KB,
   which bounds a claim. Values are unescaped into the request's arena and are valid only while the request is
   handled, like any `Utf8` of it. A `Viewer` used after its request throws rather than read the next request's claims,

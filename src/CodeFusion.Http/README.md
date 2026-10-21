@@ -83,7 +83,8 @@ app.MapPost("/posts", static (NewPost body, Viewer viewer, Posts posts) =>
 
 A token is invalid when its signature, header, JSON, `exp` or `nbf` fails. When those pass, its payload is still
 invalid if `sub` isn't a positive integer string, or a declared claim is missing (when required), isn't a string, isn't
-valid text, or is outside `MinBytes` and `MaxBytes` once unescaped. If a claim appears twice, the last one counts, and
+valid text, or is outside `MinBytes` and `MaxBytes` once unescaped; so is one whose `exp` or `nbf` is too large to be a
+finite number (`1e400`). If a claim appears twice, the last one counts, and
 any bad copy makes the payload invalid. `viewer.Claim(name)` throws for a name that wasn't declared, and for any name
 on a `Viewer` made by hand, which declares none; it gives an empty value for an anonymous viewer, and `TryGetClaim`
 tells an absent optional claim from an empty one. A `Viewer` used after its request throws, from any thread.

@@ -944,6 +944,7 @@ except where the row says the test is a guard.
 | 9 | `Issue` wrote `"sub":"0"` and `"sub":"-5"`, which every request then refused | a user ≤ 0 throws `ArgumentOutOfRangeException`, before the arena | `AUserTheVerifierWouldRefuseIsntIssued` (0, -5, `long.MinValue`) | issued |
 | 3 | A later envelope reset each field but not a nested field's value and error, so the first wrapper's reason answered for the last (older than the spec options) | the reset clears `n{i}` and `e{i}` too | `ALaterWrapperReplacesAnEarlierOnesNestedErrorsToo` (three orders) | 1 of 3: `bad age` for a last wrapper with no author |
 | 4 | On a body cut short in an array, `ReadTextArray` returned an array whose count ran past its texts; no handler saw it, since `ReadToEnd` decides first | `Invalid` when the cursor is malformed | `AnArrayInAMalformedBodyIsInvalid` (four cuts) | 4 of 4 |
+| 8 | A signed `exp` of `1e400` reads as an infinity, so the token never expired (older than the spec options) | an `exp` or `nbf` that isn't finite makes the payload invalid; a past one, `-1e400` among them, stays expired | `ATimeThatIsntAFiniteNumberIsntAUsablePayload` (seven cases, `Verify` too) | 3 of 7: valid |
 
 ## Fuzzing (tests/CodeFusion.Fuzz)
 

@@ -503,7 +503,8 @@ public sealed class Jwt : IRequestScoped
             if (r.TokenType != JsonTokenType.EndObject || r.Read()) return TokenCheck.Invalid; // nothing after it but whitespace
             if (double.IsNaN(exp) || !(now < exp)) return TokenCheck.Invalid; // exp is required
             if (!double.IsNaN(nbf) && now < nbf) return TokenCheck.Invalid;
-            if (bad || sub <= 0) return TokenCheck.InvalidPayload;
+            // 1e400 reads as an infinity: an exp that never comes, or an nbf that always passed, is no time at all
+            if (bad || sub <= 0 || !double.IsFinite(exp) || double.IsInfinity(nbf)) return TokenCheck.InvalidPayload;
             for (int i = 0; i < _claims.Length; i++)
                 if (_claims[i].Required && claims[2 * i] < 0) return TokenCheck.InvalidPayload;
             return TokenCheck.Valid;

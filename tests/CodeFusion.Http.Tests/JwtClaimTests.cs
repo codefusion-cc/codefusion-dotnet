@@ -301,6 +301,24 @@ public sealed class JwtClaimTests
         Assert.Equal(TokenCheck.Valid, Read(Username(), Signed(p, Base64Url.EncodeToString(Encoding.ASCII.GetBytes("""{"alg":"HS256"} """)))).Check);
     }
 
+    // Found in the second review: an exp of 1e400 reads as infinity, so a token carrying it never expired. A time that
+    // isn't a finite number is a payload this app can't read; an exp that is past, -1e400 among them, stays expired.
+    [Theory]
+    [InlineData("\"exp\":1e400", nameof(TokenCheck.InvalidPayload))]
+    [InlineData("\"exp\":1e400,\"nbf\":1", nameof(TokenCheck.InvalidPayload))]
+    [InlineData("\"exp\":{later},\"nbf\":-1e400", nameof(TokenCheck.InvalidPayload))]
+    [InlineData("\"exp\":-1e400", nameof(TokenCheck.Invalid))]
+    [InlineData("\"exp\":{later},\"nbf\":1e400", nameof(TokenCheck.Invalid))]
+    [InlineData("\"exp\":1e300", nameof(TokenCheck.Valid))]
+    [InlineData("\"exp\":{later},\"nbf\":-1e300", nameof(TokenCheck.Valid))]
+    public void ATimeThatIsntAFiniteNumberIsntAUsablePayload(string times, string outcome)
+    {
+        string payload = "{\"sub\":\"42\",\"username\":\"jake\"," + times.Replace("{later}", (Now + 60).ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal) + "}";
+        Assert.Equal(Enum.Parse<TokenCheck>(outcome), Read(Username(), Signed(payload)).Check);
+        long expected = outcome == nameof(TokenCheck.Valid) ? 42 : 0;
+        Assert.Equal(expected, new Jwt(JwtTests.Secret).Verify(Encoding.ASCII.GetBytes(Signed(payload)), NowMs));
+    }
+
     [Fact]
     public void ARawByteAfterThePayloadIsInvalid()
     {
