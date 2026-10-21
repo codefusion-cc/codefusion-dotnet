@@ -738,9 +738,8 @@ query was refused, or its SQL or rows differed), or, for the properties, with th
 **Text functions** (`Utf8Operators`, `TextFunctionTests`, `ShapeGeneratorTests.TextFunctions*`). A C# method that SQL
 can't match exactly isn't mapped: no SQL `lower` lowers as `ToLowerInvariant` does (a collation lowers by its locale:
 ICU gives `ς` for a final Σ and `i̇` for İ, the C collation lowers A to Z only), so the function is `ToLowerAscii`,
-`translate(x, 'A…Z', 'a…z')`, alike in every collation and in SQLite, and keeping the text's collation for an order by it.
-Each function also runs as C#, so the property tests
-compare the database's result with the method's for random text of ASCII, letters only a locale lowers, ß, ǅ, astral
+`translate(x, 'A…Z', 'a…z')`, alike in every collation and in SQLite, and keeping the text's collation for an
+order by it. Each function also runs as C#, so the property tests compare the database's result with the method's for random text of ASCII, letters only a locale lowers, ß, ǅ, astral
 characters and combining marks.
 
 | Test | Red with |
@@ -821,7 +820,8 @@ What it decided:
 - The statement reads one snapshot, from before the write, so the Select reads the table written only by Count and
   Any (below); a join, a navigation's subquery or a `Single` into it are refused, as they would show the table as it
   was. Templates are SQL the generator doesn't read and aren't checked.
-- Of several rows found, each is written from and the reply is one of them, in no set order (the contest's has none).
+- Of several rows found, each is written from, and the reply is the one of the smallest key (`ORDER BY` the key
+  `LIMIT 1`; the writable CTE still runs to its end). An entity without a key can't take a Select after Then.
 - The Conduit context's Follow and Unfollow are this LINQ.
 
 **A count corrected within the snapshot** (`Translator.Corrected`, `CorrectedReadTests`). The Select after Then may
@@ -857,9 +857,10 @@ What it decided:
 - With OrIgnore the row of r's key is there after the statement, r or another written before (a concurrent writer's
   too: ON CONFLICT waits for it and skips), so P may read only r's key, which that row has alike; anything else is
   refused. The key is `[Key]` on each of the entity's key columns (several make one key; `EntityInfo.KeyColumns`), and
-  the insert's conflict target is that key (`ON CONFLICT (user_id, article_id) DO NOTHING`), so a conflict on another
-  unique key is an error, not a skip the Select would count as the row. Without OrIgnore r is new, and P may read any
-  column it sets.
+  when a correction relies on the row of the key being there after, the insert's conflict target is that key (`ON
+  CONFLICT (user_id, article_id) DO NOTHING`), so a conflict on another unique key is an error, not a skip the Select
+  would count as the row; otherwise OrIgnore skips on any unique key, as everywhere. Without OrIgnore r is new, and P
+  may read any column it sets.
 - A delete's D is translated on the counted row: when every condition of D is one of P's, none is left (`false`, 0).
 - Only Count and Any of a navigation are corrected: Take before them, AsJson or a Select of the written table's rows,
   a join or Single into it, and a navigation through it as a join table stay refused.
@@ -887,8 +888,10 @@ What it decided:
   past what a long holds, computed in C# where the query is called), and the page is taken of their union as any
   page is: ids first, then the rows of those ids. The count is of every child, capped, with no order.
 - The navigation the children are reached through for its key only (`f.Followee`, whose key is `f.followee_id`) is
-  joined for nothing and taken out (`Prune`): it is required and joined on its key, so it neither drops nor adds a
-  row. Only in this shape, where the join would otherwise stay in the lateral's source for every group.
+  taken out of the lateral's source (`Prune`) only where the model declares it required (`[Required]` on it or its
+  key): then the row it leads to is there and the join on its key neither drops nor adds a row. Without it the join
+  stays, so a link row whose parent is missing (no foreign key) or hidden (row security on the parent) is dropped as
+  LINQ's inner join drops it. Don't declare `[Required]` where row security may hide the parent.
 - Refused: a result other than the child itself (the page's Select makes the view), an order by anything but the
   child's key, a Take of the children in another order than the page's (it would take other rows than the page's
   first), a Where after SelectMany of children taken with Take, a Select inside the children, operators before
@@ -915,13 +918,58 @@ What the fixes decided:
 - The conflict target is the key only when a correction relies on a row of the key being there after; otherwise
   OrIgnore skips on any unique key, as it does everywhere.
 - Not changed, and so noted: a delete's correction reads D on the snapshot's row while the DELETE rechecks it on the
-  newest version, so a concurrent update of a column D reads (not the key) can leave the count matching neither; the
-  Conduit deletes read key columns only. And `Prune` relies on the required navigation's row being there, which a
-  foreign key constraint makes sure of.
+  newest version, so a concurrent update of a column D reads can leave the count matching neither. The Conduit
+  deletes read key columns only, which is exact unless a concurrent update changes a key column.
+
+**Second review of the shapes.** Each test was red on the code before its fix (or with the fix broken on purpose,
+where the test came with it), then green on the C and the ICU database.
+
+| Finding | Test | Red before |
+|---|---|---|
+| a corrected Any after a plain insert was NULL where its condition read a NULL column; the reader failed after the write committed | `CorrectedReadTests.AnAnyAgainstANullColumnIsFalseAsInCSharp` (with and without `!`) | the row not read |
+| a delete's cascade into a table the Select reads, a trigger or rule on the table written, row security, a column storing another value than the one written: the read as before the write | `AReadADeleteMayCascadeIntoIsRefused` (a navigation leads to the table deleted from), `AReadADeleteMayHaveCascadedIntoFailsTheStatementAndNothingIsWritten` (a join table's foreign key the model can't see), `ATriggerRowSecurityOrARoundingColumnOnTheTableWrittenFailsTheStatement` | no error; the statement ran |
+| of several rows found, the reply was whichever came first | `FoundWriteTests.OfSeveralRowsFoundEachIsWrittenFromAndTheOneOfTheSmallestKeyIsTheReply` | no ORDER BY |
+| `Sql.Conjuncts` split a condition inside CASE ... END, giving SQL Postgres refuses | `ConditionsSplitOnlyAtTheirTopLevel` (CASE, nested CASE, quotes, `weekend` and `ends_at`), `AWriteFromTheRowsFoundIsOneStatement` (`TakeCase`) | `CASE WHEN a AND (b THEN ...)` |
+| a NUL in Trim's character or ReplaceMatches' replacement broke the generated class when its statements were made | `ATextFunctionSqlWouldReadOtherwiseIsRefused` (2 rows) | no error |
+| the group page's source navigation taken out of the join on a foreign key the database may not have | `GroupPageTests.WithoutForeignKeysARowWhoseParentIsMissingIsLeftOutAsTheJoinLeavesIt`, `ANavigationsJoinIsLeftOutOnlyWhereTheModelDeclaresItRequired` | `nemo/2`: the ghost link counted |
+| ReplaceMatches as C# backtracked: 2.8 s on 24,000 characters | `AsCSharpAPatternRunsInLinearTimeOnALongText` | 2.2 s for the bound of 1 s |
+| `lower(x COLLATE "C")` ordered an `OrderBy(n => n.ToUpperAscii())` bytewise | `ListInsertTests.AnOrderByARaisedTextIsInTheTextsOwnCollation` (ICU database) | `_x` before `B` |
+| a delete in Then wrote `ARRAY(SELECT ...)` into any dialect's InArray; an empty ListRows wrote `FROM ` | `ADialectWithoutAnArrayOfAQueryJoinsTheRowsFound`, `ADialectWithoutWhatAShapeNeedsRefusesIt` | the ANY form whatever the dialect; 3 errors for 4 |
+| the pattern property drew 6 classes and 2 escapes, bound as a parameter | `APatternTakenIsReadAlikeByDotNetAndSql` (every class punctuation and escape, and the pattern as the generator's SQL literal) | found `\_` (.NET refuses it) and `\'Z'` (.NET reads a back reference), both refused now |
+| the concurrency test passed whether or not the writers overlapped | `AWriteTheSnapshotMissedIsCountedOnce`: another transaction holds the row, the statement waits for it (seen in pg_stat_activity), then it commits | with the correction taken out: 1 for 2 |
+
+What the fixes decided:
+
+- A corrected Any is `COALESCE(P(r), false) OR EXISTS (...)`: C#'s comparison with a null is false. Count needs
+  nothing, as its CASE takes NULL as no.
+- Only the table the write names is corrected. After a delete, a read of a table whose rows lead to it by a
+  navigation is refused at build time; for the rest the statement checks the catalog first
+  (`SqlDialectAttribute.ThenGuard`, a scalar subquery the final SELECT's WHERE compares with 0, as
+  perf/data-batched-updates' merged updates check their table): a rule or non-internal trigger on the table written,
+  a foreign key that cascades or sets NULL or a default from it into a table the Select reads (the found table and
+  the table written included), and, for a corrected read, row security on it or a column the insert sets with a type
+  modifier or a type that may store another value than the one bound. Any of them casts
+  `'CodeFusion: the Select after Then can't read <table> as the write left it ...'` to an integer, which fails the
+  statement (22P02) before its write commits. The check is a few catalog lookups by index per statement, run only
+  for a Then whose Select reads a table or is corrected; PlanTests compare with the contest's statements so checked.
+- A correction is taken also where every row found makes the same write: the same delete, which reads nothing of
+  the row found, or an ignored insert of the same key.
+- The reply of a Then with a Select is the row found of the smallest key.
+- Conditions split at AND only outside parentheses, string literals, quoted names and CASE ... END.
+- `ToLowerAscii` and `ToUpperAscii` are `translate()` of A to Z, which keeps the text's collation. `regexp_replace`
+  fails on text of a nondeterministic collation, and `replace` does before Postgres 18 (documented on the settings).
+- `Concat(long)` writes its number through `SqlDialectAttribute.IntegerText` (`CAST({0} AS text)`); `AnyOfQuery`
+  (`{0} = ANY(ARRAY({1}))`, empty: join the rows found) and an empty `ListRows` (refused) are the dialect's to say.
+- Not done as asked, and why: a page ordered by one column of a key of several was to be refused. That column is a
+  foreign key in every such page here (`FavoritedBy` pages favorites by `ArticleId`, Ops' `LabelPage` by `PersonId`),
+  and those link tables had no `[Key]` before this branch, so the page was a page of the row the key leads to then as
+  now; refusing it would break both. `APageByAColumnOfAKeyOfSeveralIsAPageOfTheRowItsForeignKeyLeadsTo` pins that, and
+  a key column that is no foreign key stays refused. What changed is only for an entity declaring several `[Key]`s:
+  the last one used to be taken as its key, and is not any more; every use needing one key refuses such an entity.
 
 All five of the Conduit context's `Sql(...)` queries are LINQ now; the context has none left. The app's own copy
 (`ConduitDb.cs` in the contest submission) needs the same entities: `[Key]` on Follow's and Favorite's two columns,
-and `User.Articles`.
+`[Required]` on `Follow.Followee`, and `User.Articles`.
 
 ### Release cost
 
