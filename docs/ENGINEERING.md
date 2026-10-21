@@ -889,6 +889,21 @@ What it decided:
   1,000) and the `json-syntax` fuzz target hold them to the same verdict, and the binder keeps its `catch` for
   anything the check lets through. Broken on purpose (leading zeros taken, the depth limit one off), the property
   test failed. A well-formed body is now read twice; nothing was measured for it here, so no figure is claimed.
+- An Opus review of the diff found nothing critical or high. Fixed, each test red on the code before:
+  `Jwt.Issue` asked the arena for six times a value's length before checking the value (a 1 MB claim took about
+  8 MB from the pool, then a 500), and its size sum could overflow: the claims are checked first now, sized by their
+  real escapes, and refused once the payload passes `MaxTokenBytes`, so the payload fits on the stack and the
+  `ArrayPool` is gone (`AValueIssueRefusesTakesNothingFromTheArena`, `IssuingChecksTheClaimsAsReadingWould`). A
+  `Viewer` kept past its request read the connection's next claims beside its own `Id`; each request now has a
+  generation, and a stale `Viewer` throws on `Claim` (`AViewerKeptPastItsRequestCantReadTheNextRequestsClaims`). The
+  lifetime overloads named `options` in their exception (`ABadLifetimeIsNamedAsTheCallerWroteIt`). Two summaries I
+  had left as placeholders got their text.
+- Changes an existing app can notice, all deliberate: a `[Range]` on a `long` or `int` route parameter was ignored
+  and is now enforced (an out-of-range value gets `NotFound` unless the app sets a reply), and one on a `Utf8` route
+  value is CFH0103; a signed token with bytes after its header or payload object is refused; an anonymous `Viewer` is
+  no longer `default(Viewer)`; `jwt.Issue(id, default)`, which bound to the `Span<byte>` overload, is now ambiguous.
+  `Issue` writes every declared claim when it is given values, so it can't leave out one optional claim and keep
+  another; that needs a way to tell an absent `Utf8` from an empty one.
 - `FeedApp` is the proof that the spec needs nothing app-specific: it reads no header and parses no id itself. What
   it still does by hand is the spec's own: trimming the post and counting its characters, which copies the trimmed
   text into the arena because `Utf8` has no slice.

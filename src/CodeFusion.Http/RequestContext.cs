@@ -36,6 +36,7 @@ public sealed class RequestContext : IResponse, IValueTaskSource
     readonly int[] _route;
     readonly int[] _claims;
     ArenaBytes _claimPayload;
+    int _generation; // bumped when a request is done, so a Viewer kept past it can tell
     bool _jsonInUse;
     long _viewer;
 
@@ -126,7 +127,7 @@ public sealed class RequestContext : IResponse, IValueTaskSource
 
     /// <summary>The request's viewer: the id the dispatcher verified, and the token it presented.</summary>
     [EditorBrowsable(EditorBrowsableState.Never)]
-    public Viewer Viewer => _viewer > 0 ? new Viewer(_viewer, Token(), this) : new Viewer(0, default, this);
+    public Viewer Viewer => _viewer > 0 ? new Viewer(_viewer, Token(), this, _generation) : new Viewer(0, default, this, _generation);
 
     internal long ViewerId
     {
@@ -143,11 +144,12 @@ public sealed class RequestContext : IResponse, IValueTaskSource
         set => _claimPayload = value;
     }
 
-    internal bool TryGetClaim(ReadOnlySpan<byte> name, bool authenticated, out Utf8 value)
+    internal bool TryGetClaim(ReadOnlySpan<byte> name, bool authenticated, int generation, out Utf8 value)
     {
         value = default;
         int i = _app.Jwt?.ClaimIndex(name) ?? -1;
         if (i < 0) throw new ArgumentException($"the claim '{System.Text.Encoding.UTF8.GetString(name)}' isn't declared on JwtOptions.Claims", nameof(name));
+        if (generation != _generation) throw new InvalidOperationException("the Viewer's request is over: its claims went with it (copy a claim while the request is handled to keep it)");
         int start = _claims[2 * i];
         if (!authenticated || start < 0) return false;
         value = _claimPayload.Text(start, _claims[2 * i + 1]);
@@ -319,6 +321,8 @@ public sealed class RequestContext : IResponse, IValueTaskSource
         _arena.Reset();
         _viewer = 0;
         _claimPayload = default;
+        _claims.AsSpan().Fill(-1);
+        _generation++;
     }
 
     /// <summary>The connection is idle or closed: the arena's kept chunk goes back to the pool.</summary>

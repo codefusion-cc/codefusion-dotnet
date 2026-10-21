@@ -125,7 +125,8 @@ after auth, so a request with no token gets the 401 whatever its route holds:
 
 ```csharp
 builder.Errors.InvalidRouteValue = Errors.InvalidPostId;  // 400 "invalid post id"
-app.MapPost("/posts/{id}/like", static ([Range(1, long.MaxValue)] long id, Viewer viewer, Likes likes) => likes.Add(viewer.Id, id))
+app.MapPost("/posts/{id}/like", static ([Range(1, long.MaxValue)] long id, Viewer viewer, Likes likes) =>
+        likes.Add(viewer.Id, id))
    .AuthRequired();
 app.MapGet("/users/{id}", static ([Range(1, long.MaxValue)] long id, Users users) => users.Find(id))
    .WithInvalidRouteValue(Errors.InvalidUserId);

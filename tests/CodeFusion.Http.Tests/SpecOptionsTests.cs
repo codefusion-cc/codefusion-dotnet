@@ -131,6 +131,35 @@ public class SpecOptionsTests
         Assert.Equal((401, """{"error":"unauthorized"}"""), (without.Status, without.Text));
     }
 
+    // Found in review: a Viewer copied Id and Token but read its claims from the connection when asked, so one kept
+    // past its request paired its own Id with the next request's username.
+    [Fact]
+    public async Task AViewerKeptPastItsRequestCantReadTheNextRequestsClaims()
+    {
+        HttpAppBuilder b = Builder(Feed());
+        await using HttpApp app = b.Build();
+        await using var check = new AppCheck(app);
+        app.MapGet("/keep", static (Viewer v) =>
+        {
+            Kept.Viewers[0] = v;
+            return Reply.Ok(new Named(v.Id, v.Claim("username"u8)));
+        }).AuthRequired();
+        app.MapGet("/kept", static (Viewer v) =>
+        {
+            Utf8 mine = v.Claim("username"u8);
+            return Reply.Ok(new Has(Kept.Viewers[0].TryGetClaim("username"u8, out _), mine));
+        }).AuthRequired();
+        app.Start();
+        using Client c = await Client.ConnectAsync(app.LocalEndPoint);
+        string alice = FeedToken(username: "\"alice\""), bob = FeedToken(username: "\"bob\"", sub: "\"7\"");
+        await c.SendAsync($"GET /keep HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {alice}\r\n\r\nGET /kept HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {bob}\r\n\r\n");
+        Response kept = await c.ReadAsync(), next = await c.ReadAsync();
+        Assert.Equal((200, """{"id":42,"username":"alice"}"""), (kept.Status, kept.Text));
+        Assert.Equal(500, next.Status); // the kept Viewer throws instead of answering "bob"
+        Assert.Throws<InvalidOperationException>(() => Kept.Viewers[0].Claim("username"u8));
+        Assert.Equal(42, Kept.Viewers[0].Id);
+    }
+
     [Fact]
     public async Task AnOptionalClaimThatIsAbsentReadsAsNone()
     {
@@ -614,4 +643,12 @@ internal partial struct WrappedPost
     public Utf8 Body;
 
     static ErrorReply InvalidBody => SpecErrors.NotAPost;
+}
+
+/// <summary>Where a test keeps a Viewer past its request, as an app must not.</summary>
+internal static class Kept
+{
+#pragma warning disable CFH0004 // kept on purpose, to show it can't be read later
+    public static readonly Viewer[] Viewers = new Viewer[1];
+#pragma warning restore CFH0004
 }

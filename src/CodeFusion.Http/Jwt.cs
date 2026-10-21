@@ -13,7 +13,7 @@ namespace CodeFusion.Http;
 /// HS256 only, with no iss, aud or jti: a token can't be revoked before its exp except by changing the secret, which
 /// revokes them all. <c>builder.AddJwtAuth(secret)</c> registers one per connection, so a handler that takes a
 /// <see cref="Jwt"/> can <see cref="Issue(long)"/> a token into the request's arena; requests that take a
-/// <see cref="Viewer"/> are verified with the same secret (signature, then exp, then sub and the claims, every request).
+/// <see cref="CodeFusion.Http.Viewer"/> are verified with the same secret (signature, then exp, then sub and the claims, every request).
 /// </summary>
 public sealed class Jwt : IRequestScoped
 {
@@ -54,7 +54,7 @@ public sealed class Jwt : IRequestScoped
 
     /// <summary>Tokens signed with <paramref name="secret"/>'s UTF-8 bytes (at least <see cref="MinSecretBytes"/>),
     /// valid for <paramref name="lifetime"/> (whole seconds, at least one) from their issue.</summary>
-    public Jwt(string secret, TimeSpan lifetime) : this(secret, new JwtOptions { Lifetime = lifetime }) { }
+    public Jwt(string secret, TimeSpan lifetime) : this(secret, Options(lifetime, false)) { }
 
     /// <summary>
     /// <see cref="Jwt(string, TimeSpan)"/>, and with <paramref name="allowShortSecret"/> a secret shorter than
@@ -63,7 +63,15 @@ public sealed class Jwt : IRequestScoped
     /// and then anyone can sign as anyone: only when the secret isn't yours to choose (SECURITY.md).
     /// </summary>
     public Jwt(string secret, TimeSpan lifetime, bool allowShortSecret)
-        : this(secret, new JwtOptions { Lifetime = lifetime, AllowShortSecret = allowShortSecret }) { }
+        : this(secret, Options(lifetime, allowShortSecret)) { }
+
+    /// <summary>The options of the overloads that take a lifetime, checked under its own name.</summary>
+    internal static JwtOptions Options(TimeSpan lifetime, bool allowShortSecret)
+    {
+        if (lifetime < TimeSpan.FromSeconds(1) || lifetime.Ticks % TimeSpan.TicksPerSecond != 0)
+            throw new ArgumentOutOfRangeException(nameof(lifetime), lifetime, "whole seconds, at least one");
+        return new JwtOptions { Lifetime = lifetime, AllowShortSecret = allowShortSecret };
+    }
 
     /// <summary>Tokens signed with <paramref name="secret"/>'s UTF-8 bytes, issued and read as
     /// <paramref name="options"/> say: their lifetime, whether a short secret is taken, the header's scheme and the
@@ -177,30 +185,21 @@ public sealed class Jwt : IRequestScoped
     /// <summary><see cref="Issue(long, Span{byte})"/> as issued at <paramref name="now"/> (Unix seconds).</summary>
     public int Issue(long userId, long now, Span<byte> dest) => Issue(userId, now, ReadOnlySpan<Utf8>.Empty, dest);
 
-    /// <summary>The most bytes a token carrying <paramref name="claims"/> takes: what <see cref="Issue(long, long,
-    /// ReadOnlySpan{Utf8}, Span{byte})"/> needs in its destination.</summary>
-    public int MaxIssuedBytesWith(ReadOnlySpan<Utf8> claims) => 36 + 1 + (PayloadBytes(claims) + 2) / 3 * 4 + 1 + 43;
+    /// <summary>The most bytes a token carrying <paramref name="claims"/> takes, its numbers at their longest: what
+    /// <see cref="Issue(long, long, ReadOnlySpan{Utf8}, Span{byte})"/> needs in its destination. Throws as Issue does
+    /// for values it refuses, so the size is never asked of the arena for them.</summary>
+    public int MaxIssuedBytesWith(ReadOnlySpan<Utf8> claims) => TokenBytes(PayloadBytes(claims));
 
-    // ,"name":"value" with every byte of the value escaped at most six ways
+    static int TokenBytes(int payload) => 36 + 1 + (payload + 2) / 3 * 4 + 1 + 43;
+
+    /// <summary>The payload's most bytes with <paramref name="claims"/> escaped, once they are checked: one value per
+    /// declared claim or none (when none is required), each UTF-8 within its claim's lengths, and no more payload than a
+    /// token may hold. Bounded, so it is safe to stackalloc.</summary>
     int PayloadBytes(ReadOnlySpan<Utf8> claims)
-    {
-        int n = MaxPayloadBytes;
-        for (int i = 0; i < claims.Length; i++)
-            n += 6 + (i < _claims.Length ? _claims[i].NameBytes.Length : JwtClaim.MaxNameBytes) + 6 * claims[i].Length;
-        return n;
-    }
-
-    /// <summary>
-    /// Writes a token for <paramref name="userId"/>, issued at <paramref name="now"/> (Unix seconds), into
-    /// <paramref name="dest"/> (at least <see cref="MaxIssuedBytesWith"/>) and returns its length.
-    /// <paramref name="claims"/> are the declared claims' values in their order, or none when none is required; each
-    /// must be UTF-8 within its claim's lengths, and the token no longer than <see cref="MaxTokenBytes"/>, as the
-    /// verifier would require.
-    /// </summary>
-    public int Issue(long userId, long now, ReadOnlySpan<Utf8> claims, Span<byte> dest)
     {
         if (claims.Length != 0 && claims.Length != _claims.Length)
             throw new ArgumentException($"{claims.Length} claim values for {_claims.Length} declared claims: pass each in order, or none", nameof(claims));
+        int n = MaxPayloadBytes;
         for (int i = 0; i < _claims.Length; i++)
         {
             JwtClaim c = _claims[i];
@@ -212,52 +211,70 @@ public sealed class Jwt : IRequestScoped
             ReadOnlySpan<byte> v = claims[i].Span;
             if (!System.Text.Unicode.Utf8.IsValid(v) || v.Length < c.MinBytes || v.Length > c.MaxBytes)
                 throw new ArgumentException($"the value of '{c.Name}' isn't UTF-8 of {c.MinBytes} to {c.MaxBytes} bytes", nameof(claims));
+            n += 6 + c.NameBytes.Length + EscapedBytes(v); // ,"name":"value"
+            if (n > MaxTokenBytes) throw TooLong();
         }
-        if (dest.Length < MaxIssuedBytesWith(claims)) throw new ArgumentException("dest is too small", nameof(dest));
+        return n;
+    }
 
-        int size = PayloadBytes(claims);
-        byte[]? rented = size > 256 ? ArrayPool<byte>.Shared.Rent(size) : null;
-        Span<byte> payload = rented is null ? stackalloc byte[256] : rented;
-        int n;
-        try
-        {
-            int p = 0;
-            "{\"sub\":\""u8.CopyTo(payload);
-            p += 8;
-            p += Number(userId, payload[p..]);
-            "\",\"iat\":"u8.CopyTo(payload[p..]);
-            p += 8;
-            p += Number(now, payload[p..]);
-            ",\"exp\":"u8.CopyTo(payload[p..]);
-            p += 7;
-            p += Number(now + _ttl, payload[p..]);
-            for (int i = 0; i < claims.Length; i++)
-            {
-                ",\""u8.CopyTo(payload[p..]);
-                p += 2;
-                _claims[i].NameBytes.CopyTo(payload[p..]);
-                p += _claims[i].NameBytes.Length;
-                "\":\""u8.CopyTo(payload[p..]);
-                p += 3;
-                p += Escape(claims[i].Span, payload[p..]);
-                payload[p++] = (byte)'"';
-            }
-            payload[p++] = (byte)'}';
+    static ArgumentException TooLong() =>
+        new($"the claims make a token longer than {MaxTokenBytes} bytes, which no verifier here takes", "claims");
 
-            HeaderB64.CopyTo(dest);
-            n = HeaderB64.Length;
-            dest[n++] = (byte)'.';
-            n += Base64Url.EncodeToUtf8(payload[..p], dest[n..]);
-        }
-        finally
+    /// <summary>
+    /// Writes a token for <paramref name="userId"/>, issued at <paramref name="now"/> (Unix seconds), into
+    /// <paramref name="dest"/> (at least <see cref="MaxIssuedBytesWith"/>) and returns its length.
+    /// <paramref name="claims"/> are the declared claims' values in their order, or none when none is required; each
+    /// must be UTF-8 within its claim's lengths, and the token no longer than <see cref="MaxTokenBytes"/>, as the
+    /// verifier would require. Every declared claim is written when values are passed.
+    /// </summary>
+    public int Issue(long userId, long now, ReadOnlySpan<Utf8> claims, Span<byte> dest)
+    {
+        int size = PayloadBytes(claims); // checks the claims first
+        if (dest.Length < TokenBytes(size)) throw new ArgumentException("dest is too small", nameof(dest));
+        Span<byte> payload = stackalloc byte[size];
+        int p = 0;
+        "{\"sub\":\""u8.CopyTo(payload);
+        p += 8;
+        p += Number(userId, payload[p..]);
+        "\",\"iat\":"u8.CopyTo(payload[p..]);
+        p += 8;
+        p += Number(now, payload[p..]);
+        ",\"exp\":"u8.CopyTo(payload[p..]);
+        p += 7;
+        p += Number(now + _ttl, payload[p..]);
+        for (int i = 0; i < claims.Length; i++)
         {
-            if (rented is not null) ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+            ",\""u8.CopyTo(payload[p..]);
+            p += 2;
+            _claims[i].NameBytes.CopyTo(payload[p..]);
+            p += _claims[i].NameBytes.Length;
+            "\":\""u8.CopyTo(payload[p..]);
+            p += 3;
+            p += Escape(claims[i].Span, payload[p..]);
+            payload[p++] = (byte)'"';
         }
+        payload[p++] = (byte)'}';
+
+        HeaderB64.CopyTo(dest);
+        int n = HeaderB64.Length;
+        dest[n++] = (byte)'.';
+        n += Base64Url.EncodeToUtf8(payload[..p], dest[n..]);
+        if (n + 1 + 43 > MaxTokenBytes) throw TooLong();
         Span<byte> mac = stackalloc byte[32];
         Sign(dest[..n], mac);
         dest[n++] = (byte)'.';
         n += Base64Url.EncodeToUtf8(mac, dest[n..]);
-        if (n > MaxTokenBytes) throw new ArgumentException($"the claims make a token longer than {MaxTokenBytes} bytes, which no verifier here takes", nameof(claims));
+        return n;
+    }
+
+    static int EscapedBytes(ReadOnlySpan<byte> s)
+    {
+        int n = s.Length;
+        foreach (byte b in s)
+        {
+            if (b is (byte)'"' or (byte)'\\') n++;
+            else if (b < 0x20) n += 5;
+        }
         return n;
     }
 

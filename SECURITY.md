@@ -61,8 +61,8 @@ Fixes go into the latest release only.
   valid UTF-8 (raw bytes or a lone surrogate escape), or outside its byte lengths, makes the payload invalid. Every
   copy of a repeated claim is checked, so a bad first copy can't hide behind a good last one. A token is at most 4 KB,
   which bounds a claim. Values are unescaped into the request's arena and are valid only while the request is
-  handled, like any `Utf8` of it. Declared names can't be `sub`, `iat`, `exp` or `nbf`, and are compared after
-  unescaping, case included.
+  handled, like any `Utf8` of it; a `Viewer` kept past its request throws rather than read the next request's claims.
+  Declared names can't be `sub`, `iat`, `exp` or `nbf`, and are compared after unescaping, case included.
 - **401 reasons.** An app may answer a missing token, an invalid one and an invalid payload with different bodies
   (`HttpAppErrors.MissingToken`, `InvalidToken`, `InvalidTokenPayload`); by default all three are the one
   `Unauthorized` body. The payload reason is reachable only with a token the secret signed, so it tells a client

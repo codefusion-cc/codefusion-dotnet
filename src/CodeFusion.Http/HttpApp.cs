@@ -276,7 +276,7 @@ public sealed class HttpAppBuilder : IServiceRegistry
     /// shorter than <see cref="Jwt.MinSecretBytes"/> too, for a deployment handed a fixed one: see
     /// <see cref="Jwt.Jwt(string, TimeSpan, bool)"/> for the risk.</summary>
     public HttpAppBuilder AddJwtAuth(string secret, TimeSpan lifetime, bool allowShortSecret) =>
-        AddJwtAuth(secret, new JwtOptions { Lifetime = lifetime, AllowShortSecret = allowShortSecret });
+        AddJwtAuth(secret, Jwt.Options(lifetime, allowShortSecret));
 
     /// <summary><see cref="AddJwtAuth(string)"/> as <paramref name="options"/> say: the tokens' lifetime, whether a
     /// short secret is taken (see <see cref="JwtOptions.AllowShortSecret"/> for the risk), and the header's scheme,
@@ -329,9 +329,9 @@ public sealed class HttpAppErrors
     /// leave unset. 401 by default.</summary>
     public ErrorReply Unauthorized { get; set; } = Make(401, "unauthorized");
 
-    /// <summary>A request with no token, on an endpoint that needs one: no Authorization header, or one without the
-    /// scheme (another scheme, the scheme in another case, an empty header). Null, the default, answers with
-    /// <see cref="Unauthorized"/>.</summary>
+    /// <summary>No token: no Authorization header on an endpoint that requires one, or, on any endpoint that reads it,
+    /// a header without the scheme (another scheme, the scheme in another case, an empty header). Null, the default,
+    /// answers with <see cref="Unauthorized"/>.</summary>
     public ErrorReply? MissingToken { get; set; }
 
     /// <summary>A token that isn't valid: forged, malformed, not HS256, expired or not valid yet. Null, the default,
@@ -347,10 +347,13 @@ public sealed class HttpAppErrors
     /// for. 422 by default.</summary>
     public ErrorReply InvalidBody { get; set; } = Make(422, "invalid body");
 
-    /// <summary>stub</summary>
+    /// <summary>A request body that isn't JSON: cut short, bytes after its value, a bad escape, past depth 64. It wins
+    /// over a body struct's own <c>InvalidBody</c>. Null, the default, answers as before: the struct's own
+    /// <c>static ErrorReply InvalidBody</c>, else <see cref="InvalidBody"/>.</summary>
     public ErrorReply? MalformedBody { get; set; }
 
-    /// <summary>stub</summary>
+    /// <summary>No request body at all (none sent, or Content-Length: 0) to an endpoint that reads one. Null, the
+    /// default, answers as <see cref="MalformedBody"/> does, and so on down its line.</summary>
     public ErrorReply? MissingBody { get; set; }
 
     /// <summary>A handler threw. 500 by default.</summary>

@@ -12,6 +12,7 @@ namespace CodeFusion.Http;
 public readonly struct Viewer
 {
     readonly RequestContext? _request;
+    readonly int _generation; // which of its connection's requests it is
 
     /// <summary>The user id from the token; 0 when anonymous.</summary>
     public long Id { get; }
@@ -31,13 +32,18 @@ public readonly struct Viewer
         Token = token;
     }
 
-    internal Viewer(long id, Utf8 token, RequestContext request) : this(id, token) => _request = request;
+    internal Viewer(long id, Utf8 token, RequestContext request, int generation) : this(id, token)
+    {
+        _request = request;
+        _generation = generation;
+    }
 
     /// <summary>
     /// The value of the claim <see cref="JwtOptions.Claims"/> declared as <paramref name="name"/>, such as
     /// <c>viewer.Claim("username"u8)</c>: unescaped UTF-8 in the request's arena, valid until the response has been
     /// sent. Empty when anonymous, or when an optional claim is absent (<see cref="TryGetClaim"/> tells those apart).
-    /// A name that wasn't declared throws, so a misspelling can't read as empty.
+    /// A name that wasn't declared throws, so a misspelling can't read as empty, and so does a Viewer kept past its
+    /// request, which would otherwise read the next request's claims.
     /// </summary>
     public Utf8 Claim(ReadOnlySpan<byte> name)
     {
@@ -50,6 +56,6 @@ public readonly struct Viewer
     public bool TryGetClaim(ReadOnlySpan<byte> name, out Utf8 value)
     {
         value = default;
-        return _request is not null && _request.TryGetClaim(name, IsAuthenticated, out value);
+        return _request is not null && _request.TryGetClaim(name, IsAuthenticated, _generation, out value);
     }
 }

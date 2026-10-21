@@ -389,7 +389,55 @@ public sealed class JwtClaimTests
         // a token too long to verify isn't issued
         Jwt big = Username();
         Utf8 huge = U(new string('"', 2000));
-        Assert.Throws<ArgumentException>(() => big.Issue(42, Now, [huge], new byte[big.MaxIssuedBytesWith([huge])]));
+        Assert.Throws<ArgumentException>(() => big.MaxIssuedBytesWith([huge]));        // its escapes alone are past the limit
+        Assert.Throws<ArgumentException>(() => big.Issue(42, Now, [huge], new byte[8192]));
+        Utf8 long3000 = U(new string('x', 3000));                                  // fits as JSON, not as base64
+        Assert.Throws<ArgumentException>(() => big.Issue(42, Now, [long3000], new byte[big.MaxIssuedBytesWith([long3000])]));
+        Utf8 fits = U(new string('x', 2900));
+        var room = new byte[big.MaxIssuedBytesWith([fits])];
+        Assert.True(room.Length <= Jwt.MaxTokenBytes + 100);
+        Assert.Equal(TokenCheck.Valid, Read(big, Encoding.ASCII.GetString(room, 0, big.Issue(42, Now, [fits], room))).Check);
+    }
+
+    /// <summary>A response whose arena counts what it hands out; nothing else is used.</summary>
+    sealed class ArenaOnly : IResponse
+    {
+        public readonly CountingArena Counted = new();
+        public int Status { get; set; }
+        public int RetryAfter { get; set; }
+        public Utf8JsonWriter Json => throw new NotSupportedException();
+        public System.Buffers.IBufferWriter<byte> Body => throw new NotSupportedException();
+        public void Reset() { }
+        public IRequestArena Arena => Counted;
+        public System.Threading.CancellationToken Aborted => default;
+    }
+
+    // Found in review: the arena was asked for six times a value's length before the value was checked, so a request
+    // that made a handler issue a 1 MB claim took about 8 MB from the pool before the 500.
+    [Fact]
+    public void AValueIssueRefusesTakesNothingFromTheArena()
+    {
+        Jwt jwt = Username(maxBytes: 8);
+        var response = new ArenaOnly();
+        jwt.Bind(response);
+        static Utf8 U(string s) { byte[] b = Encoding.UTF8.GetBytes(s); return new Utf8(b, 0, b.Length); }
+        Assert.Throws<ArgumentException>(() => jwt.Issue(42, U(new string('x', 1 << 20))));
+        Assert.Throws<ArgumentException>(() => jwt.Issue(42));
+        Assert.Throws<ArgumentException>(() => jwt.Issue(42, U("a"), U("b")));
+        Assert.Equal(0, response.Counted.Allocations);
+        Utf8 token = jwt.Issue(42, U("jake"));
+        Assert.Equal(1, response.Counted.Allocations);
+        Assert.Equal(TokenCheck.Valid, Read(jwt, token.ToString(), DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()).Check);
+    }
+
+    // Found in review: the overloads that take a lifetime named "options" in their exception, a parameter they don't have.
+    [Fact]
+    public void ABadLifetimeIsNamedAsTheCallerWroteIt()
+    {
+        Assert.Equal("lifetime", Assert.Throws<ArgumentOutOfRangeException>(() => new Jwt(JwtTests.Secret, TimeSpan.Zero)).ParamName);
+        Assert.Equal("lifetime", Assert.Throws<ArgumentOutOfRangeException>(() => new Jwt(JwtTests.Secret, TimeSpan.FromMilliseconds(500), true)).ParamName);
+        Assert.Equal("lifetime", Assert.Throws<ArgumentOutOfRangeException>(() => HttpApp.CreateBuilder([]).AddJwtAuth(JwtTests.Secret, TimeSpan.Zero)).ParamName);
+        Assert.Equal("options", Assert.Throws<ArgumentOutOfRangeException>(() => new Jwt(JwtTests.Secret, new JwtOptions { Lifetime = TimeSpan.Zero })).ParamName);
     }
 
     // ---- against a plain reading of the rules ----
