@@ -19,44 +19,49 @@ sealed class Dialect
 
     /// <summary>
     /// Fails the statement (casting its message to an integer) when the Select after Then can't read the tables as the
-    /// write left them: {0} the table written and {2} the tables the Select reads, each a string literal; {1} the columns
-    /// the insert sets, rows of a VALUES of each one's name and the type it is bound as; {3} whether the write deletes,
-    /// {4} whether a read is corrected. The walk starts at the table written and its partitions; a delete follows each
-    /// key that cascades, sets NULL or sets a default, and from a row set to NULL or a default the keys acting on its
-    /// update. A rule or trigger on any table walked may write more, and a table reached that the Select reads fails it
-    /// (the table written is read only where a read of it is corrected). A corrected read needs no row security and
-    /// columns that store the value written (no type modifier, the type bound or a wider integer or float) and compare
-    /// it as the correction does (the default collation).
+    /// write left them: {0} the table written, {2} the tables the Select reads and {5} the table of the row found, each
+    /// a string literal; {1} the columns the insert sets, rows of a VALUES of each one's name and the types that hold its
+    /// value as bound, a regtype[] constant; {3} whether the write deletes, {4} whether a read is corrected. The walk
+    /// starts at the table written and its partitions; a delete follows each key that cascades, sets NULL or sets a
+    /// default, and from a row set to NULL or a default the keys acting on its update. A rule or trigger on any table
+    /// walked may write more; a table reached that the Select reads, or that a table it reads holds (a partition or an
+    /// inheriting table, at any depth), fails it, and so does the table written or a partition of it where the row
+    /// found's table holds it (the table written counts as read only where a read of it is corrected). A corrected read
+    /// needs no row security and columns that store the value written (no type modifier, the type bound or a wider
+    /// integer or float) and compare it as the correction does (the default collation). A table without children
+    /// (relhassubclass) is looked up in pg_inherits by none.
     /// </summary>
     public const string ThenGuardOfPostgres =
-        "(SELECT CASE WHEN EXISTS (WITH RECURSIVE r(oid, upd, reached) AS (SELECT c.oid, false, false " +
-        "UNION SELECT n.oid, n.upd, n.reached FROM r CROSS JOIN LATERAL (SELECT i.inhrelid, r.upd, r.reached FROM pg_inherits i WHERE i.inhparent = r.oid " +
-        "UNION ALL SELECT k.conrelid, r.upd OR k.confdeltype <> 'c', true FROM pg_depend d JOIN pg_constraint k ON k.oid = d.objid " +
-        "WHERE {3} AND d.refclassid = 'pg_class'::regclass AND d.refobjid = r.oid AND d.classid = 'pg_constraint'::regclass AND k.contype = 'f' AND k.confrelid = r.oid " +
-        "AND CASE WHEN r.upd THEN k.confupdtype ELSE k.confdeltype END IN ('c', 'n', 'd')) n(oid, upd, reached)) " +
-        "SELECT 1 FROM r JOIN pg_class x ON x.oid = r.oid WHERE x.relhasrules " +
-        "OR (SELECT true FROM pg_trigger g WHERE g.tgrelid = r.oid AND NOT g.tgisinternal LIMIT 1) " +
-        "OR r.reached AND (r.oid::regclass = ANY (ARRAY[{2}]::regclass[]) OR pg_partition_root(r.oid) = ANY (ARRAY[{2}]::regclass[]))) " +
+        "(SELECT CASE WHEN EXISTS (WITH RECURSIVE r(oid, upd, reached, sub, rules) AS (SELECT c.oid, false, false, c.relhassubclass, c.relhasrules " +
+        "UNION SELECT n.* FROM r CROSS JOIN LATERAL (SELECT i.inhrelid, r.upd, r.reached, h.relhassubclass, h.relhasrules " +
+        "FROM pg_inherits i JOIN pg_class h ON h.oid = i.inhrelid WHERE r.sub AND i.inhparent = r.oid " +
+        "UNION ALL SELECT k.conrelid, r.upd OR k.confdeltype <> 'c', true, h.relhassubclass, h.relhasrules FROM pg_depend d JOIN pg_constraint k ON k.oid = d.objid " +
+        "JOIN pg_class h ON h.oid = k.conrelid WHERE {3} AND d.refclassid = 'pg_class'::regclass AND d.refobjid = r.oid AND d.classid = 'pg_constraint'::regclass " +
+        "AND k.contype = 'f' AND k.confrelid = r.oid AND CASE WHEN r.upd THEN k.confupdtype ELSE k.confdeltype END IN ('c', 'n', 'd') OFFSET 0) n), " +
+        "q(oid, sub, found) AS (SELECT x.oid, x.relhassubclass, x.oid = {5}::regclass FROM pg_class x WHERE x.oid = ANY (ARRAY[{2}]::regclass[]) " +
+        "UNION SELECT n.* FROM q CROSS JOIN LATERAL (SELECT i.inhrelid, h.relhassubclass, q.found FROM pg_inherits i JOIN pg_class h ON h.oid = i.inhrelid " +
+        "WHERE q.sub AND i.inhparent = q.oid OFFSET 0) n) " +
+        "SELECT 1 FROM r WHERE r.rules OR (SELECT true FROM pg_trigger g WHERE g.tgrelid = r.oid AND NOT g.tgisinternal LIMIT 1) " +
+        "OR r.reached AND r.oid IN (SELECT q.oid FROM q) OR NOT r.reached AND r.oid IN (SELECT q.oid FROM q WHERE q.found)) " +
         "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM (VALUES {1}) v(n, t) JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = v.n::name " +
-        "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid::regtype <> ALL (CASE v.t WHEN 'smallint' THEN '{int2,int4,int8}'::regtype[] " +
-        "WHEN 'integer' THEN '{int4,int8}'::regtype[] WHEN 'real' THEN '{float4,float8}'::regtype[] ELSE ARRAY[v.t::regtype] END))) " +
+        "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid::regtype <> ALL (v.t))) " +
         "THEN ('CodeFusion: the Select after Then can''t read ' || c.relname || ' as the write left it (a rule, a trigger, row security, a foreign key that cascades " +
         "into a table it reads, or a column that may store another value than the one written or compare it otherwise)')::int ELSE 0 END FROM pg_class c WHERE c.oid = {0}::regclass) = 0";
 
-    /// <summary>The Postgres type of a column's value as the model declares it (a short a smallint and a float a real,
-    /// though <see cref="ParamList"/> binds both wider), which the Then guard compares with the column's: the column may
-    /// be of that type or a wider integer or float, any other may store another value than the one the correction
-    /// compares.</summary>
-    public static string BoundType(ValueKind kind) => kind.Scalar switch
+    /// <summary>The Postgres types a column may have and hold a value of <paramref name="kind"/> as bound, as a regtype[]
+    /// literal for the Then guard, which the plan folds once: the type the model declares or a wider integer or float
+    /// (a short a smallint, a float a real, though <see cref="ParamList"/> binds both wider). Any other may store another
+    /// value than the one the correction compares.</summary>
+    public static string HoldingTypes(ValueKind kind) => kind.Scalar switch
     {
-        Scalar.Int64 => "bigint",
-        Scalar.Int32 => "integer",
-        Scalar.Int16 => "smallint",
-        Scalar.Boolean => "boolean",
-        Scalar.Double => "double precision",
-        Scalar.Single => "real",
-        Scalar.Timestamp => "timestamp with time zone",
-        _ => "text",
+        Scalar.Int64 => "{int8}",
+        Scalar.Int32 => "{int4,int8}",
+        Scalar.Int16 => "{int2,int4,int8}",
+        Scalar.Boolean => "{bool}",
+        Scalar.Double => "{float8}",
+        Scalar.Single => "{float4,float8}",
+        Scalar.Timestamp => "{timestamptz}",
+        _ => "{text}",
     };
 
     public string InArray = "{0} = ANY({1})", NullSafeEqual = "{0} IS NOT DISTINCT FROM {1}", Now = "now()", Concat = "{0} || {1}";

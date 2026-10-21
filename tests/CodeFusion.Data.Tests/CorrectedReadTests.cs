@@ -53,7 +53,7 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
         Assert.Equal(Q.GiveLabel, "WITH t AS (SELECT p.id FROM people p WHERE p.name = $1), w AS (INSERT INTO person_labels (person_id, label_id) SELECT t.id, $2 FROM t " +
             "ON CONFLICT (person_id, label_id) DO NOTHING) SELECT t.id, ((SELECT count(*) FROM person_labels pl WHERE pl.person_id = t.id) + " +
             "CASE WHEN NOT EXISTS (SELECT 1 FROM person_labels pl2 WHERE pl2.person_id = t.id AND pl2.label_id = $2) THEN 1 ELSE 0 END), true FROM t" +
-            Guards.Then("person_labels", [("person_id", "bigint"), ("label_id", "integer")], ["person_labels", "people"], delete: false, corrected: true) + " ORDER BY t.id LIMIT 1");
+            Guards.Then("person_labels", [("person_id", "{int8}"), ("label_id", "{int4,int8}")], ["person_labels", "people"], found: "people", delete: false, corrected: true) + " ORDER BY t.id LIMIT 1");
         string name = await Person(9801, 1);
         var db = Db();
         Assert.Equal(new Tally(9801, 2, true), await Tally(db.GiveLabel(U(name), 2)));
@@ -82,7 +82,7 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
         Assert.Equal(Q.TakeLabel, "WITH t AS (SELECT p.id FROM people p WHERE p.name = $1), w AS (DELETE FROM person_labels l WHERE l.person_id = ANY(ARRAY(SELECT t.id FROM t)) " +
             "AND l.label_id = $2) SELECT t.id, ((SELECT count(*) FROM person_labels pl WHERE pl.person_id = t.id) - " +
             "CASE WHEN EXISTS (SELECT 1 FROM person_labels pl WHERE pl.person_id = t.id AND pl.label_id = $2) THEN 1 ELSE 0 END), false FROM t" +
-            Guards.Then("person_labels", [], ["person_labels", "people"], delete: true, corrected: true) + " ORDER BY t.id LIMIT 1");
+            Guards.Then("person_labels", [], ["person_labels", "people"], found: "people", delete: true, corrected: true) + " ORDER BY t.id LIMIT 1");
         string name = await Person(9803, 1, 2, 3);
         var db = Db();
         Assert.Equal(new Tally(9803, 2, false), await Tally(db.TakeLabel(U(name), 2)));
@@ -278,6 +278,11 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
     const string PartitionedA = "DROP TABLE chain_a CASCADE; CREATE TABLE chain_a (id bigint PRIMARY KEY, name text NOT NULL) PARTITION BY RANGE (id); " +
         "CREATE TABLE chain_a_1 PARTITION OF chain_a FOR VALUES FROM (0) TO (100)";
     const string BSetNull = "ALTER TABLE chain_b ALTER a_id DROP NOT NULL, DROP CONSTRAINT chain_b_a_id_fkey, ADD FOREIGN KEY (a_id) REFERENCES chain_a (id) ON DELETE SET NULL";
+    const string ChainCUnderAParent = "DROP TABLE chain_c; CREATE TABLE chain_all (id bigint NOT NULL, b_id bigint NOT NULL, team_id bigint NOT NULL REFERENCES teams (id), " +
+        "PRIMARY KEY (id)) PARTITION BY RANGE (id); CREATE TABLE chain_c PARTITION OF chain_all FOR VALUES FROM (0) TO (100) PARTITION BY RANGE (id); " +
+        "CREATE TABLE chain_c_1 PARTITION OF chain_c FOR VALUES FROM (0) TO (100)";
+    const string ChainCInherited = "DROP TABLE chain_c; CREATE TABLE chain_c (id bigint PRIMARY KEY, b_id bigint NOT NULL, team_id bigint NOT NULL REFERENCES teams (id)); " +
+        "CREATE TABLE chain_c_kid () INHERITS (chain_c)";
 
     /// <summary>DropChain deletes chain_a's row 1 and counts the team's chain_c rows, after <paramref name="ddl"/>
     /// changed the keys: the statement fails where the delete may reach chain_c, and runs where it can't.</summary>
@@ -292,6 +297,9 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
     [InlineData("a SET NULL, then a key acting on the update", BSetNull + ", ADD UNIQUE (a_id); " +
         "ALTER TABLE chain_c ALTER b_id DROP NOT NULL, DROP CONSTRAINT chain_c_b_id_fkey, ADD FOREIGN KEY (b_id) REFERENCES chain_b (a_id) ON UPDATE CASCADE", true)]
     [InlineData("a SET NULL, whose rows' delete keys don't act", BSetNull, false)]
+    [InlineData("a key on a leaf of chain_c, itself a partition of another table", ChainCUnderAParent + "; ALTER TABLE chain_c_1 ADD FOREIGN KEY (b_id) REFERENCES chain_b (id) ON DELETE CASCADE", true)]
+    [InlineData("a key on a table inheriting chain_c", ChainCInherited + "; ALTER TABLE chain_c_kid ADD FOREIGN KEY (b_id) REFERENCES chain_b (id) ON DELETE CASCADE", true)]
+    [InlineData("a partitioned chain_c, its key on the parent", ChainCUnderAParent + "; ALTER TABLE chain_all ADD FOREIGN KEY (b_id) REFERENCES chain_b (id) ON DELETE CASCADE", true)]
     public async Task TheCheckFollowsEveryKeyTheDeleteActsOn(string what, string ddl, bool fails)
     {
         TestDb.Require();
@@ -321,6 +329,34 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
                 Assert.Equal(new Number(9890, 2), row.Value);
                 Assert.Equal(1L, await db0.Scalar("SELECT count(*) FROM chain_a"));
             }
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
+    }
+
+    [Fact]
+    public async Task ARowFoundIsCheckedThroughAnotherEntityOfItsPartitionTree()
+    {
+        TestDb.Require();
+        const string schema = "cfdata_guard_tree";
+        await using var admin = TestDb.Admin();
+        await admin.Execute($"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; SET search_path = {schema}; {OpsFixture.Schema}; {OpsFixture.Seed}; " +
+            "INSERT INTO parted VALUES (501, 'five hundred one'), (502, 'five hundred two')");
+        await using var db0 = TestDb.Admin(schema);
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<DataResult>();
+        var source = Source(schema, failures);
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            // parted and parted_1 are one table to the database, two entities to the model: the delete takes the row found
+            _response.Next();
+            FailedByTheGuard(await db.DropPartThroughItsPartition(501), failures);
+            _response.Next();
+            FailedByTheGuard(await db.DropPartThroughItsParent(502), failures);
+            Assert.Equal(2L, await db0.Scalar("SELECT count(*) FROM parted WHERE id IN (501, 502)"));
         }
         finally
         {

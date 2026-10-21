@@ -149,10 +149,10 @@ sealed partial class Translator
             // the table written is read only where a read of it is corrected: a key of it into itself reaches nothing else
             if (written.Corrected) written.Read(TableSql(written.Table));
             written.Read(TableSql(e));
-            string columns = written.Columns.Count == 0 ? "('', 'text')"
-                : string.Join(", ", written.Columns.Select(c => $"({Sql.String(c.Name)}, {Sql.String(Dialect.BoundType(c.Kind))})"));
+            string columns = written.Columns.Count == 0 ? "('', '{}'::regtype[])"
+                : string.Join(", ", written.Columns.Select(c => $"({Sql.String(c.Name)}, {Sql.String(Dialect.HoldingTypes(c.Kind))}::regtype[])"));
             final.Where.Add(Dialect.Format(D.ThenGuard, Sql.String(TableSql(written.Table)), columns, string.Join(", ", written.Reads.Select(Sql.String)),
-                written.Deleted is not null ? D.True : D.False, written.Corrected ? D.True : D.False));
+                written.Deleted is not null ? D.True : D.False, written.Corrected ? D.True : D.False, Sql.String(TableSql(e))));
         }
         foreach (var c in writeRow.Needed.Concat(row.Needed).Distinct())
             find.Columns.Add((Column(findRow, e.Columns.Values.First(x => x.Name == c), at), null));

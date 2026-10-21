@@ -74,7 +74,8 @@ the snapshot missed). After an insert with `OrIgnore` that needs the table's key
 After a delete, the Select may not read a table whose rows lead to the table deleted from (a cascade could have
 changed it). What the model can't see the statement checks first, in the catalog, whatever the Select reads
 (the row found is read too): a rule or trigger on the table written, on one of its partitions or on any table the
-delete reaches key after key, such a table that the Select reads, and, for a corrected read, row security or a column
+delete reaches key after key, such a table that the Select reads or holds (as a partition or by inheritance), the
+table written where the row found's table holds it (two entities of one partition tree), and, for a corrected read, row security or a column
 that may store another value than the one written, or compare it in a collation other than the default. Any of them
 fails the statement with a message starting `CodeFusion: the Select after Then can't read`, and nothing is written.
 

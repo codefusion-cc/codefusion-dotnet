@@ -125,6 +125,14 @@ public sealed class Parted
     public Utf8 Name { get; init; }
 }
 
+/// <summary>The same table's one partition, as an entity of its own.</summary>
+[Table("parted_1")]
+public sealed class PartedOne
+{
+    public long Id { get; init; }
+    public Utf8 Name { get; init; }
+}
+
 /// <summary>A table whose CHECK fails with a serialization failure the first time once_seq is used.</summary>
 [Table("flaky")]
 public sealed class Flaky
@@ -259,6 +267,7 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Table<Audited> Audits => Table<Audited>();
     public Table<Ruled> Ruled => Table<Ruled>();
     public Table<Parted> Parts => Table<Parted>();
+    public Table<PartedOne> PartOnes => Table<PartedOne>();
     public Table<Flaky> Flakies => Table<Flaky>();
     public Table<Sleepy> Sleepies => Table<Sleepy>();
 
@@ -637,6 +646,14 @@ public sealed partial class OpsDb : DataContext<Postgres>
     /// <summary>The same delete from a chain_c row found, which it may cascade into, giving back that row's own columns.</summary>
     public Write<Number> DropChainOf(long id, Utf8 name) =>
         ChainCs.Where(c => c.Id == id).Then(c => ChainAs.Where(a => a.Name == name).Delete()).Select(c => new Number(c.Id, c.TeamId));
+
+    /// <summary>A row found in the partitioned table, deleted through its partition, mapped as another entity.</summary>
+    public Write<Number> DropPartThroughItsPartition(long id) =>
+        Parts.Where(p => p.Id == id).Then(p => PartOnes.Where(x => x.Id == p.Id).Delete()).Select(p => new Number(p.Id, p.Id));
+
+    /// <summary>A row found in the partition, deleted through the partitioned table.</summary>
+    public Write<Number> DropPartThroughItsParent(long id) =>
+        PartOnes.Where(p => p.Id == id).Then(p => Parts.Where(x => x.Id == p.Id).Delete()).Select(p => new Number(p.Id, p.Id));
 
     /// <summary>An insert without OrIgnore: the row written is the one more, whatever its columns.</summary>
     public Write<Tally> AddPetCounted(Utf8 name, long id) =>

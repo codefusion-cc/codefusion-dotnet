@@ -42,7 +42,7 @@ public sealed class FoundWriteTests(OpsFixture fixture)
     {
         Assert.Equal(Q.GivePet, "WITH t AS (SELECT p.id, p.name FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (id, owner_id, name, legs) SELECT $2, t.id, $3, 4 FROM t " +
             "ON CONFLICT DO NOTHING) SELECT t.id, t.name FROM t" +
-            Guards.Then("pets", [("id", "bigint"), ("owner_id", "bigint"), ("name", "text"), ("legs", "integer")], ["people"], delete: false, corrected: false) + " ORDER BY t.id LIMIT 1");
+            Guards.Then("pets", [("id", "{int8}"), ("owner_id", "{int8}"), ("name", "{text}"), ("legs", "{int4,int8}")], ["people"], found: "people", delete: false, corrected: false) + " ORDER BY t.id LIMIT 1");
         var db = Db();
         Assert.Equal("""{"id":1,"text":"ann"}""", await Json(db.GivePet(U("ann"), 8001, U("fido"))));
         Assert.Equal(1L, await Scalar("SELECT owner_id FROM pets WHERE id = 8001 AND name = 'fido'"));
@@ -65,7 +65,7 @@ public sealed class FoundWriteTests(OpsFixture fixture)
     {
         Assert.Equal(Q.GivePetStrict, "WITH t AS (SELECT p.id, p.name, p.team_id FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (id, owner_id, name, legs) SELECT $2, t.id, t.name, 3 FROM t) " +
             "SELECT t.name, t2.name FROM t LEFT JOIN teams t2 ON t2.id = t.team_id" +
-            Guards.Then("pets", [("id", "bigint"), ("owner_id", "bigint"), ("name", "text"), ("legs", "integer")], ["teams", "people"], delete: false, corrected: false) + " ORDER BY t.id LIMIT 1");
+            Guards.Then("pets", [("id", "{int8}"), ("owner_id", "{int8}"), ("name", "{text}"), ("legs", "{int4,int8}")], ["teams", "people"], found: "people", delete: false, corrected: false) + " ORDER BY t.id LIMIT 1");
         var db = Db();
         Assert.Equal("""{"name":"ben","team":"blue"}""", await Json(db.GivePetStrict(U("ben"), 8003)));
         Assert.Equal("""{"name":"cid","team":null}""", await Json(db.GivePetStrict(U("cid"), 8004)));
@@ -78,7 +78,7 @@ public sealed class FoundWriteTests(OpsFixture fixture)
     public async Task ADeleteOfAnotherTablesRowsJoinedToTheRowFound()
     {
         Assert.Equal(Q.TakePets, "WITH t AS (SELECT p.id, p.age FROM people p WHERE p.name = $1), w AS (DELETE FROM pets x WHERE x.owner_id = ANY(ARRAY(SELECT t.id FROM t)) AND x.legs = $2) " +
-            "SELECT t.id, t.age FROM t" + Guards.Then("pets", [], ["people"], delete: true, corrected: false) + " ORDER BY t.id LIMIT 1");
+            "SELECT t.id, t.age FROM t" + Guards.Then("pets", [], ["people"], found: "people", delete: true, corrected: false) + " ORDER BY t.id LIMIT 1");
         await using var admin = TestDb.Admin("cfdata_ops_w");
         await admin.Execute("INSERT INTO pets VALUES (8010, 4, 'two', 2), (8011, 4, 'four', 4), (8012, 4, 'two too', 2)");
         var db = Db();
@@ -94,7 +94,7 @@ public sealed class FoundWriteTests(OpsFixture fixture)
     [Fact]
     public async Task OfSeveralRowsFoundEachIsWrittenFromAndTheOneOfTheSmallestKeyIsTheReply()
     {
-        Assert.EndsWith("FROM t" + Guards.Then("pets", [("id", "bigint"), ("owner_id", "bigint"), ("name", "text"), ("legs", "integer")], ["people"], delete: false, corrected: false) +
+        Assert.EndsWith("FROM t" + Guards.Then("pets", [("id", "{int8}"), ("owner_id", "{int8}"), ("name", "{text}"), ("legs", "{int4,int8}")], ["people"], found: "people", delete: false, corrected: false) +
             " ORDER BY t.id LIMIT 1", Q.GivePetsOfAge, StringComparison.Ordinal);
         await using var admin = TestDb.Admin("cfdata_ops_w");
         // the larger key first in the heap, so a scan meets it first
