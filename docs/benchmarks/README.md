@@ -51,6 +51,7 @@ is the GC collections and allocation rate of the CodeFusion process during a sus
 | 2026-10-21 | [sqlite-park-after-200us](2026-10-21-sqlite-park-after-200us.md) | SQLite Exclusive: every waiter parked after 200 µs | mixed 80-94 vs 370-405 k ops/s; thrown away |
 | 2026-10-21 | [sqlite-park-only-for-batches](2026-10-21-sqlite-park-only-for-batches.md) | SQLite Exclusive: waiters park only while a loop's batch holds the connection | throughput level; a 500 ms hold costs under 100 ms of CPU, not 1,039; kept |
 | 2026-10-21 | [twelve-entry-spec-options](2026-10-21-twelve-entry-spec-options.md) | The $12 entry on feat/http-spec-options, and the SQLite review fixes split out | spec options level; entry -11% (45.3-47.0k vs 51.3-53.5k), mostly the commit before a loop read; that line out: 49.1-50.1k |
+| 2026-10-21 | [sqlite-park-with-batches](2026-10-21-sqlite-park-with-batches.md) | SQLite Exclusive with event-loop batches: parking against spinning | NORMAL level; FULL with readers off the loop: loop -12 to -19%, readers +23 to +50%, both about -5% |
 
 ## Template
 

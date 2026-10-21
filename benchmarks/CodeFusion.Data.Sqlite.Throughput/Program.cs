@@ -8,11 +8,13 @@ using System.Threading.Tasks;
 using CodeFusion.Data;
 using CodeFusion.Data.Sqlite;
 
-// CodeFusion.Data.Sqlite.Throughput <default|exclusive> <normal|full> <seconds per case>
-// One line of results: point reads on 1 and 4 threads, 64 writers and 1, and 16 callers doing 9 reads per write.
-if (args is not [var mode and ("default" or "exclusive"), var sync and ("normal" or "full"), var time])
+// CodeFusion.Data.Sqlite.Throughput <default|exclusive|batches> <normal|full> <seconds per case>
+// One line of results: point reads on 1 and 4 threads, 64 writers and 1, and 16 callers doing 9 reads per write. With
+// batches (Exclusive and EventLoopBatches): wake-ups of a write and three reads, four times, on 1 and 2 event-loop
+// threads, and on 1 with 4 threads reading off the loops (they wait while a batch holds the connection).
+if (args is not [var mode and ("default" or "exclusive" or "batches"), var sync and ("normal" or "full"), var time])
 {
-    Console.Error.WriteLine("usage: <default|exclusive> <normal|full> <seconds per case>");
+    Console.Error.WriteLine("usage: <default|exclusive|batches> <normal|full> <seconds per case>");
     return 2;
 }
 double seconds = double.Parse(time, CultureInfo.InvariantCulture);
@@ -21,7 +23,8 @@ Directory.CreateDirectory(dir);
 var source = new SqliteDatabase(Path.Combine(dir, "throughput.db"))
 {
     Synchronous = sync == "full" ? SqliteSync.Full : SqliteSync.Normal,
-    Exclusive = mode == "exclusive",
+    Exclusive = mode != "default",
+    EventLoopBatches = mode == "batches",
     Migrations =
     [
         "CREATE TABLE kv (k INTEGER PRIMARY KEY, v INTEGER NOT NULL, s TEXT NOT NULL)",
@@ -31,6 +34,15 @@ var source = new SqliteDatabase(Path.Combine(dir, "throughput.db"))
 try
 {
     var bench = new Bench(source, seconds);
+    if (mode == "batches")
+    {
+        bench.Batches(1, 0); // warm
+        double one = bench.Batches(1, 0), two = bench.Batches(2, 0);
+        double withReaders = bench.Batches(1, 4, out double offLoop);
+        Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+            $"{mode,-9} {sync,-6} wake-ups of 4 writes + 12 reads: 1 loop {one / 1e3,6:F1} k ops/s | 2 loops {two / 1e3,6:F1} k ops/s | 1 loop + 4 readers {withReaders / 1e3,6:F1} k ops/s, readers {offLoop / 1e3,6:F1} k/s"));
+        return 0;
+    }
     bench.Reads(1);
     await bench.Writes(8); // warm
     double reads1 = bench.Reads(1), reads4 = bench.Reads(4), writes64 = await bench.Writes(64), writes1 = await bench.Writes(1), mixed = await bench.Mixed(16);
@@ -115,6 +127,57 @@ sealed class Bench(SqliteDataSource source, double seconds)
             }
             Interlocked.Add(ref total, n);
         }))).ConfigureAwait(false);
+        return total / seconds;
+    }
+
+    static readonly System.Reflection.MethodInfo EnterLoop =
+        typeof(CodeFusion.EventLoopThread).GetMethod("Enter", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+
+    /// <summary>Event-loop threads (as CodeFusion.Http's are) running wake-ups of 16 requests, a write then three reads,
+    /// four times, each wake-up ended as the server ends it; operations per second.</summary>
+    public double Batches(int loops, int readers) => Batches(loops, readers, out _);
+
+    /// <summary>As <see cref="Batches(int, int)"/>, with <paramref name="readers"/> threads reading off the loops meanwhile:
+    /// their reads per second in <paramref name="offLoop"/>.</summary>
+    public double Batches(int loops, int readers, out double offLoop)
+    {
+        long total = 0, read = 0, until = Until();
+        var all = Enumerable.Range(0, loops).Select(l => new Thread(() =>
+        {
+            EnterLoop.Invoke(null, [l]);
+            var random = new Random(l);
+            var tasks = new ValueTask<DataResult>[16];
+            long n = 0;
+            while (Stopwatch.GetTimestamp() < until)
+            {
+                for (int i = 0; i < tasks.Length; i++)
+                {
+                    var c = i % 4 == 0 ? source.Write(Bump) : source.Read(Get);
+                    c.Int64(random.Next(1, 100_001));
+#pragma warning disable CA2012 // each read once, after the batch's end
+                    tasks[i] = Sqlite.Run<Row>(c.Hold(), null, default); // a read after the write: in the batch, done at its end
+#pragma warning restore CA2012
+                }
+                source.EndEventLoopBatch(l);
+                foreach (var t in tasks)
+                {
+                    // another loop's batch held the connection: that write went to the writer thread, done when it commits
+                    var r = t.IsCompleted ? t.Result : t.AsTask().GetAwaiter().GetResult();
+                    if (!r.IsOk) throw new InvalidOperationException("a batched read or write failed: " + r);
+                }
+                n += tasks.Length;
+            }
+            Interlocked.Add(ref total, n);
+        })).Concat(Enumerable.Range(0, readers).Select(r => new Thread(() =>
+        {
+            var random = new Random(100 + r);
+            long n = 0;
+            for (; Stopwatch.GetTimestamp() < until; n++) Read(random.Next(1, 100_001));
+            Interlocked.Add(ref read, n);
+        }))).ToList();
+        all.ForEach(t => t.Start());
+        all.ForEach(t => t.Join());
+        offLoop = read / seconds;
         return total / seconds;
     }
 
