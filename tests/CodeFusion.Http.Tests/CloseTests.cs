@@ -94,6 +94,9 @@ public sealed class CloseTests
         {
             x.Aborted.Register(() => canceled.TrySetResult());
             await release.Task;
+            // the heartbeat finds the reset within a few of its rounds; 5 s of them on a loaded machine
+            long until = Environment.TickCount64 + 5000;
+            while (!x.IsAborted && Environment.TickCount64 < until) await Task.Delay(10);
             aborted = x.IsAborted;
         });
         using Client c = await t.ConnectAsync();
@@ -102,41 +105,9 @@ public sealed class CloseTests
         c.Socket.Shutdown(SocketShutdown.Send);
         await canceled.Task.WaitAsync(TimeSpan.FromSeconds(3));
         c.Reset();
-        await Task.Delay(300); // several heartbeats
         release.SetResult();
         await t.ConnectionsReach(0);
         Assert.True(aborted);
-    }
-
-    // The heartbeat finds a reset behind a pipelined request, and cancels from the thread pool: a registration that
-    // blocks (or the handler's code after its await) would otherwise stall every connection's timeouts.
-    [Fact(Timeout = 30_000)]
-    public async Task ACallbackThatBlocksWhenItsClientResetsDoesNotStallTheHeartbeat()
-    {
-        TaskCompletionSource started = Signal(), blocking = Signal();
-        await using var t = TestServer.Start(async x =>
-        {
-            x.Aborted.Register(() =>
-            {
-                blocking.TrySetResult();
-                Thread.Sleep(3000);
-            });
-            started.TrySetResult();
-            try { await Task.Delay(10_000, x.Aborted); }
-            catch (OperationCanceledException) { }
-        }, o => o.RequestTimeout = TimeSpan.FromMilliseconds(300));
-        using Client a = await t.ConnectAsync();
-        await a.SendAsync(Get);
-        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await a.SendAsync(Get); // pipelined: the watch has nothing more to tell, so the heartbeat finds the reset
-        await Task.Delay(100);
-        a.Reset();
-        await blocking.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        // the heartbeat closes a new connection that sends nothing after the request timeout
-        using Client b = await t.ConnectAsync();
-        long start = Environment.TickCount64;
-        Assert.True(await b.ClosedAsync(2000), "a silent connection still open after 2 s");
-        Assert.InRange(Environment.TickCount64 - start, 0, 1500);
     }
 
     // A gone the heartbeat found is canceled after its compare-exchange. If the handler ends in between, the connection
@@ -429,5 +400,50 @@ public sealed class CloseTests
         Assert.True(await c.ClosedAsync(), "the aborted request was answered");
         await t.ConnectionsReach(0);
         Assert.Equal(1, thrown);
+    }
+}
+
+/// <summary>A callback that blocks a thread-pool thread for seconds when its client resets: alone, so it can't starve
+/// the timing tests of the other classes (SlowClientTests, CloseTests) of threads.</summary>
+[Collection(Quiet.Name)]
+public sealed class BlockingCloseTests
+{
+    static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    const string Get = "GET /x HTTP/1.1\r\nHost: x\r\n\r\n";
+
+    // The heartbeat finds a reset behind a pipelined request, and cancels from the thread pool: a registration that
+    // blocks (or the handler's code after its await) would otherwise stall every connection's timeouts.
+    [Fact(Timeout = 30_000)]
+    public async Task ACallbackThatBlocksWhenItsClientResetsDoesNotStallTheHeartbeat()
+    {
+        TaskCompletionSource started = Signal(), blocking = Signal(), slept = Signal();
+        await using var t = TestServer.Start(async x =>
+        {
+            x.Aborted.Register(() =>
+            {
+                blocking.TrySetResult();
+                Thread.Sleep(3000);
+                slept.TrySetResult();
+            });
+            started.TrySetResult();
+            try { await Task.Delay(10_000, x.Aborted); }
+            catch (OperationCanceledException) { }
+        }, o => o.RequestTimeout = TimeSpan.FromMilliseconds(300));
+        using Client a = await t.ConnectAsync();
+        await a.SendAsync(Get);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await a.SendAsync(Get); // pipelined: the watch has nothing more to tell, so the heartbeat finds the reset
+        await Task.Delay(100);
+        a.Reset();
+        await blocking.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // the heartbeat closes a new connection that sends nothing after the request timeout
+        using Client b = await t.ConnectAsync();
+        long start = Environment.TickCount64;
+        Assert.True(await b.ClosedAsync(2000), "a silent connection still open after 2 s");
+        Assert.InRange(Environment.TickCount64 - start, 0, 1500);
+        // the blocked thread and the handler are done before the next test of the collection, which may count allocations
+        await slept.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await t.ConnectionsReach(0);
     }
 }

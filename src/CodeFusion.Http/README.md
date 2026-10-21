@@ -57,6 +57,10 @@ or any `Reply` such as `Reply.NotFound(error)`), a `Reply`, an `ErrorReply`, or 
 A `Utf8` is a view of bytes: of the request, or of the request's arena when it had to be decoded. It is valid until the
 response has been sent, so the analyzer refuses to let a class keep one.
 
+The JWT secret must be at least 32 bytes of UTF-8. A deployment handed a shorter fixed one (the Conduit contest's is
+26 bytes) passes `AddJwtAuth(secret, lifetime, allowShortSecret: true)`. Its tokens are still standard HS256, but a
+short secret can be guessed offline from any one token, and whoever finds it can sign as any user (SECURITY.md).
+
 The generator replaces each `MapGet`/`MapPost`/`MapPut`/`MapDelete` call with an endpoint that binds the parameters
 and writes the reply with no reflection and nothing looked up per request. Routes are literal templates; a literal
 segment wins over a parameter, methods ignore case, HEAD runs the GET endpoint and sends its head without the body,
@@ -75,10 +79,10 @@ These are build errors (CFH0109 a warning), from the package's analyzers, in eve
 | CFH0001 | a handler lambda that isn't static (fix: add `static`), or an instance method |
 | CFH0002 | a `string` parameter (fix: take a `Utf8`) |
 | CFH0003 | a reply the generator can't send, such as `Task<T>` or a type with no JSON form |
-| CFH0004 | a `Utf8` (or `RawJson`, `Utf8List`, `Viewer`, `ArenaBytes`) kept by a class: in a field, an auto-property, or a primary-constructor parameter one of its members uses; or by a struct's static field or auto-property. A type that only takes one in, such as `Func<Utf8, bool>` or `IEqualityComparer<Utf8>`, keeps none. A CodeFusion.Data entity's instance members are exempt, since it is never built: a class a data context has a `Table<T>` for, and its base classes, or one marked `[Table]` in an assembly with no data context. A class that derives from one without being an entity is reported for what it inherits |
+| CFH0004 | a `Utf8` (or `RawJson`, `Utf8List`, `Viewer`, `ArenaBytes`) kept by a class: in a field, an auto-property, or a primary-constructor parameter one of its members uses; or by a struct's static field or auto-property. A type that only takes one in, such as `Func<Utf8, bool>` or `IEqualityComparer<Utf8>`, keeps none. A CodeFusion.Data entity's instance members are exempt, since it is never built: a class a data context has a `Table<T>` for, and its base classes, or one marked `[Table]` in an assembly that references CodeFusion.Data and has no data context. A class that derives from one without being an entity is reported for what it inherits |
 | CFH0005 | LINQ inside a handler |
 | CFH01xx | a Map call the generator can't compile: a route that isn't a literal template, a parameter it can't bind, a struct that isn't `partial`, a required member its binder can't set, a handler held as a delegate it can't name (more than 16 parameters, a default value or `params`), a call it can't intercept |
-| CFH0109 | an internal field or settable auto-property of a body or `[FromQuery]` struct, which the binder leaves at its default: make it public to bind it, or private or `[JsonIgnore]` to say it isn't. The generator reports it, so `#pragma` doesn't silence it; `NoWarn` does |
+| CFH0109 | an internal field or settable auto-property of a body or `[FromQuery]` struct, which the binder leaves at its default: make it public to bind it, or private or `[JsonIgnore]` to say it isn't. Silence one at the member with `#pragma warning disable CFH0109` or `[SuppressMessage("CodeFusion", "CFH0109")]`, or all with `NoWarn` |
 
 ## The server underneath
 

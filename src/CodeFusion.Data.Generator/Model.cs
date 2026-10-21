@@ -12,6 +12,8 @@ sealed class Known
     public readonly INamedTypeSymbol Utf8, Timestamp, RawJson, DataContext, DataContextOf, Many, One, Page, WriteOf, Write;
     public readonly INamedTypeSymbol Query, OrderedQuery, Table, PageQuery, DeleteQuery, WriteQuery, UpdateQuery, Insert, SqlQuery, SqlString;
     public readonly INamedTypeSymbol QueryOperators, QueryDefinition, SqlTemplate, JoinTable, JsonList, SqlDialect, Provider, SqlFunctions;
+    /// <summary>Null against a CodeFusion.Data from before it.</summary>
+    public readonly INamedTypeSymbol? RunsAlone;
     public readonly INamedTypeSymbol? JsonEnvelope, JsonPropertyName, JsonIgnore, TableAttribute, ColumnAttribute, KeyAttribute, ForeignKey, InverseProperty, NotMapped;
 
     Known(Compilation c)
@@ -44,6 +46,7 @@ sealed class Known
         SqlTemplate = T("CodeFusion.Data.SqlTemplateAttribute");
         JoinTable = T("CodeFusion.Data.JoinTableAttribute");
         JsonList = T("CodeFusion.Data.JsonListAttribute");
+        RunsAlone = c.GetTypeByMetadataName("CodeFusion.Data.RunsAloneAttribute");
         SqlDialect = T("CodeFusion.Data.SqlDialectAttribute");
         Provider = T("CodeFusion.Data.IDataProvider`3");
         SqlFunctions = T("CodeFusion.Data.SqlFunctions");

@@ -274,6 +274,17 @@ public sealed class OperatorTests(OpsFixture fixture)
         Assert.Equal("""["ann","ben","cid","dee"]""", await Json(Db().NamesAsJson()));
     }
 
+    // An aggregate over no rows is NULL in SQL; RawJson reads a NULL as [], so the reply and the row both say an
+    // empty list, never null.
+    [Fact]
+    public async Task AsJsonOfNoRowsIsAnEmptyList()
+    {
+        Assert.Equal("""["cid"]""", await Json(Db().NamesOverAgeAsJson(39)));
+        Assert.Equal("[]", await Json(Db().NamesOverAgeAsJson(40)));
+        Assert.Equal(200, _response.Status);
+        Assert.Equal("[]", (await Db().NamesOverAgeAsJson(int.MaxValue)).Value.ToString());
+    }
+
     [Fact]
     public async Task ScalarRowsReplyAndAwait()
     {

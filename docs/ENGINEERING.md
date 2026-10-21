@@ -409,14 +409,16 @@ What the fixes decided:
 - A send wait's deadline is `long.MaxValue` minus its number on the object, so no two share one, and `CheckSend` reads
   the wait's values between two reads of it (a seqlock: they are set before the deadline and kept until it is
   cleared). `Expire` never acts on one: they lie past any time.
-- Each byte pays for 1/rate seconds, in doubles and clamped, but never more than `RequestTimeout` (or the grace period,
-  if longer) past the moment it came. So the rate cuts no client the request timeout wouldn't keep while it is above
-  the rate between any two of its sends (or acknowledgments), and bytes sent early buy at most that much slack. The
-  grace period still counts from the first wait.
+- Each byte pays for 1/rate seconds, in doubles and clamped (and the sum kept in doubles since the next round), but
+  never more than `RequestTimeout` (or the grace period, if longer) past the moment it came. So the rate cuts no
+  client the request timeout wouldn't keep while it is above the rate between any two of its sends (or
+  acknowledgments), and bytes sent early buy at most that much slack. The grace period still counts from the first
+  wait.
 - A required member a binder can't set is CFH0105 at the Map call. An internal field or settable auto-property is
   CFH0109, a warning at the member, once however many Map calls bind it; a private one, a readonly one or one
-  marked `[JsonIgnore]` says it isn't data, quietly. `#pragma` doesn't silence a generator's diagnostic (tried: the
-  build failed with it in place), so `CodeFusion.Http.Tests` takes CFH0109 in its `NoWarn` for `BinderRuleTests`.
+  marked `[JsonIgnore]` says it isn't data, quietly. (This round said `#pragma` can't silence a generator's
+  diagnostic. Wrong: it couldn't silence this one because it was reported at a location outside the compilation's
+  trees, fixed in the next round.)
 - CFH0004: a struct's static fields and auto-properties are checked (its instance ones are held, and checked, where
   the struct is). An entity's exemption covers its instance members only. A class that derives from an entity or an
   entity's base without being one is reported at its declaration for each view it inherits (once, at the first such
@@ -682,6 +684,48 @@ What the fixes decided:
 - The inlined calls a value was reached through travel with the body's `Env`, not a stack the translator leaves when
   the call's own translation ends: a Then's argument and an operator's lambda are translated later, and kept the
   same site for every inlining of the method.
+
+### Last HTTP review, and gaps the Conduit port found
+
+Each test was red on the code before its fix (Release), then green in Debug and Release.
+
+| Finding | Test | Red before |
+|---|---|---|
+| `Paid` stored each sum back as a long, so a receive worth less than 1 ms earned nothing: at a configured rate over about 1000 B/s, a client sending small segments faster than the rate was cut | `SlowClientTests.BytesWorthLessThanAMillisecondEachStillAddUp` | 1000 one-byte receives at 0.5 ms each paid 0, not 500 |
+| CFH0109 (and every generator diagnostic) came with a location outside the compilation's trees, which `#pragma` and `[SuppressMessage]` can't reach | `EdgeTests.APragmaAtTheMemberSilencesItsWarning`; the build of `BinderRuleTests` with a `#pragma` and a `[SuppressMessage]` in place of the project's `NoWarn` | `SourceTree` null, not suppressed |
+| a secret under 32 bytes had no way in, though a deployment may be handed one (the contest's is 26) | `JwtTests.AShortSecretIsTakenOnlyWhenAllowed` (1, 26, 31), `EveryKeyLengthSignsAsTheStandardHmac` (1 to 200 bytes against `HMACSHA256.HashData`), `NoSecretIsTakenEmptyEvenWhenShortOnesAreAllowed` | `ArgumentException` with the opt-in |
+| `AddDatabase` took only a `PostgresDatabase`, so an app that built its `PgDataSource` (its own loops or failure log) couldn't register it | `RegistrationTests.AddDatabaseTakesASourceTheAppBuiltItself` | no overload (with one that registered nothing: no singleton) |
+| a lock timeout (55P03) or a statement timeout (57014) never reached `OnFailure`: only Broken, Failed and ReaderFailed did, in both the reply's path and the awaited row's | `FailureTests.ALockHeldTooLongIsBusyReportedAndTheWriteDoesNotHappen`, `AStatementPastItsTimeoutIsBusyAndReported` | nothing reported |
+
+Refuted: an aggregate of no rows came out as `null` (`{"tags":null}`). `array_agg` is NULL on zero rows, but the
+correlated form is `ARRAY(...)`, never NULL, and `RawJson` reads a NULL as `[]` in the reply (`RowValues.RawValue`)
+and in the awaited row (`RowValues.Raw`), as it has from the first commit. `OperatorTests.AsJsonOfNoRowsIsAnEmptyList`
+passed before any change and now pins it; with `RawValue` writing null it goes red. Only a `RawJson?` member reads
+NULL as null, as its type says.
+
+What the fixes decided:
+
+- `Paid` takes and returns doubles; `_bodyPaid` and `_sendPaid` are doubles, cast only where a deadline is made.
+- The generator reports its diagnostics from an output of their own, combined with the compilation, at
+  `Location.Create(tree, span)` of the tree with the member's path. The sources stay an output of their own, so an
+  edit that changes no endpoint still writes no source again. `CodeFusion.Http.Tests` dropped CFH0109 from its
+  `NoWarn`: `BinderRuleTests` silences `Signup.IsAdmin` with `#pragma` and `Search.Admin` with `[SuppressMessage]`
+  (taken out, the build fails with both).
+- `allowShortSecret` is a parameter of a third `Jwt` constructor and `AddJwtAuth` overload, never a default, and not
+  a minimum length: an app opts in by name, and an empty secret stays refused. The signature check is unchanged
+  (`FixedTimeEquals`). SECURITY.md says the risk.
+- `AddDatabase(source)` registers the source, a context per connection on it and its stop; the other overload opens
+  its database and calls it. Stopping a source twice is harmless.
+- `DataSource.Reports` is the one list of statuses `OnFailure` hears of, read by both paths: the timeouts are the
+  database's own trouble (contention, a slow plan) even when a client's load caused them, and an app logging only
+  its 500s missed its 503s. A request whose client left still reports nothing.
+- Timing: `AResponseReadFastAtFirstDoesNotBuyALongCrawl` has a 3 s request timeout (its fast part may pause 3 s), its
+  cut lands at about 7 s, and the bound is 11 s (before the fix the crawl kept it past 14 s).
+  `AResetAfterAFinStillAbandonsTheRequest` polls `IsAborted` for up to 5 s instead of waiting 300 ms.
+  `ACallbackThatBlocksWhenItsClientResetsDoesNotStallTheHeartbeat` moved to `BlockingCloseTests` in the `quiet`
+  collection, which runs alone, and waits for its 3 s callback to end before the next test there.
+- CI runs the test projects in Debug as well, as matrix entries beside Release on both architectures, so the Debug
+  invariant and pool checks run on Linux and the wall time stays one run's. Debug skips the pack.
 
 ### Release cost
 

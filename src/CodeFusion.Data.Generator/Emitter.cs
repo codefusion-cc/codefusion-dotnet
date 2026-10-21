@@ -114,12 +114,12 @@ sealed class Emitter
         {
             var s = q.Statements[i];
             var types = s.Params.Select(p => "global::CodeFusion.Data.DataType." + DataType(p.Kind));
-            if (s.Keyed is { } k && q.Shape == Shape.Write && q.Statements.Count == 1)
+            string made = s.Keyed is { } k && q.Shape == Shape.Write && q.Statements.Count == 1
                 // one row by its key: the provider may run a group of these as one statement
-                Line($"static readonly {_statement} {id}S{i} = {_provider}.KeyedUpdate({sqlOf}{s.Name}, {Names.Literal(k.Table)}, {Names.Literal(k.Key)}, {k.KeyParameter}, " +
-                    $"new string[] {{ {string.Join(", ", k.Columns.Select(Names.Literal))} }}, new int[] {{ {string.Join(", ", k.ColumnParameters)} }}{string.Concat(types.Select(t => ", " + t))});");
-            else
-                Line($"static readonly {_statement} {id}S{i} = {_provider}.Statement({sqlOf}{s.Name}{string.Concat(types.Select(t => ", " + t))});");
+                ? $"{_provider}.KeyedUpdate({sqlOf}{s.Name}, {Names.Literal(k.Table)}, {Names.Literal(k.Key)}, {k.KeyParameter}, " +
+                  $"new string[] {{ {string.Join(", ", k.Columns.Select(Names.Literal))} }}, new int[] {{ {string.Join(", ", k.ColumnParameters)} }}{string.Concat(types.Select(t => ", " + t))})"
+                : $"{_provider}.Statement({sqlOf}{s.Name}{string.Concat(types.Select(t => ", " + t))})";
+            Line($"static readonly {_statement} {id}S{i} = {(q.RunsAlone ? $"{_provider}.Alone({made})" : made)};");
         }
 
         // the interceptor: each value the statements bind is computed first, so one that throws (a method of the

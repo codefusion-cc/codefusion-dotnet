@@ -15,9 +15,17 @@ theirs unnested in order, and the last write to each key is the one kept, as run
 rows. A run ends at any other statement, so the group's order holds. If the merged statement fails, the writes are
 run again one by one, and only the one at fault gets the error.
 
+A read loop keeps up to two groups in flight on its connection (`PgReader.MaxInFlight`): it sends what has queued
+while Postgres still answers the group before, so the backend never sits a round trip without work. A burst that
+arrives while other read loops sleep is shared out among them, so its reads run on several backends at once.
+
+A statement made with `RunsAlone = true` (or a query method marked `[RunsAlone]`) runs apart: on a connection of its
+own, each command in its own transaction, so a slow sign-up or report holds up no group commit or read group.
+
 It is also CodeFusion.Data's Postgres provider: a context deriving from `DataContext<Postgres>` has its LINQ
 compiled to Postgres's SQL at build time and run on these loops, registered with
-`services.AddDatabase<ConduitDb>(Postgres.FromUrl(url), readers, writers)`.
+`services.AddDatabase<ConduitDb>(Postgres.FromUrl(url), readers, writers)`, or `services.AddDatabase<ConduitDb>(source)`
+with a `PgDataSource` the app built itself (its own loops, error replies or failure log, its loops started).
 
 ```bash
 dotnet add package CodeFusion.Data.Postgres

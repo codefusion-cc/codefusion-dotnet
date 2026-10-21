@@ -81,7 +81,8 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     long _sendWaits;
     // When the loop first waited for the request's body (0: not yet), the time its bytes have paid for, and how many
     // of them have paid.
-    long _bodyAt, _bodyPaid, _bodyCounted;
+    long _bodyAt, _bodyCounted;
+    double _bodyPaid;
     // The responses sent since the loop last waited for the client (a run): what the socket has taken of them, and
     // what it had taken when it first filled (-1: not yet). And what it has taken on this connection in all.
     long _sendTaken, _sendFill = -1, _sentTotal;
@@ -93,7 +94,8 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     // The heartbeat's own: the run it last checked, the most of it the client had acknowledged and since when, and
     // the waiting time (the run's clock) what it acknowledged has paid for.
     int _checkedRun = -1;
-    long _ackedMost, _ackedAt, _sendPaid;
+    long _ackedMost, _ackedAt;
+    double _sendPaid;
 
     internal HttpExchange(HttpServer server)
     {
@@ -154,8 +156,9 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     /// its next request first (a FIN behind it is seen on Linux and macOS only). After a FIN the response is still
     /// sent if the handler finishes, since the client may only have closed its sending side; after a reset or a
     /// failure it is dropped (<see cref="IsAborted"/>). Callbacks registered on it run on the thread pool or the
-    /// connection's thread, never on the server's heartbeat. The source is the connection's own, renewed between
-    /// requests.</summary>
+    /// connection's thread, never on the server's heartbeat. The source is the connection's own, reset between
+    /// requests (a new one only after a client left), so work that outlives its handler and keeps the token is
+    /// canceled when a later request's client on the connection leaves.</summary>
     public CancellationToken Aborted => _cts.Token;
 
     /// <summary>The connection reset or failed while the handler ran: the response will not be sent. A client that
@@ -462,20 +465,22 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         if (_bodyMsPerByte == 0) return d;
         if (_bodyAt == 0)
         {
-            _bodyAt = _bodyPaid = now;
+            _bodyAt = now;
+            _bodyPaid = now;
             _bodyCounted = 0;
         }
         // the body so far, the part that came with the head included; a chunked one as the parser has decoded it
         long body = _req.Chunked ? _req.BodyEnd - _req.HeadEnd : _end - _start - _req.HeadEnd;
         _bodyPaid = Paid(_bodyPaid, body - _bodyCounted, _bodyMsPerByte, now + _bodyAheadMs);
         _bodyCounted = body;
-        return Math.Min(d, Math.Max(_bodyAt + _bodyGraceMs, _bodyPaid));
+        return Math.Min(d, Math.Max(_bodyAt + _bodyGraceMs, (long)_bodyPaid));
     }
 
     /// <summary>What <paramref name="bytes"/> more pay for at <paramref name="msPerByte"/>, past
-    /// <paramref name="paid"/> but no later than <paramref name="cap"/>. In doubles, so no rate overflows it.</summary>
-    static long Paid(long paid, long bytes, double msPerByte, long cap) =>
-        bytes <= 0 ? paid : (long)Math.Min(paid + bytes * msPerByte, cap);
+    /// <paramref name="paid"/> but no later than <paramref name="cap"/>. In doubles, so no rate overflows it, and kept
+    /// so: cut to whole milliseconds on each call, bytes worth less than one each would add up to nothing.</summary>
+    internal static double Paid(double paid, long bytes, double msPerByte, double cap) =>
+        bytes <= 0 ? paid : Math.Min(paid + bytes * msPerByte, cap);
 
     ParseResult Parse()
     {
@@ -885,7 +890,8 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         if (run != _checkedRun)
         {
             _checkedRun = run;
-            _ackedMost = _sendPaid = 0;
+            _ackedMost = 0;
+            _sendPaid = 0;
             _ackedAt = now;
         }
         if (acked > _ackedMost)

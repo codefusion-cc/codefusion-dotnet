@@ -265,6 +265,8 @@ public sealed partial class OpsDb : DataContext<Postgres>
 
     public One<RawJson> NamesAsJson() => People.OrderBy(p => p.Name).Select(p => p.Name).AsJson();
 
+    public One<RawJson> NamesOverAgeAsJson(int age) => People.Where(p => p.Age > age).OrderBy(p => p.Name).Select(p => p.Name).AsJson();
+
     public One<int> AgeOf(long id) => People.Where(p => p.Id == id).Select(p => p.Age).One();
 
     public One<Utf8> NickOf(long id) => People.Where(p => p.Id == id).Select(p => p.Nick ?? p.Name).One();
@@ -315,6 +317,12 @@ public sealed partial class OpsDb : DataContext<Postgres>
         Insert(Pets, new Pet { Id = id, OwnerId = owner, Name = name, Legs = 4 }).Select(x => new Owned(x.Name, Name.Of(x.Owner)));
 
     public Write AddLabelOnce(int id, Utf8 name) => Insert(Labels, new Label { Id = id, Name = name }).OrIgnore();
+
+    [RunsAlone]
+    public Write AddLabelAlone(int id, Utf8 name) => Insert(Labels, new Label { Id = id, Name = name }).OrIgnore();
+
+    [RunsAlone]
+    public One<Name> ByNameAlone(Utf8 name) => People.Where(p => p.Name == name).Select(p => Name.Of(p)).One();
 
     public Write<Name> AddNicknamed(Utf8 name) =>
         Insert(People, n => new Person { Name = name, Nick = SqlText.Lower(name), Age = 1, Active = false, Born = SqlFunctions.Now(), TeamId = n.Id % 2 + 1 })

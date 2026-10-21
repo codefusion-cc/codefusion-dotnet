@@ -26,13 +26,13 @@ public sealed class PgWriterTests : IAsyncDisposable
     PgStatement _insert = null!;
 
     /// <summary>A writer whose loops are not started yet, so writes queued now share the first group.</summary>
-    async Task<PgWriter> NewWriter(TimeSpan? lockTimeout = null)
+    async Task<PgWriter> NewWriter(TimeSpan? lockTimeout = null, int maxQueued = PgWriter.MaxQueued)
     {
         Require();
         _db = Admin();
         await Sql($"CREATE TABLE {_table} (id bigserial PRIMARY KEY, v text NOT NULL UNIQUE)");
         _insert = new PgStatement($"INSERT INTO {_table} (v) VALUES ($1) RETURNING v, id", PgType.Text);
-        return _writer = new PgWriter(lockTimeout is { } t ? WriterSettings(t) : Settings());
+        return _writer = new PgWriter(lockTimeout is { } t ? WriterSettings(t) : Settings(), maxQueued);
     }
 
     Task<object?> Sql(string sql) => _db!.Scalar(sql);
@@ -150,20 +150,34 @@ public sealed class PgWriterTests : IAsyncDisposable
     [Fact(Timeout = 30_000)]
     public async Task WritesPastTheQueueLimitAreRefusedAtOnceAndTheQueuedOnesCommit()
     {
-        var w = await NewWriter();
-        var values = Enumerable.Range(0, PgWriter.MaxQueued).Select(i => $"q{i}").ToArray();
+        const int Limit = 300;
+        var w = await NewWriter(maxQueued: Limit);
+        var values = Enumerable.Range(0, Limit).Select(i => $"q{i}").ToArray();
         var queued = values.Select(v => Run(w, v)).ToArray();
         var refused = w.Command(_insert).Text("one-too-many").Run(Keep, new Box());
 
         Assert.True(refused.IsCompletedSuccessfully, "refused without waiting for a loop");
         Assert.Equal(PgStatus.Busy, refused.Result.Status);
-        Assert.Equal(PgWriter.MaxQueued, w.Queued);
+        Assert.Equal(Limit, w.Queued);
         w.Start(2);
         Assert.Equal(values, await Task.WhenAll(queued.Select(Ok)));
         Assert.Equal(0, w.Queued);
         Assert.Equal("room-again", await Ok(Run(w, "room-again")));
-        Assert.Equal(PgWriter.MaxQueued + 1, (await Values()).Length);
+        Assert.Equal(Limit + 1, (await Values()).Length);
         Assert.DoesNotContain("one-too-many", await Values());
+    }
+
+    [Fact(Timeout = 60_000)]
+    public async Task TwentyWritesFromEachOf512RequestsQueuedAtOnceAreAllTakenByDefault()
+    {
+        // TechEmpower's updates test: 512 connections, each request starting its 20 writes together
+        var w = await NewWriter();
+        var values = Enumerable.Range(0, 512 * 20).Select(i => $"u{i}").ToArray();
+        var queued = values.Select(v => Run(w, v)).ToArray();
+        Assert.Equal(values.Length, w.Queued);
+        w.Start(1);
+        Assert.Equal(values, await Task.WhenAll(queued.Select(Ok)));
+        Assert.Equal(values.Length, (await Values()).Length);
     }
 
     [Fact(Timeout = 30_000)]
@@ -293,7 +307,9 @@ public sealed class PgWriterTests : IAsyncDisposable
         var stays = Run(w, "stays", leaving.Token);
         var failing = Run(w, "taken");
         w.Start(1);
-        while (w.Queued > 0) await Task.Delay(5);
+        // an empty queue only means the loop took the group; leave once Postgres is running it
+        while ((long)(await Sql("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND state = 'active' AND query LIKE 'SELECT pg_sleep(0.5)%'"))! == 0)
+            await Task.Delay(5);
         leaving.Cancel();
 
         Assert.True((await sleep).IsOk);

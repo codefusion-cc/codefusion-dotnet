@@ -53,6 +53,22 @@ public sealed class PgStatement
     /// <summary>On a <see cref="Batch"/>: each array parameter's element type.</summary>
     internal uint[]? ElementTypes;
 
+    /// <summary>
+    /// Commands of this statement run alone: on a connection of their own, each in a transaction of its own, never in
+    /// a group. For a statement slow enough to hold up a group commit or a read group (a sign-up whose unique checks
+    /// wait on locks, a report), at the cost of a round trip and a commit each.
+    /// </summary>
+    public bool RunsAlone
+    {
+        get => _alone;
+        init => _alone = value;
+    }
+
+    bool _alone;
+
+    /// <summary>Marks a statement made elsewhere (a query method's, by its provider) as running alone.</summary>
+    internal void MarkAlone() => _alone = true;
+
     /// <summary>A statement with <paramref name="sql"/> and one parameter of each of <paramref name="parameters"/>, in order.</summary>
     public PgStatement(string sql, params ReadOnlySpan<PgType> parameters)
     {

@@ -52,10 +52,20 @@ public sealed class FailureTests(OpsFixture fixture)
         Assert.Equal(503, row.Error!.Status);
     }
 
+    // A timeout is the database's own trouble (contention, a slow plan) as much as a broken connection is, so the
+    // failure log hears of both kinds, from a reply and from an awaited row. Before, only Broken, Failed and
+    // ReaderFailed reached it, and an app saw its 503s with nothing logged.
     [Fact]
-    public async Task ALockHeldTooLongIsBusyAndTheWriteDoesNotHappen()
+    public async Task ALockHeldTooLongIsBusyReportedAndTheWriteDoesNotHappen()
     {
-        var source = TestDb.Open("cfdata_ops_w", lockTimeout: TimeSpan.FromMilliseconds(150));
+        TestDb.Require();
+        var failures = new ConcurrentQueue<(string, DataResult)>();
+        var settings = PgSettings.Parse(TestDb.ConnectionString!).Set("search_path", "cfdata_ops_w");
+        var source = new PostgresDatabase(settings)
+        {
+            WriterLockTimeout = TimeSpan.FromMilliseconds(150),
+            OnFailure = (q, r) => failures.Enqueue((q, r)),
+        }.Open(1, 1);
         try
         {
             var db = Db(source);
@@ -66,13 +76,18 @@ public sealed class FailureTests(OpsFixture fixture)
                 await lockRow.ExecuteScalarAsync();
             Assert.Equal("""{"errors":{"body":["the database is busy"]}}""", await Json(db.Touch(4)));
             Assert.Equal(503, _response.Status);
+            Assert.True(failures.TryDequeue(out var f), "the reply's lock timeout wasn't reported");
+            Assert.Equal(("OpsDb.Touch", DataStatus.LockTimeout, "55P03"), (f.Item1, f.Item2.Status, f.Item2.NativeCode));
             _response.Next();
             var row = await db.Touch(4);
             Assert.Equal(DataStatus.LockTimeout, row.Status);
             Assert.Equal(503, row.Error!.Status);
+            Assert.True(failures.TryDequeue(out f), "the row's lock timeout wasn't reported");
+            Assert.Equal(("OpsDb.Touch", DataStatus.LockTimeout), (f.Item1, f.Item2.Status));
             await tx.RollbackAsync();
             _response.Next();
             Assert.True((await db.Touch(4)).Found);
+            Assert.Empty(failures);
         }
         finally
         {
@@ -81,19 +96,31 @@ public sealed class FailureTests(OpsFixture fixture)
     }
 
     [Fact]
-    public async Task AStatementPastItsTimeoutIsBusy()
+    public async Task AStatementPastItsTimeoutIsBusyAndReported()
     {
+        TestDb.Require();
+        var failures = new ConcurrentQueue<(string, DataResult)>();
         var settings = PgSettings.Parse(TestDb.ConnectionString!).Set("search_path", "cfdata_ops").Set("statement_timeout", "100ms");
-        var source = new PostgresDatabase(settings).Open(1, 1);
+        var source = new PostgresDatabase(settings) { OnFailure = (q, r) => failures.Enqueue((q, r)) }.Open(1, 1);
         try
         {
             var db = Db(source);
             Assert.Equal("""{"errors":{"body":["the database is busy"]}}""", await Json(db.Sleep(2)));
             Assert.Equal(503, _response.Status);
+            Assert.True(failures.TryDequeue(out var f), "the reply's statement timeout wasn't reported");
+            Assert.Equal(("OpsDb.Sleep", DataStatus.StatementTimeout, "57014"), (f.Item1, f.Item2.Status, f.Item2.NativeCode));
             _response.Next();
             Assert.Equal(DataStatus.StatementTimeout, (await db.Sleep(2)).Status);
+            Assert.True(failures.TryDequeue(out f), "the row's statement timeout wasn't reported");
+            Assert.Equal(("OpsDb.Sleep", DataStatus.StatementTimeout), (f.Item1, f.Item2.Status));
             _response.Next();
             Assert.Equal("1", await Json(db.Sleep(0)));
+            // not for a client that left: its own abort isn't the database's trouble
+            _response.Next();
+            var left = db.Sleep(2);
+            _response.Abort();
+            await Json(left);
+            Assert.Empty(failures);
         }
         finally
         {
@@ -104,6 +131,7 @@ public sealed class FailureTests(OpsFixture fixture)
     [Fact]
     public async Task AnErrorOfTheDatabaseIsInternalAndReported()
     {
+        TestDb.Require();
         var failures = new ConcurrentQueue<(string, DataResult)>();
         var settings = PgSettings.Parse(TestDb.ConnectionString!).Set("search_path", "cfdata_ops");
         var source = new PostgresDatabase(settings) { OnFailure = (q, r) => failures.Enqueue((q, r)) }.Open(1, 1);
@@ -172,6 +200,7 @@ public sealed class FailureTests(OpsFixture fixture)
     [Fact]
     public async Task AStoppedSourceRunsNothing()
     {
+        TestDb.Require();
         var source = TestDb.Open("cfdata_ops");
         source.Stop();
         var db = Db(source);

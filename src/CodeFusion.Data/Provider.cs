@@ -154,6 +154,10 @@ public interface IDataProvider<TSelf, TStatement, TCommand> : IDataProvider
     static virtual TStatement KeyedUpdate(string sql, string table, string key, int keyParameter, string[] columns, int[] columnParameters,
         params ReadOnlySpan<DataType> parameters) => TSelf.Statement(sql, parameters);
 
+    /// <summary>The statement of a query marked <see cref="RunsAloneAttribute"/>: its commands run apart from any group.
+    /// By default the statement as it is.</summary>
+    static virtual TStatement Alone(TStatement statement) => statement;
+
     /// <summary>A command that only reads, on <paramref name="context"/>'s source.</summary>
     static abstract TCommand Read(DataContext context, TStatement statement);
 
@@ -271,8 +275,14 @@ public abstract class DataSource
 
     /// <summary>Called on the provider's thread for each command that failed for a reason a client can't cause
     /// (<see cref="DataStatus.Broken"/>, <see cref="DataStatus.Failed"/>, <see cref="DataStatus.ReaderFailed"/>),
-    /// with the query's name. Keep it quick: it runs on the provider's loop.</summary>
+    /// or that the database's own load ended (<see cref="DataStatus.LockTimeout"/>,
+    /// <see cref="DataStatus.StatementTimeout"/>), with the query's name; not for a request whose client left. Keep
+    /// it quick: it runs on the provider's loop.</summary>
     public Action<string, DataResult>? OnFailure { get; init; }
+
+    /// <summary>Whether <see cref="OnFailure"/> is told of a command that ended with <paramref name="status"/>.</summary>
+    internal static bool Reports(DataStatus status) => status is DataStatus.Broken or DataStatus.Failed or DataStatus.ReaderFailed
+        or DataStatus.LockTimeout or DataStatus.StatementTimeout;
 
     /// <summary>A new context of type <typeparamref name="TContext"/> on this source.</summary>
     public TContext CreateContext<TContext>() where TContext : DataContext, new()

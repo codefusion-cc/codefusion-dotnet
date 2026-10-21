@@ -9,7 +9,8 @@ namespace CodeFusion.Data.Postgres;
 /// The Postgres provider for CodeFusion.Data: a context derives from <c>DataContext&lt;Postgres&gt;</c>, and the
 /// generator writes its queries in Postgres's SQL and runs them on a <see cref="PgReader"/> (reads, in groups) and a
 /// <see cref="PgWriter"/> (writes, in group commits). Register with
-/// <see cref="PostgresServices.AddDatabase{TContext}"/>.
+/// <see cref="PostgresServices.AddDatabase{TContext}(IServiceRegistry, PostgresDatabase, int, int)"/>,
+/// or with a source of the app's own.
 /// </summary>
 [SqlDialect("postgres")]
 // A context is declared as DataContext<Postgres>: the type keeps the short name, and the namespace the package's.
@@ -83,6 +84,14 @@ public readonly struct Postgres : IDataProvider<Postgres, PgStatement, PgCommand
         DataType.Timestamp => (PgType)1185,
         _ => throw new ArgumentOutOfRangeException(nameof(type)),
     };
+
+    /// <inheritdoc/>
+    public static PgStatement Alone(PgStatement statement)
+    {
+        ArgumentNullException.ThrowIfNull(statement);
+        statement.MarkAlone();
+        return statement;
+    }
 
     static PgType TypeOf(DataType type) => type switch
     {
@@ -160,7 +169,8 @@ public sealed class PostgresDatabase
     /// <summary>The replies for failures and empty results.</summary>
     public DataErrors Errors { get; init; } = DataErrors.Default;
 
-    /// <summary>Told of each command that failed for a reason a client can't cause, on the loop's thread.</summary>
+    /// <summary>Told of each command that failed for a reason a client can't cause, or timed out, on the loop's thread
+    /// (<see cref="DataSource.OnFailure"/>).</summary>
     public Action<string, DataResult>? OnFailure { get; init; }
 
     /// <summary>Starts <paramref name="readers"/> read loops and <paramref name="writers"/> write loops, each on a
@@ -217,7 +227,20 @@ public static class PostgresServices
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(database);
-        var source = database.Open(readers, writers);
+        return services.AddDatabase<TContext>(database.Open(readers, writers));
+    }
+
+    /// <summary>
+    /// Registers <paramref name="source"/>, which the app built itself (its own loops, error replies or failure log),
+    /// and <typeparamref name="TContext"/> per connection on it, as the other overload does. Its loops are the
+    /// caller's to start; they stop when the app stops.
+    /// </summary>
+    /// <returns><paramref name="source"/>.</returns>
+    public static PgDataSource AddDatabase<TContext>(this IServiceRegistry services, PgDataSource source)
+        where TContext : DataContext<Postgres>, new()
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(source);
         services.AddSingleton(source);
         services.AddPerConnection(source.CreateContext<TContext>);
         services.OnStopping(source.Stop);
