@@ -20,8 +20,10 @@ A read loop keeps up to two groups in flight on its connection (`PgReader.MaxInF
 while Postgres still answers the group before, so the backend never sits a round trip without work. A burst that
 arrives while other read loops sleep is shared out among them, so its reads run on several backends at once.
 
-A statement made with `RunsAlone = true` (or a query method marked `[RunsAlone]`) runs apart: on a connection of its
-own, each command in its own transaction, so a slow sign-up or report holds up no group commit or read group.
+A statement made with `RunsAlone = true` (or a query method marked `[RunsAlone]`) runs apart: on connections of their
+own, each command in its own transaction, so a slow sign-up or report holds up no group commit or read group. A reader
+or writer opens `PgSettings.AloneConnections` of them (2 by default) at its first such command, on top of its loops'
+connections; each runs one command at a time and the next goes to a free one, so one slow report holds up no sign-up.
 
 It is also CodeFusion.Data's Postgres provider: a context deriving from `DataContext<Postgres>` has its LINQ
 compiled to Postgres's SQL at build time and run on these loops, registered with
@@ -64,6 +66,12 @@ added. The task completes on the loop's thread, so continue quickly and never bl
 and 4,000 writes from 8 callers after warm-up, against a real Postgres 18: about 4 KB in all, which is the test's own
 8 tasks, or 0.17 B per operation.
 
+What makes that possible is a pool of commands (jobs), and its memory is bounded. It keeps at most as many jobs as
+the started readers and writers can hold at once (their queues and their groups in flight; given back when they
+complete), and never more than were ever out together, about a kilobyte each. Their buffers grown past 4 KB stay
+only while all of them together fit 16 MB; past that, a returned job's buffers shrink back, and a buffer past 64 KB is
+never kept. Each thread keeps up to 32 jobs in front of the shared pool, and gives them back when it ends.
+
 Against Npgsql 10 as the contest server used it before (BenchmarkDotNet short run, Postgres 18 on the same Apple
 M-series Mac, 16 read loops and 2 writers for both, rows read as bytes the way a JSON writer reads them). Client CPU
 is the benchmark process's over its operations; Postgres's own CPU is not in it.
@@ -80,9 +88,10 @@ Postgres on the same 8 cores limits. One at a time, most of the CPU is the bench
 "Allocated" for this client reads 180 to 350 B per operation: that is the benchmark's own async methods and arrays,
 the same for both clients.
 
-One case is slower: an idle burst of 32 reads takes 155 µs per read against Npgsql's 96, because one loop runs the
-whole burst on one backend while Npgsql spreads it over several. Under load, one Sync per group is what saves
-Postgres CPU.
+An idle burst of 32 reads takes 70 to 87 µs per read against Npgsql's 106 to 122: the burst is shared out among the
+loops asleep, so it runs on several backends at once (it took 155 to 172 µs on one before,
+[2026-10-21-pg-read-burst.md](../../docs/benchmarks/2026-10-21-pg-read-burst.md)). Under load, one Sync per group is
+what saves Postgres CPU.
 
 ## Limits
 

@@ -35,6 +35,10 @@ public sealed class PgSettings
     public TimeSpan ReconnectDelay = TimeSpan.FromMilliseconds(100);
     /// <summary>The longest wait between connect attempts.</summary>
     public TimeSpan MaxReconnectDelay = TimeSpan.FromSeconds(2);
+    /// <summary>The connections a reader or writer opens for statements that run alone (<see cref="PgStatement.RunsAlone"/>),
+    /// at the first such command: each runs one command at a time, and the next command goes to one that is free, so
+    /// a slow report holds up only its own connection. They come on top of the loops' own.</summary>
+    public int AloneConnections = 2;
     /// <summary>Answer a server that asks for a cleartext or md5 password or runs SCRAM with fewer than Postgres's
     /// 4096 iterations, and log in where a password is set but the server never asks for it (trust). Off: only SCRAM
     /// logs in (trust only without a password), so a server posing as Postgres can neither collect the password nor
@@ -74,7 +78,7 @@ public sealed class PgSettings
     public PgSettings Clone()
     {
         var c = new PgSettings { Host = Host, Port = Port, Database = Database, User = User, Password = Password,
-            ReceiveBufferSize = ReceiveBufferSize, ConnectTimeout = ConnectTimeout, ReconnectDelay = ReconnectDelay, MaxReconnectDelay = MaxReconnectDelay,
+            ReceiveBufferSize = ReceiveBufferSize, ConnectTimeout = ConnectTimeout, ReconnectDelay = ReconnectDelay, MaxReconnectDelay = MaxReconnectDelay, AloneConnections = AloneConnections,
             AllowWeakPasswordAuth = AllowWeakPasswordAuth, Transport = Transport, Environment = Environment, MaxTakeIn = MaxTakeIn,
             _sslModeSet = _sslModeSet, _gssModeSet = _gssModeSet, _sslRootSystem = _sslRootSystem };
         c.Parameters.AddRange(Parameters);

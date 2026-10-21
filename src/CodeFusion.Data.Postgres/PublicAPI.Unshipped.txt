@@ -178,3 +178,4 @@ CodeFusion.Data.Postgres.PgStatement.RunsAlone.get -> bool
 CodeFusion.Data.Postgres.PgStatement.RunsAlone.init -> void
 static CodeFusion.Data.Postgres.Postgres.Alone(CodeFusion.Data.Postgres.PgStatement! statement) -> CodeFusion.Data.Postgres.PgStatement!
 CodeFusion.Data.Postgres.PgWriter.PgWriter(CodeFusion.Data.Postgres.PgSettings! settings, int maxQueued) -> void
+CodeFusion.Data.Postgres.PgSettings.AloneConnections -> int

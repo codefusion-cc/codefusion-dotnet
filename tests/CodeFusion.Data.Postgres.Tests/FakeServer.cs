@@ -346,6 +346,8 @@ sealed class FakeConnection(FakeServer server) : PgTransport
     public readonly List<IReadOnlyList<ClientMessage>> Batches = [];
     /// <summary>Every Send the client made (one per group, if it batches as it should).</summary>
     public int Sends;
+    /// <summary>The Sends that would take replies in while the socket is full.</summary>
+    public int SendsTakingIn;
     public bool Terminated;
     /// <summary>The client let go of the connection (closed its socket).</summary>
     public volatile bool Disposed;
@@ -433,6 +435,7 @@ sealed class FakeConnection(FakeServer server) : PgTransport
         lock (_lock)
             if (_closed) throw new SocketException((int)SocketError.ConnectionReset);
         Sends++;
+        if (whileBlocked is not null) SendsTakingIn++;
         _in.AddRange(data.ToArray());
         while (true)
         {
