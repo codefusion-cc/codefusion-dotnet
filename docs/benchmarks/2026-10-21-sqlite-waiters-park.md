@@ -84,20 +84,22 @@ didn't reproduce CI. Under the full Sqlite suite, as CI runs them, every build f
 - What still let reads overtake with parking: a writer in line waits for one read to go, and then had to run to tell
   the reads to stop. Woken on a busy CPU it waited milliseconds for one, and reads went on starting meanwhile.
 - Two other timing tests failed now and then under the loaded suite, before as with parking:
-  `AWriteOffTheLoopGoesToTheWriterAndWaitsForTheBatch` (an Assert.False: once before, once with parking, and in both
-  of the spinning build's runs at 4 CPUs below) and `ABatchOpenedAfterItsEndRanStillEndsInItsWakeUp` (4.3 s, once
-  before). Neither failed in the final build's 9 runs; they are flaky under load, not fixed here.
+  `AWriteOffTheLoopGoesToTheWriterAndWaitsForTheBatch` (an Assert.False: once before, once with parking, and in
+  both 4-CPU runs of the spinning mutant below in an earlier round) and
+  `ABatchOpenedAfterItsEndRanStillEndsInItsWakeUp` (4.3 s, once before).
+  Neither failed in the final build's 18 runs (two rounds of 9); they are flaky under load, not fixed here.
 
 **The fix and the test.** Reads now stop once one has gone after a writer came (`_writerQueued`, checked again after
 the take), whether or not the writer runs. The test asserts the turns rather than a time: a Debug counter of the reads
 that start while one write waits, at most 2 (one that took the connection as the writer came, one let through after
-it). The time stays only as a guard against a hang, ten times the old bound. The full suite in Debug on cf-bench:
+it). The time stays only as a guard against a hang, ten times the old bound. The full suite in Debug on cf-bench,
+the last round (an earlier one, with the counter started a little sooner, came out the same way):
 
 | Build | 4 CPUs, 4 test threads | 4 CPUs, 2 (as CI) | 1 CPU |
 |---|---|---|---|
 | final | 3 of 3 green | 3 of 3 green | 3 of 3 green |
-| final without the turn rule | 2 of 2 red: 3 to 7 reads started while one write waited | | 2 of 2 red: 6 and 7 |
-| without the rule, waiters spinning, never parked | 2 of 2 red: 4 to 10 | | 2 of 2 red: 4 and 5 |
+| final without the turn rule | 2 of 2 red: 3 to 32 reads started while one write waited | | 2 of 2 red: 6 and 7 |
+| without the rule, waiters spinning, never parked | 2 of 2 red: 3 to 7 | | 2 of 2 red: 4 and 5 |
 | the writer waits while any read waits | both turn tests timed out (alone) | | |
 
 The spinning build also failed `NothingSpinsWhileALoopsBatchHoldsTheConnection` (6384f10 parked for batches).
