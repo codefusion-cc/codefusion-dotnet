@@ -86,6 +86,9 @@ sealed class FakeServer
                     var (name, sql) = m.Parse();
                     c.Prepared.Add(name);
                     c.Sql[name] = sql;
+                    // a transaction the client opened itself stays open past the Sync (ReadyForQuery 'T')
+                    if (sql == "BEGIN") c.InTransaction = true;
+                    else if (sql is "COMMIT" or "ROLLBACK") c.InTransaction = false;
                     w.Empty('1');
                     break;
                 case 'D':
@@ -117,7 +120,7 @@ sealed class FakeServer
                     break;
             }
         }
-        w.Ready();
+        w.Ready(c.InTransaction ? 'T' : 'I');
         c.Write(w.ToArray());
     }
 
@@ -346,6 +349,8 @@ sealed class FakeConnection(FakeServer server) : PgTransport
     public readonly List<IReadOnlyList<ClientMessage>> Batches = [];
     /// <summary>Every Send the client made (one per group, if it batches as it should).</summary>
     public int Sends;
+    /// <summary>The client opened a transaction (BEGIN) and hasn't ended it.</summary>
+    public bool InTransaction;
     /// <summary>The Sends that would take replies in while the socket is full.</summary>
     public int SendsTakingIn;
     public bool Terminated;

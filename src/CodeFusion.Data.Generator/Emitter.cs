@@ -21,6 +21,8 @@ sealed class Emitter
     /// parameter, never on the provider type, so for a provider without it the statement stays as it is: which is
     /// what the default does.</summary>
     readonly bool _alone;
+    /// <summary>The provider declares KeyedUpdate itself (as with Alone, the default can't be called on its type).</summary>
+    readonly bool _keyed;
     int _indent;
 
     public Emitter(INamedTypeSymbol context, INamedTypeSymbol provider, ITypeSymbol statement)
@@ -29,6 +31,7 @@ sealed class Emitter
         _provider = provider.ToDisplayString(Full);
         _statement = statement.ToDisplayString(Full);
         _alone = Declares(provider, "Alone");
+        _keyed = Declares(provider, "KeyedUpdate");
     }
 
     static bool Declares(INamedTypeSymbol provider, string name) =>
@@ -122,7 +125,12 @@ sealed class Emitter
         {
             var s = q.Statements[i];
             var types = s.Params.Select(p => "global::CodeFusion.Data.DataType." + DataType(p.Kind));
-            string made = $"{_provider}.Statement({sqlOf}{s.Name}{string.Concat(types.Select(t => ", " + t))})";
+            // one row by its key: a provider that declares KeyedUpdate may run a group's run of these as one
+            // statement (never one that runs alone: those never share a group)
+            string made = s.Keyed is { } k && _keyed && !q.RunsAlone && q.Shape == Shape.Write && q.Statements.Count == 1
+                ? $"{_provider}.KeyedUpdate({sqlOf}{s.Name}, {Names.Literal(k.Table)}, {Names.Literal(k.Key)}, {k.KeyParameter}, " +
+                  $"new string[] {{ {string.Join(", ", k.Columns.Select(Names.Literal))} }}, new int[] {{ {string.Join(", ", k.ColumnParameters)} }}{string.Concat(types.Select(t => ", " + t))})"
+                : $"{_provider}.Statement({sqlOf}{s.Name}{string.Concat(types.Select(t => ", " + t))})";
             Line($"static readonly {_statement} {id}S{i} = {(q.RunsAlone && _alone ? $"{_provider}.Alone({made})" : made)};");
         }
 

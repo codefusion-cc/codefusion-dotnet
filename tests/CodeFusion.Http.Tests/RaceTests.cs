@@ -52,8 +52,7 @@ public sealed class RaceTests
         // a stalled request or send is closed after this, so a stop doesn't wait for the hard abort
         await using var t = TestServer.Start(handler.Run, o => o.RequestTimeout = TimeSpan.FromMilliseconds(500));
         t.Server.PhaseHook = gate.Hook;
-        var c = await t.ConnectAsync();
-        await c.SendAsync(where switch
+        var c = t.ConnectAndSend(where switch
         {
             Where.ReadingHead => "GET /x HTTP/1.1\r\nHost: x\r\n",
             Where.ReadingBody => "POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\nabc",
