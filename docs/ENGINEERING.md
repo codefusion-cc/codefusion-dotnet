@@ -1160,7 +1160,9 @@ default elsewhere, and the choice for handlers that block or apps that put the p
   - The kernel spreads connections by a hash of their addresses, not in turn: a few long-lived connections may share a
     loop. `ListenerPerLoop = false` keeps one listener and gives connections to the loops in turn.
   - A loop that fails hands its listener to the runtime's accepts, so its queued connections aren't reset; with every
-    loop failed, connections wait on their sockets as Sockets' do.
+    loop failed, connections wait on their sockets as Sockets' do. The connections it had are closed with a FIN, as a
+    timeout closes them: a reset (it used `Close(0)`) reached a connection it had just accepted before its client's
+    own connect had finished, and failed that connect (Linux CI, arm64 and x64).
   - The runtime's `ReuseAddress` sets SO_REUSEPORT on Unix anyway (checked on macOS), so port sharing by a process of
     the same user is no different from Sockets'.
   - macOS keeps one listener and the runtime's accepts.
@@ -1198,9 +1200,29 @@ Each fix had its test first, seen failing on the code before it (`EventLoopGuara
 | 9 (low): stale docs | This section, the package README, SECURITY.md (the exact bound, and port sharing for both transports) | |
 | (coordinator) a connection's first request ran on the pool thread that started it, outside any batch | A new connection starts with no edge (epoll's ADD and kqueue's EV_ADD report bytes already waiting), and one the runtime accepted is started on its loop's thread (a queue per loop, and its wake) | `AConnectionsFirstRequestIsHandledInABatch`, for both listener settings (red before) |
 
+### Buffers per loop (perf/http-loop-pools)
+
+The C4 profile of json (1.17M req/s) had `System.Threading.Lock` at about 2% of the app's time: `BufferPool`'s locked
+shards, rented and returned around every request.
+- Each pool the server's connections use (request, response, and the app's arena chunks) now keeps a stack per event
+  loop, touched only by that loop's thread, so no lock.
+- A rent or return on a loop's thread goes there first. Any other thread (a continuation off the loop, Sockets) uses
+  the shards, as does what a full stack can't take. A loop's stack never sees another thread.
+- Each stack holds capacity / (2 x loops) arrays (at least one, while the capacity has one per loop), taken out of the
+  shards' share: `MaxPooledBuffers` stays the whole bound. With fewer arrays than loops there are no stacks.
+- A loop that ends (its wait failed, or the stop) gives its stacks back to the shards on its own thread.
+- Tests (`LoopPoolTests`), each red with its part broken:
+  - rents and returns go through the loop's stack;
+  - a buffer given back off its loop goes to the shards;
+  - each loop keeps exactly its share (red with the stacks off);
+  - the pools keep no more than `MaxPooledBuffers` in all (red with the shards at the full capacity);
+  - a failed loop's stacks go back to the shards (red without the drain);
+  - the arena's chunks use it too.
+- `ServerChecks`' pool balance counts the loop stacks; the allocation tests are unchanged.
+
 ### Tests
 
-`EventLoopTests`, `EventLoopBatchTests` and `EventLoopGuaranteeTests`, on kqueue here and epoll in CI. `AllocationTests` and `AppAllocationTests` have EventLoop rows
+`EventLoopTests`, `EventLoopBatchTests`, `EventLoopGuaranteeTests` and `LoopPoolTests`, on kqueue here and epoll in CI. `AllocationTests` and `AppAllocationTests` have EventLoop rows
 (0.004 to 0.05 B/request, as Sockets). `TestTransport` makes every server the tests start use the transport that
 `CODEFUSION_HTTP_TRANSPORT` names, and CI runs `CodeFusion.Http.Tests` a second time with `EventLoop`. Debug builds count
 every receive call (`HttpServer.SocketReceives`): `EachKeepAliveRequestCostsThisManyReceives` asserts 1 per request on
