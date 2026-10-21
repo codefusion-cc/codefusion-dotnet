@@ -29,7 +29,8 @@ sealed class Dialect
     /// found's table holds it (the table written counts as read only where a read of it is corrected). A corrected read
     /// needs no row security and columns that store the value written (no type modifier, the type bound or a wider
     /// integer or float) and compare it as the correction does (the default collation). A table without children
-    /// (relhassubclass) costs no lookup of them; each table walked is matched with its ancestors (pg_inherits by inhrelid).
+    /// (relhassubclass) costs no lookup of them; each table walked is matched with its ancestors (pg_inherits by
+    /// inhrelid).
     /// </summary>
     public const string ThenGuardOfPostgres =
         "(SELECT CASE WHEN EXISTS (WITH RECURSIVE r(oid, upd, reached, sub, rules) AS (SELECT c.oid, false, false, c.relhassubclass, c.relhasrules " +

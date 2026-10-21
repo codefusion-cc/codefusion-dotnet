@@ -37,3 +37,43 @@
     next, on a quiet machine with the full job:
     - bind each column's type as a regtype constant, which the plan folds once;
     - leave pg_inherits out where the table has no children, `relhassubclass`.
+
+## Second round: the check after the third review (B1 to B3)
+
+- **Question:** the third review's fixes add two checks: a table held under a table read (a mid-level partition, an
+  inheriting table), and the found table and the table written as one partition tree. They also take each inserted
+  column's types as a regtype[] constant instead of a name cast per execution, and skip pg_inherits for a table
+  without children. Do they cost more than the check they replace, or less?
+- **Code:**
+  - A is 7e3a51d, the check of the first round.
+  - B is the branch after the fixes, in two forms. cf76d02 took the descendants of the tables read in a second
+    recursive CTE. 9175fe6 matches each table walked with its ancestors instead, through pg_inherits by inhrelid.
+- **Machine:** the same M1 Pro and Postgres 18.4, still shared, with a load average of 9 to 54 during the runs.
+- **Method:**
+  - pgbench as before, each side's check for Follow and Unfollow alone, six rounds in A B, B A order. The fastest
+    round is given.
+  - BenchmarkDotNet's short job, ThenGuardBenchmarks built from each side, run in A B B A order.
+
+| Case | A | B | Change |
+|---|---|---|---|
+| Follow's check alone, cf76d02 (descendants CTE), fastest of 6 | 60 µs | 66 µs | +6 µs |
+| Unfollow's check alone, cf76d02, fastest of 6 | 74 µs | 86 µs | +12 µs |
+| Follow's check alone, the ancestors form, beside the first, fastest of 5 | 62 µs | 64 µs | +2 µs |
+| Follow's check alone, 9175fe6, fastest of 6 (load 9 to 10) | 67 µs | 73 µs | +6 µs |
+| Unfollow's check alone, 9175fe6, fastest of 6 | 68 µs | 82 µs | +14 µs |
+| Follow with the check, BenchmarkDotNet, A B B A | 146.7, 170.1 µs | 108.6, 155.0 µs | within noise |
+| Unfollow with the check, BenchmarkDotNet, A B B A | 138.7, 215.8 µs | 126.1, 231.4 µs | within noise |
+
+`SELECT 1` took 25 to 29 µs in the quieter rounds.
+
+- **What the parts cost (Follow, alone, fastest of 4 or 5, beside A at 54 to 63 µs):**
+  - A with the regtype[] constants: 57 µs. The name cast didn't measure here: in the cached plan the VALUES rows
+    are constants, and the parse is lost in the noise.
+  - B without the two new checks: 57 to 58 µs.
+  - B with them as a second recursive CTE: 66 to 70 µs. B with them as the ancestors walk: 64 µs, which is why
+    9175fe6 replaced cf76d02.
+- **Conclusion:**
+  - The two new checks cost a few µs per statement on the noisy Mac: 2 to 6 for Follow, up to 14 for Unfollow.
+  - The regtype[] constant and the relhassubclass gate save about as much as the walk to the ancestors costs.
+  - End to end the difference stays inside BenchmarkDotNet's error.
+  - We keep 9175fe6. A quiet machine with the full job would show whether the constant types save anything at all.

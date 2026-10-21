@@ -953,9 +953,13 @@ What the fixes decided:
   partitions (pg_inherits); a delete follows each foreign key that cascades, sets NULL or sets a default (found
   through pg_depend's index, as pg_constraint has none on the referenced table), and from a table whose rows it sets
   to NULL or a default, the keys acting on their update. A rule or non-internal trigger on any table walked fails the
-  statement (a trigger may write anywhere), and so does a table reached that the Select reads, or a partition of one
-  (the found table always counts as read, the table written only where a read of it is corrected: a key of a comment
-  thread into itself reaches nothing an article's Select reads). For a corrected read, so do row security on it or a
+  statement (a trigger may write anywhere), and so does a table reached that the Select reads or that a table it reads
+  holds, a partition at any depth or an inheriting table: each table walked is matched with its ancestors,
+  through pg_inherits by inhrelid (the found table always counts as read, the table written only where a read of it is corrected: a key of a
+  comment thread into itself reaches nothing an article's Select reads). The table written, or a partition of it, held
+  by the row found's table fails it too: two entities of one partition tree are one table to the database. Each table
+  carries relhassubclass, so one without children costs no lookup of its children, and each inserted column's types come
+  as a regtype[] constant the plan folds once. For a corrected read, so do row security on it or a
   column the insert sets with a type modifier, a type other than the one its value is bound as except a wider one of
   the same kind (int into bigint and float into double precision hold the value; long into integer narrows, and int
   into double precision crosses to floats, which past 2^53 don't hold every integer), or a collation other than the
@@ -963,8 +967,8 @@ What the fixes decided:
   written). Any of them casts `'CodeFusion: the Select after Then can't read <table> as the write left it ...'` to an
   integer, which fails the statement (22P02) before its write commits. The check runs for every Then with a Select,
   whatever it reads: the row given back is the one found, which a cascade or a trigger may have changed or deleted,
-  so its table is checked as consistently as the others. It costs a few index lookups for the table written and each
-  of its partitions, and as many again for each table a delete can reach: it grows with how far the delete cascades,
+  so its table is checked as consistently as the others. It costs a few index lookups for the table written, the
+  tables read and their partitions, and as many again for each table a delete can reach: it grows with how far the delete cascades,
   not with the catalog's size ([then-guard-cost](benchmarks/2026-10-21-then-guard-cost.md) measures it). PlanTests
   compare with the contest's statements so checked, catalog reads included, and
   `TheCheckReadsTheCatalogByItsIndexes` pins that an index condition bounds each catalog read (with sequential scans
@@ -1016,6 +1020,15 @@ green on the C and the ICU database.
 | the cost was "a few lookups" | `docs/benchmarks/2026-10-21-then-guard-cost.md`; the paragraph above | unmeasured |
 | the index pin passed a whole index read in order | `TheCatalogPinTellsAWholeIndexReadApart`; `TheCheckReadsTheCatalogByItsIndexes` requires an Index Cond | the old pattern accepts pg_class's oid index read whole |
 | TopLevel and Atomic kept a quote-toggle scanner, and a split could cut inside a comment | `ACommentOrALiteralNeverHidesNorMakesAnOperator` (`a/**/AND/**/b`, a `--` comment with an apostrophe before an OR, `E'a\' b'`) | `a/**` and `**/b` |
+
+**Fifth review of the shapes.** Fixes only, each test red on the code before its fix, then green on the C and the
+ICU database.
+
+| Finding | Test | Red before |
+|---|---|---|
+| a table reached under a mid-level partition, or a table inheriting one, read by the Select passed | `TheCheckFollowsEveryKeyTheDeleteActsOn`: a key on a leaf of chain_c, itself a partition of chain_all; a key on a table inheriting chain_c (a key on chain_all, the topmost, as a control) | both ran the statement |
+| the found table and the table written as one partition tree, two entities, passed | `ARowFoundIsCheckedThroughAnotherEntityOfItsPartitionTree` (found in parted, deleted through parted_1, and the other way round) | both ran and deleted the row given back |
+| each inserted column's types were a name cast per execution | `TheThenGuardIsOneTextTheGeneratorKeeps` and the SQL pins (`'{int4,int8}'::regtype[]` per column); the cost in [then-guard-cost](benchmarks/2026-10-21-then-guard-cost.md) | the pins |
 
 All five of the Conduit context's `Sql(...)` queries are LINQ now; the context has none left. The app's own copy
 (`ConduitDb.cs` in the contest submission) needs the same entities: `[Key]` on Follow's and Favorite's two columns,
