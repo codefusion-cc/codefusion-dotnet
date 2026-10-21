@@ -24,6 +24,7 @@ public class AppTests
     {
         var b = HttpApp.CreateBuilder([]);
         b.Options.EndPoint = new IPEndPoint(IPAddress.Loopback, 0);
+        TestTransport.Apply(b.Options);
         b.Errors.Log = null;
         return b;
     }

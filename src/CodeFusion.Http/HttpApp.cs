@@ -31,6 +31,7 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
     readonly Dictionary<Type, int> _perConnectionSlots;
     readonly Func<object>[] _perConnection;
     readonly Action[] _onStopping;
+    readonly Action<int>[] _batch;
     readonly Jwt? _jwt;
     readonly Router _router = new();
     HttpServer? _server;
@@ -47,6 +48,7 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
         int slot = 0;
         foreach (Type t in builder.PerConnection.Keys) _perConnectionSlots[t] = slot++;
         _onStopping = [.. builder.Stopping];
+        _batch = [.. builder.Batch];
         _jwt = builder.JwtPrototype;
         ArenaChunks = new BufferPool(4096, _options.MaxPooledBuffers);
     }
@@ -106,6 +108,7 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
         var server = new HttpServer(_options, Dispatch);
         server.HandlerDone = static x => (x.State as RequestContext)?.HandlerDone();
         server.ConnectionIdle = static x => (x.State as RequestContext)?.ConnectionIdle();
+        server.BatchActions = _batch;
         _server = server;
         server.Start();
     }
@@ -206,6 +209,7 @@ public sealed class HttpAppBuilder : IServiceRegistry
     internal readonly Dictionary<Type, object> Singletons = [];
     internal readonly Dictionary<Type, Func<object>> PerConnection = [];
     internal readonly List<Action> Stopping = [];
+    internal readonly List<Action<int>> Batch = [];
     internal Jwt? JwtPrototype;
     bool _built;
 
@@ -257,6 +261,14 @@ public sealed class HttpAppBuilder : IServiceRegistry
         ArgumentNullException.ThrowIfNull(onStopping);
         ThrowIfBuilt();
         Stopping.Add(onStopping);
+    }
+
+    /// <inheritdoc/>
+    public void OnEventLoopBatch(Action<int> onBatch)
+    {
+        ArgumentNullException.ThrowIfNull(onBatch);
+        ThrowIfBuilt();
+        Batch.Add(onBatch);
     }
 
     /// <summary>

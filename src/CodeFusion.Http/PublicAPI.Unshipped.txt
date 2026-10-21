@@ -445,3 +445,15 @@ static CodeFusion.Http.Reply<T>.implicit operator CodeFusion.Http.Reply<T>(CodeF
 static CodeFusion.Http.Reply<T>.implicit operator CodeFusion.Http.Reply<T>(CodeFusion.Http.Reply reply) -> CodeFusion.Http.Reply<T>
 virtual CodeFusion.Http.HttpHandler.Invoke(CodeFusion.Http.HttpExchange! exchange) -> System.Threading.Tasks.ValueTask
 virtual CodeFusion.Http.HttpRejectBody.Invoke(int status) -> System.ReadOnlySpan<byte>
+CodeFusion.Http.HttpServerOptions.EventLoops.get -> int
+CodeFusion.Http.HttpServerOptions.EventLoops.set -> void
+CodeFusion.Http.HttpServerOptions.Transport.get -> CodeFusion.Http.HttpTransport
+CodeFusion.Http.HttpServerOptions.Transport.set -> void
+CodeFusion.Http.HttpTransport
+CodeFusion.Http.HttpTransport.EventLoop = 1 -> CodeFusion.Http.HttpTransport
+CodeFusion.Http.HttpTransport.Sockets = 0 -> CodeFusion.Http.HttpTransport
+CodeFusion.Http.HttpServerOptions.OnEventLoopBatch.get -> System.Action<int>?
+CodeFusion.Http.HttpServerOptions.OnEventLoopBatch.set -> void
+CodeFusion.Http.HttpAppBuilder.OnEventLoopBatch(System.Action<int>! onBatch) -> void
+CodeFusion.Http.HttpServerOptions.ListenerPerLoop.get -> bool
+CodeFusion.Http.HttpServerOptions.ListenerPerLoop.set -> void
