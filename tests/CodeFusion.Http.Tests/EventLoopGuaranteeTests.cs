@@ -315,7 +315,15 @@ public sealed class EventLoopGuaranteeTests
             if (what == "http accept failing") stop = t!.Server.StopAsync(TimeSpan.FromSeconds(1));
         });
         t.Server.AcceptHook = _ => 24; // EMFILE, every time
-        using (Client c = await t.ConnectAsync()) { }
+        // the connection only makes the accept fail: the stop its report starts closes the listener, which can reset
+        // this handshake before it completes, so how the connect ends isn't what this test checks
+        try
+        {
+            using Client c = await t.ConnectAsync();
+        }
+        catch (System.Net.Sockets.SocketException e) when (e.SocketErrorCode is System.Net.Sockets.SocketError.ConnectionReset)
+        {
+        }
         await TestServer.Until(() => Volatile.Read(ref stop) is not null, 5000, () => "the accept never failed");
         await stop!.WaitAsync(TimeSpan.FromSeconds(5));
         await t.DisposeAsync(); // ServerChecks: no failed connection, every loop ended
