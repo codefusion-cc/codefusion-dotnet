@@ -25,6 +25,57 @@ public sealed class EventLoopBatchTests : IDisposable
     SqliteDataSource Open() => _db.Open(_db.Database(exclusive: true, batches: true));
 
     [Fact(Timeout = 30_000)]
+    public async Task ABatchsCompletionsStayItsOwnWhileAnotherLoopBatches()
+    {
+        var s = Open();
+        using var one = new TestLoop(0, s);
+        using var two = new TestLoop(1, s);
+        using var completing = new ManualResetEventSlim();
+        using var resume = new ManualResetEventSlim();
+        using var beforeEnd = new ManualResetEventSlim();
+        var r = new ValueTask<DataResult>[3];
+        var y = new ValueTask<DataResult>[3];
+        // loop one ends its batch and, completing r0, waits: the connection is free, r1 and r2 not completed yet
+        var first = one.WakeUp(() =>
+        {
+            for (int i = 0; i < r.Length; i++) r[i] = Kv.Write(s, "r" + i, i);
+            var r0 = r[0].GetAwaiter();
+            r0.OnCompleted(() =>
+            {
+                completing.Set();
+                resume.Wait();
+            });
+        });
+        try
+        {
+            completing.Wait(TestContext.Current.CancellationToken);
+            // loop two batches twice meanwhile; its second batch holds y0..y2, uncommitted, until beforeEnd
+            ValueTask<DataResult> x = default;
+            await two.WakeUp(() => x = Kv.Write(s, "x", 1));
+            Assert.True((await x).IsOk);
+            var second = two.WakeUp(() =>
+            {
+                for (int i = 0; i < y.Length; i++) y[i] = Kv.Write(s, "y" + i, i);
+                beforeEnd.Wait();
+            });
+            await Task.Delay(100, TestContext.Current.CancellationToken);
+            resume.Set();
+            await first.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.False(Array.Exists(y, w => w.IsCompleted), "loop one completed loop two's writes before their COMMIT");
+            beforeEnd.Set();
+            await second;
+            foreach (var w in r) Assert.True((await w.AsTask().WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken)).IsOk);
+            foreach (var w in y) Assert.True((await w).IsOk);
+        }
+        finally
+        {
+            resume.Set();
+            beforeEnd.Set();
+        }
+        Assert.Equal(7, Kv.Count(s));
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task AWriteMadeAfterItsSourcesEndRanEndsInTheSameWakeUp()
     {
         var a = Open();
@@ -271,12 +322,15 @@ public sealed class TestLoop : IDisposable
     readonly BlockingCollection<(Action Handlers, TaskCompletionSource Done)> _wakeUps = [];
     readonly Thread _thread;
 
-    /// <summary>A loop whose batch actions are <paramref name="sources"/>' ends, in that order.</summary>
-    public TestLoop(params SqliteDataSource[] sources)
+    /// <summary>Loop 0, whose batch actions are <paramref name="sources"/>' ends, in that order.</summary>
+    public TestLoop(params SqliteDataSource[] sources) : this(0, sources) { }
+
+    /// <summary>Loop <paramref name="index"/>, whose batch actions are <paramref name="sources"/>' ends, in that order.</summary>
+    public TestLoop(int index, params SqliteDataSource[] sources)
     {
         _thread = new Thread(() =>
         {
-            EventLoopThread.Enter(0);
+            EventLoopThread.Enter(index);
             foreach (var (handlers, done) in _wakeUps.GetConsumingEnumerable())
             {
                 try
@@ -286,7 +340,7 @@ public sealed class TestLoop : IDisposable
                     for (int round = 0; round < 8; round++)
                     {
                         _ = EventLoopThread.TakeBatchEndRequest();
-                        foreach (var source in sources) source.EndEventLoopBatch(0);
+                        foreach (var source in sources) source.EndEventLoopBatch(index);
                         if (!EventLoopThread.BatchEndRequested) break;
                     }
                     done.SetResult();

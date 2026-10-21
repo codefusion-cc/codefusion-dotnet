@@ -440,8 +440,12 @@ public sealed unsafe class SqliteWriter
 
     /// <summary>The thread whose wake-up holds the connection; 0 when none does.</summary>
     int _batchThread;
-    /// <summary>The batch's writes waiting to complete; the spare takes new ones while those complete.</summary>
-    SqliteJob?[] _batch = new SqliteJob?[64], _spare = new SqliteJob?[64];
+    /// <summary>The batch's writes waiting to complete, the connection's: the next batch, any loop's, writes here.</summary>
+    SqliteJob?[] _batch = new SqliteJob?[64];
+    /// <summary>The writes a loop's thread completes after its batch ended, copied out of <see cref="_batch"/> before the
+    /// connection goes: its own list, since another loop may take the connection and fill <see cref="_batch"/> while
+    /// these complete. Null while in use (a completion that ends a batch of its own takes a new one).</summary>
+    [ThreadStatic] static SqliteJob?[]? t_completing;
     int _batchCount;
     /// <summary>The batch's writes before this index are committed; those after it are in the open transaction.</summary>
     int _batchCommitted;
@@ -473,11 +477,7 @@ public sealed unsafe class SqliteWriter
             EventLoopThread.RequestBatchEnd();
         }
         job.Queued();
-        if (_batchCount == _batch.Length)
-        {
-            Array.Resize(ref _batch, _batch.Length * 2);
-            Array.Resize(ref _spare, _batch.Length);
-        }
+        if (_batchCount == _batch.Length) Array.Resize(ref _batch, _batch.Length * 2);
         _batch[_batchCount++] = job;
         if (!_batchOpen)
         {
@@ -552,14 +552,22 @@ public sealed unsafe class SqliteWriter
         while (Volatile.Read(ref _batchThread) == me)
         {
             CommitBatch();
-            // the batch's jobs, and a fresh list for any batch their completions open
-            var jobs = _batch;
+            // the batch's jobs into this thread's list, before the connection, and with it _batch, is anyone's
             int n = _batchCount;
-            _batch = _spare;
-            _spare = jobs;
+            var jobs = t_completing is { } mine && mine.Length >= n ? mine : new SqliteJob?[Math.Max(n, 64)];
+            t_completing = null;
+            Array.Copy(_batch, jobs, n);
+            Array.Clear(_batch, 0, n);
             _batchCount = _batchCommitted = 0;
             ReleaseBatch();
-            Complete(jobs, n, null, inline: true);
+            try
+            {
+                Complete(jobs, n, null, inline: true);
+            }
+            finally
+            {
+                t_completing = jobs;
+            }
             if (Volatile.Read(ref _batchThread) == 0) AfterGroup(); // no new batch holds the connection: checkpoint now
         }
     }
