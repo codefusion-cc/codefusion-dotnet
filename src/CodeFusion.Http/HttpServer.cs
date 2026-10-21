@@ -413,13 +413,15 @@ public sealed class HttpServer : IAsyncDisposable
         }
     }
 
-    /// <summary>A loop whose wait failed: nothing will wake its connections again, so they are closed.</summary>
-    internal void AbortConnectionsOf(EventLoop loop)
+    /// <summary>A loop whose wait failed: nothing will wake its connections again, so they are closed, with a FIN as
+    /// a timeout closes them: one it has just accepted may not have reached its client as connected yet, and a reset
+    /// would fail the client's connect itself.</summary>
+    internal void CloseConnectionsOf(EventLoop loop)
     {
         HttpExchange?[] left;
         lock (_lock) left = _slots[.._slotCount];
         foreach (HttpExchange? c in left)
-            if (c is not null && c.Loop == loop) c.Abort();
+            if (c is not null && c.Loop == loop) c.Close();
     }
 
     internal void Release(HttpExchange c)

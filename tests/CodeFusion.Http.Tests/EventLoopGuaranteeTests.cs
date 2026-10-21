@@ -321,7 +321,7 @@ public sealed class EventLoopGuaranteeTests
         {
             using Client c = await t.ConnectAsync();
         }
-        catch (System.Net.Sockets.SocketException e) when (e.SocketErrorCode is System.Net.Sockets.SocketError.ConnectionReset or System.Net.Sockets.SocketError.ConnectionRefused)
+        catch (System.Net.Sockets.SocketException e) when (e.SocketErrorCode is System.Net.Sockets.SocketError.ConnectionReset)
         {
         }
         await TestServer.Until(() => Volatile.Read(ref stop) is not null, 5000, () => "the accept never failed");
@@ -396,6 +396,26 @@ public sealed class EventLoopGuaranteeTests
             Assert.Equal($"/{i}", await Ask(c, $"/{i}"));
         }
         lock (reports) Assert.Equal(["http event loop failed"], reports.Distinct().ToArray());
+    }
+
+    // A failed loop closes its connections with a FIN, as a timeout does, not a reset: a reset can reach a connection
+    // it has just accepted before the client's own connect has finished, and fail that connect.
+    [Fact(Timeout = 20_000)]
+    public async Task AFailedLoopClosesItsConnectionsWithAFin()
+    {
+        Assert.SkipUnless(AllocationTests.Debugger(), "Debug builds can make a loop's wait fail");
+        await using var t = Start(Path, o =>
+        {
+            o.EventLoops = 1;
+            o.OnError = null;
+        });
+        using Client idle = await t.ConnectAsync();
+        Assert.Equal("/a", await Ask(idle, "/a"));
+        t.Server.LoopWaitHook = _ => true;
+        using (Client waker = await t.ConnectAsync()) { } // wakes the loop, whose next wait fails
+        await TestServer.Until(() => t.Server.EventLoopsRunning == 0, 5000, () => $"{t.Server.EventLoopsRunning} loops running");
+        // a FIN reads as the end; a reset throws
+        Assert.Equal(0, await idle.Socket.ReceiveAsync(new byte[1], System.Net.Sockets.SocketFlags.None));
     }
 
     // With every loop failed, new connections wait on their sockets as Sockets' do.
