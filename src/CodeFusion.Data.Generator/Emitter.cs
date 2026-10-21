@@ -17,6 +17,10 @@ sealed class Emitter
     readonly StringBuilder _nameFields = new();
     readonly INamedTypeSymbol _context;
     readonly string _provider, _statement;
+    /// <summary>The provider declares Alone itself. C# calls a static virtual member's default only through a type
+    /// parameter, never on the provider type, so for a provider without it the statement stays as it is: which is
+    /// what the default does.</summary>
+    readonly bool _alone;
     int _indent;
 
     public Emitter(INamedTypeSymbol context, INamedTypeSymbol provider, ITypeSymbol statement)
@@ -24,7 +28,11 @@ sealed class Emitter
         _context = context;
         _provider = provider.ToDisplayString(Full);
         _statement = statement.ToDisplayString(Full);
+        _alone = Declares(provider, "Alone");
     }
+
+    static bool Declares(INamedTypeSymbol provider, string name) =>
+        provider.GetMembers(name).Any(m => m is IMethodSymbol { IsStatic: true, DeclaredAccessibility: Accessibility.Public });
 
     public static string Type(ITypeSymbol t) => t.ToDisplayString(Full);
 
@@ -115,7 +123,7 @@ sealed class Emitter
             var s = q.Statements[i];
             var types = s.Params.Select(p => "global::CodeFusion.Data.DataType." + DataType(p.Kind));
             string made = $"{_provider}.Statement({sqlOf}{s.Name}{string.Concat(types.Select(t => ", " + t))})";
-            Line($"static readonly {_statement} {id}S{i} = {(q.RunsAlone ? $"{_provider}.Alone({made})" : made)};");
+            Line($"static readonly {_statement} {id}S{i} = {(q.RunsAlone && _alone ? $"{_provider}.Alone({made})" : made)};");
         }
 
         // the interceptor: each value the statements bind is computed first, so one that throws (a method of the

@@ -51,10 +51,10 @@ public sealed class JsonListAttribute(string name) : Attribute
 }
 
 /// <summary>
-/// On a query method: its commands run alone, on a connection of their own and each in a transaction of its own,
+/// On a query method: its commands run alone, on connections of their own and each in a transaction of its own,
 /// never in a group commit or a read group. For a query slow enough to hold up the others it would be grouped with
 /// (a sign-up whose unique checks wait on locks, a report), at the cost of a round trip and a commit each. A provider
-/// that can't run them apart runs them as any other.
+/// that can't run them apart (one that doesn't declare IDataProvider.Alone) runs them as any other.
 /// </summary>
 [AttributeUsage(AttributeTargets.Method, Inherited = false)]
 public sealed class RunsAloneAttribute : Attribute;
