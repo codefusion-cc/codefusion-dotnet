@@ -867,6 +867,39 @@ What it decided:
   read no index the contest's doesn't and fewer rows: the article from the CTE, where the contest's reads it again by
   its key, and Unfavorite's delete by the whole primary key.
 
+**The newest rows per group** (`Translator.Groups`, `GroupPageTests`, `ShapeGeneratorTests.APageOfEachRowsChildren*`).
+`Follows.Where(f => f.FollowerId == viewer).SelectMany(f => f.Followee.Articles, (f, a) => a).OrderByDescending(a =>
+a.Id).Page(page, countUpTo: 1000)` is the page over a source row's children, each group from a lateral join. Red
+before: such a page refused (`operators before Page other than Where and one OrderBy`).
+
+| Test | What it pins |
+|---|---|
+| `EachGroupsNewestAsFarAsThePageReaches` | two groups of 5 and 3 rows and an empty one: pages at offsets 0, 2, 6 and past the end; the count capped at 5; maxLimit; an offset next to long.MaxValue; negative limit and offset; no source rows |
+| `ATakeOfTheChildrenIsEachGroupsOwnCap` | each group's newest one only, counted so (`LIMIT 1`, and `LEAST(1, $2)` for the page) |
+| `AWhereOnTheChildrenAndAnAscendingOrder` | a Where after SelectMany inside each group, ascending keys |
+| `APageOfEachRowsChildrenSqlWouldReadOtherwiseIsRefused` (6 variants), `ADialectWithoutWhatAShapeNeedsRefusesIt` | the refusals below |
+
+What it decided:
+
+- The page's rows are among each group's first offset + rows in the page's order (each is one of its group's first
+  that many), so each group's lateral takes that many (`PageEnd`: offset plus at most maxLimit rows, long.MaxValue
+  past what a long holds, computed in C# where the query is called), and the page is taken of their union as any
+  page is: ids first, then the rows of those ids. The count is of every child, capped, with no order.
+- The navigation the children are reached through for its key only (`f.Followee`, whose key is `f.followee_id`) is
+  joined for nothing and taken out (`Prune`): it is required and joined on its key, so it neither drops nor adds a
+  row. Only in this shape, where the join would otherwise stay in the lateral's source for every group.
+- Refused: a result other than the child itself (the page's Select makes the view), an order by anything but the
+  child's key, a Take of the children in another order than the page's (it would take other rows than the page's
+  first), a Where after SelectMany of children taken with Take, a Select inside the children, operators before
+  SelectMany other than Where, and a dialect without LATERAL (`SqlDialectAttribute.Lateral`, false for SQLite).
+- The Conduit context's feed is this LINQ, with `following` true as the feed found the author through the follow
+  (`ArticleListView.InFeed`). Its plan is the contest's (`PlanTests` `Feed`), the count's join and the semi-join of
+  the contest's planned alike; `AllocationTests` reads it.
+
+All five of the Conduit context's `Sql(...)` queries are LINQ now; the context has none left. The app's own copy
+(`ConduitDb.cs` in the contest submission) needs the same entities: `[Key]` on Follow's and Favorite's two columns,
+and `User.Articles`.
+
 ### Release cost
 
 Release keeps: a few fields (a bool per connection and per pooled box; a byte, an int and a reference per pooled job;

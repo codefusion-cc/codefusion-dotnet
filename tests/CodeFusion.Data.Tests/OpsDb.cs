@@ -485,6 +485,24 @@ public sealed partial class OpsDb : DataContext<Postgres>
         People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { Id = id, OwnerId = p.Id, Name = p.Name, Legs = 3 }))
             .Select(p => new Tally(p.Id, p.Pets.Count(x => x.Legs > 2), p.Pets.Any(x => x.Name == p.Name)));
 
+    // ---------- pages of each row's children ----------
+
+    /// <summary>The pets of the people with a label, newest first, as the feed has the articles of the authors followed:
+    /// a person's pets reached through the link row's one-navigation.</summary>
+    public Page<Owned> PetsOfLabel(int label, Paging page) =>
+        PersonLabels.Where(pl => pl.LabelId == label).SelectMany(pl => pl.Person.Pets, (pl, x) => x).OrderByDescending(x => x.Id)
+            .Page(page, countUpTo: 5, maxLimit: 3).Select(x => new Owned(x.Name, Name.Of(x.Owner)));
+
+    /// <summary>Each labelled person's newest pet only, and the count probed.</summary>
+    public Page<Owned> NewestPetOfLabel(int label, Paging page) =>
+        PersonLabels.Where(pl => pl.LabelId == label).SelectMany(pl => pl.Person.Pets.OrderByDescending(x => x.Id).Take(1), (pl, x) => x).OrderByDescending(x => x.Id)
+            .Page(page, countUpTo: 5, PageCount.Probe).Select(x => new Owned(x.Name, Name.Of(x.Owner)));
+
+    /// <summary>A team's members of an age, oldest key first: a Where on the children, ascending.</summary>
+    public Page<Name> MembersOf(long team, int age, Paging page) =>
+        Teams.Where(t => t.Id == team).SelectMany(t => t.Members, (t, m) => m).Where(m => m.Age >= age).OrderBy(m => m.Id)
+            .Page(page, countUpTo: 5).Select(m => Name.Of(m));
+
     // ---------- SQL ----------
 
     public Many<Name> Raw(int min, Utf8 name) =>

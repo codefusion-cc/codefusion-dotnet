@@ -21,6 +21,9 @@ public sealed class User
     /// <summary>The follows naming this user as the one followed.</summary>
     [InverseProperty(nameof(Follow.Followee))]
     public Many<Follow> Followers { get; init; }
+
+    /// <summary>The articles this user wrote.</summary>
+    public Many<Article> Articles { get; init; }
 }
 
 public sealed class Follow

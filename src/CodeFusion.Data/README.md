@@ -68,6 +68,24 @@ write: `ProfileView.Of(u, viewer)` after the follow is followed, and an article'
 is the snapshot's count and one if the snapshot held no favorite of that key (written now, or by a concurrent request
 the snapshot missed). After an insert with `OrIgnore` that needs the table's key, `[Key]` on each of its columns.
 
+A page of each row's children is `SelectMany` of a navigation, the child itself as its result, before one OrderBy of
+the child's key and the page. Each source row's children come from a lateral join that takes, in the page's order,
+only as many as the page reaches (its offset and its rows), so an index of the children by parent serves each group:
+
+```csharp
+public Page<ArticleListView> Feed(long viewer, Paging page) =>
+    Follows.Where(f => f.FollowerId == viewer)
+        .SelectMany(f => f.Followee.Articles, (f, a) => a)
+        .OrderByDescending(a => a.Id)
+        .Page(page, countUpTo: 1000)
+        .Select(a => ArticleListView.InFeed(a, viewer));
+// ... FROM follows f2 CROSS JOIN LATERAL (SELECT a2.id AS id FROM articles a2 WHERE a2.author_id = f2.followee_id
+//   ORDER BY a2.id DESC LIMIT $2) x2 WHERE f2.follower_id = $1 ORDER BY x2.id DESC LIMIT 100 OFFSET $3 ...
+```
+
+A `Take` of the children (`f.Followee.Articles.OrderByDescending(a => a.Id).Take(3)`) is each group's own cap, and
+the count counts only those.
+
 Entities follow EF's conventions (snake_case names, `AuthorId` with `Author`, `Many<T>` for the other side, and EF's
 attributes) and are never built at run time. Views are `record struct`s of `Utf8`, `Utf8?`, `Timestamp`,
 `RawJson`, numbers, bools and nested views, written as JSON by CodeFusion.Core's rules.

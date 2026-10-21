@@ -139,7 +139,7 @@ public sealed class ShapeGeneratorTests
 
     /// <summary>A provider whose dialect lacks what the shapes need, as SQLite's will.</summary>
     const string Lite = """
-        [SqlDialect("lite", WritableCtes = false, RegexReplace = "")]
+        [SqlDialect("lite", WritableCtes = false, Lateral = false, RegexReplace = "")]
         public readonly struct Lite : IDataProvider<Lite, PgStatement, PgCommand>
         {
             public static PgStatement Statement(string sql, params ReadOnlySpan<DataType> parameters) => throw null!;
@@ -154,6 +154,7 @@ public sealed class ShapeGeneratorTests
             public Table<Pet> Pets => Table<Pet>();
             public Write<Name> Then(Utf8 name) => People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { OwnerId = p.Id, Name = name })).Select(p => new Name(p.Id, p.Name));
             public Many<Name> Matches() => People.Select(p => new Name(p.Id, p.Name.ReplaceMatches("a+", "b"))).Many();
+            public Page<Name> Groups(Paging page) => People.SelectMany(p => p.Pets, (p, x) => x).OrderByDescending(x => x.Id).Page(page, 10).Select(x => new Name(x.Id, x.Name));
         }
         """;
 
@@ -162,9 +163,10 @@ public sealed class ShapeGeneratorTests
     {
         var r = Run(Entities + Lite);
         var errors = r.Generator.Where(d => d.Id == "CFDATA001").Select(Message).ToList();
-        Assert.Equal(2, errors.Count);
+        Assert.Equal(3, errors.Count);
         Assert.Contains(errors, m => m.Contains("Then in lite, which has no CTE that writes", System.StringComparison.Ordinal));
         Assert.Contains(errors, m => m.Contains("ReplaceMatches in lite", System.StringComparison.Ordinal));
+        Assert.Contains(errors, m => m.Contains("a page of each row's children in lite, which has no LATERAL join", System.StringComparison.Ordinal));
     }
 
     [Theory]
@@ -228,5 +230,46 @@ public sealed class ShapeGeneratorTests
         Assert.Equal(2, errors.Count);
         Assert.Contains(errors, m => m.Contains("Then from the rows a query found inside a unit", System.StringComparison.Ordinal));
         Assert.Contains(errors, m => m.Contains("Then without a Select in a method that returns rows", System.StringComparison.Ordinal));
+    }
+
+    // ---------- a page of each row's children ----------
+
+    [Fact]
+    public void APageOfEachRowsChildrenTakesEachGroupsFirstInALateralJoin()
+    {
+        string source = Context("""
+                public Page<Name> Newest(int age, Paging page) =>
+                    People.Where(p => p.Age > age).SelectMany(p => p.Pets, (p, x) => x).OrderByDescending(x => x.Id).Page(page, 10).Select(x => new Name(x.Id, x.Owner.Name));
+            """);
+        var r = Run(source);
+        Clean(r);
+        string sql = r.Sql("Newest");
+        // the page's ids: each person's newest pets, as many as the page reaches (offset and rows, computed in C#)
+        Assert.Contains("SELECT x2.id AS id FROM people p5 CROSS JOIN LATERAL (SELECT p6.id AS id FROM pets p6 WHERE p6.owner_id = p5.id ORDER BY p6.id DESC LIMIT $2) x2 " +
+            "WHERE p5.age > $1 ORDER BY x2.id DESC LIMIT 100 OFFSET $3", sql, System.StringComparison.Ordinal);
+        // the count: every child, capped, with no order
+        Assert.Contains("SELECT count(*) AS n FROM (SELECT 1 FROM people p3 CROSS JOIN LATERAL (SELECT p4.id AS id FROM pets p4 WHERE p4.owner_id = p3.id) x WHERE p3.age > $1 LIMIT 10) s", sql, System.StringComparison.Ordinal);
+        Assert.Contains("> global::System.Int64.MaxValue - global::System.Math.Min(", r.Generated, System.StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("""People.SelectMany(p => p.Pets, (p, x) => p).OrderByDescending(p => p.Id)""", "(p, x) => p", "isn't the child itself")]
+    [InlineData("""People.SelectMany(p => p.Pets, (p, x) => x).OrderByDescending(x => x.OwnerId)""", "x => x.OwnerId", "ordered by something other than their key")]
+    [InlineData("""People.SelectMany(p => p.Pets.OrderBy(x => x.Name).Take(2), (p, x) => x).OrderByDescending(x => x.Id)""",
+        "People.SelectMany(p => p.Pets.OrderBy(x => x.Name).Take(2), (p, x) => x)", "in an order other than the page's")]
+    [InlineData("""People.SelectMany(p => p.Pets.OrderByDescending(x => x.Id).Take(2), (p, x) => x).Where(x => x.Name != "a"u8).OrderByDescending(x => x.Id)""",
+        "People.SelectMany(p => p.Pets.OrderByDescending(x => x.Id).Take(2), (p, x) => x).Where(x => x.Name != \"a\"u8)", "Where after SelectMany of children taken with Take")]
+    [InlineData("""People.SelectMany(p => p.Pets.Select(x => x), (p, x) => x).OrderByDescending(x => x.Id)""",
+        "People.SelectMany(p => p.Pets.Select(x => x), (p, x) => x)", "a Select inside SelectMany's children")]
+    [InlineData("""People.OrderBy(p => p.Id).SelectMany(p => p.Pets, (p, x) => x).OrderByDescending(x => x.Id)""",
+        "People.OrderBy(p => p.Id).SelectMany(p => p.Pets, (p, x) => x)", "operators before SelectMany other than Where")]
+    public void APageOfEachRowsChildrenSqlWouldReadOtherwiseIsRefused(string rows, string at, string why)
+    {
+        string source = Context($$"""
+                public Page<Name> Q(Paging page) => {{rows}}.Page(page, 10).Select(x => new Name(x.Id, x.Name));
+            """);
+        var d = Single(Run(source), "CFDATA001");
+        Assert.Equal(at, At(d, source));
+        Assert.Contains(why, Message(d), System.StringComparison.Ordinal);
     }
 }

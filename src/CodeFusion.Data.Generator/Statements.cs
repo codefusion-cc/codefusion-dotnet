@@ -485,26 +485,40 @@ sealed partial class Translator
         var p = steps[page];
         var at = p.Call.Syntax.GetLocation();
         Expect(page == steps.Count - 2 && steps[page + 1].Name == "Select", at, "a page that doesn't end in .Page(...).Select(...)");
-        var orders = steps.Take(page).Where(s => s.Name.StartsWith("Order", StringComparison.Ordinal) || s.Name.StartsWith("ThenBy", StringComparison.Ordinal)).ToList();
+        static bool IsOrder(Step s) => s.Name.StartsWith("Order", StringComparison.Ordinal) || s.Name.StartsWith("ThenBy", StringComparison.Ordinal);
+        // the newest rows per group: each source row's children (SelectMany), a page of all of them
+        int sm = steps.FindIndex(0, page, s => s.Name == "SelectMany");
+        var before = steps.Take(sm >= 0 ? sm : page).ToList();
+        var after = sm >= 0 ? steps.Skip(sm + 1).Take(page - sm - 1).ToList() : before;
+        var orders = after.Where(IsOrder).ToList();
         Expect(orders.Count == 1, at, "a page that isn't ordered by exactly one key (the column that identifies its rows)");
-        var wheres = steps.Take(page).Where(s => s.Name == "Where").ToList();
-        Expect(wheres.Count + orders.Count == page, at, "operators before Page other than Where and one OrderBy");
+        var wheres = before.Where(s => s.Name == "Where").ToList();
+        var childWheres = sm >= 0 ? after.Where(s => s.Name == "Where").ToList() : new List<Step>();
+        if (sm >= 0)
+        {
+            Expect(wheres.Count == before.Count, steps[sm].Call.Syntax.GetLocation(), "operators before SelectMany other than Where");
+            Expect(childWheres.Count + 1 == after.Count, at, "operators between SelectMany and Page other than Where and one OrderBy");
+            Expect(D.Lateral, at, $"a page of each row's children in {D.Name}, which has no LATERAL join");
+        }
+        else Expect(wheres.Count + orders.Count == page, at, "operators before Page other than Where and one OrderBy");
         bool desc = orders[0].Name == "OrderByDescending";
         string dir = desc ? " DESC" : "";
 
-        // the key: a column of the source that is its own key or a foreign key to the row the page shows
+        // the key: a column of the row that is its own key or a foreign key to the row the page shows
         var keyLambda = orders[0].Lambda(0);
+        var rows = sm >= 0 ? Entity(keyLambda.Symbol.Parameters[0].Type, at) : t.Entity;
         var keyBody = Body(keyLambda.Body, keyLambda.Syntax.GetLocation());
         keyBody = Unwrap(keyBody is IConversionOperation kc ? kc.Operand : keyBody);
-        Expect(keyBody is IPropertyReferenceOperation { Instance: IParameterReferenceOperation } kp && t.Entity.Columns.ContainsKey(kp.Property.Name),
+        Expect(keyBody is IPropertyReferenceOperation { Instance: IParameterReferenceOperation } kp && rows.Columns.ContainsKey(kp.Property.Name),
             keyLambda.Syntax.GetLocation(), "a page key that isn't a column of the row (s => s.Id)");
-        var keyColumn = t.Entity.Columns[((IPropertyReferenceOperation)keyBody).Property.Name];
+        var keyColumn = rows.Columns[((IPropertyReferenceOperation)keyBody).Property.Name];
         EntityInfo shown;
         string? nav = null;
-        if (Known.Same(keyColumn.Property, t.Entity.Key?.Property)) shown = t.Entity;
+        if (Known.Same(keyColumn.Property, rows.Key?.Property)) shown = rows;
         else
         {
-            var one = t.Entity.Ones.Values.FirstOrDefault(o => Known.Same(o.ForeignKey.Property, keyColumn.Property))
+            if (sm >= 0) throw new Refused(keyLambda.Syntax.GetLocation(), "a page of each row's children ordered by something other than their key");
+            var one = rows.Ones.Values.FirstOrDefault(o => Known.Same(o.ForeignKey.Property, keyColumn.Property))
                 ?? throw new Refused(keyLambda.Syntax.GetLocation(), "a page key that is neither the row's key nor a foreign key to the row the page shows");
             shown = Entity(one.Target, at);
             nav = one.Property.Name;
@@ -529,11 +543,15 @@ sealed partial class Translator
         string cte = Aliases.Take("c"), lateral = Aliases.Take("p"), inner = Aliases.Take("p"), b = Aliases.Take("b");
         string name = keyLambda.Symbol.Parameters[0].Name;
 
-        Select Filtered(out Row row)
+        // the rows the page is of, and their key's SQL there; a page's own rows (forPage) are as many of each group's
+        // children as the page can show, offset and all
+        Select Filtered(bool forPage, out string key)
         {
+            if (sm >= 0) return Groups(t, wheres, steps[sm], childWheres, keyColumn, desc, forPage ? PageEnd(offset, limit, maxLimit) : null, out key);
             var s = new Select();
-            row = FromTable(s, t.Entity, name);
+            var row = FromTable(s, t.Entity, name);
             foreach (var w in wheres) s.Where.Add(Condition(Apply(w.Lambda(0), w.Env, new RowValue(row)), w.Call.Syntax.GetLocation()));
+            key = Column(row, keyColumn, at);
             return s;
         }
 
@@ -541,25 +559,26 @@ sealed partial class Translator
         string count;
         if (probe)
         {
-            var exists = Filtered(out var er);
-            exists.OrderBy.Add((Column(er, keyColumn, at), false));
+            var exists = Filtered(false, out var ek);
+            // in the key's order an index finds the cap's row; over several groups' children, no order does
+            if (sm < 0) exists.OrderBy.Add((ek, false));
             exists.Limit = "1";
             exists.Offset = Names.Number(cap - 1);
-            var all = Filtered(out _);
+            var all = Filtered(false, out _);
             all.Columns.Add(("count(*)", null));
             count = $"SELECT CASE WHEN EXISTS ({exists.Render(D)}) THEN {Dialect.Format(D.BigIntLiteral, Names.Number(cap))} ELSE ({all.Render(D)}) END AS n";
         }
         else
         {
-            var limited = Filtered(out _);
+            var limited = Filtered(false, out _);
             limited.Limit = Names.Number(cap);
             count = $"SELECT count(*) AS n FROM ({limited.Render(D)}) {Aliases.Take("s")}";
         }
 
         // the page's keys, picked before anything is filled in
-        var ids = Filtered(out var ir);
-        ids.Columns.Add((Column(ir, keyColumn, at), "id"));
-        ids.OrderBy.Add((Column(ir, keyColumn, at), desc));
+        var ids = Filtered(true, out var ik);
+        ids.Columns.Add((ik, "id"));
+        ids.OrderBy.Add((ik, desc));
         ids.Limit = Names.Number(maxLimit); // a constant: the generic plan expects the page's real size
         ids.Offset = Operand(offset, at);
 

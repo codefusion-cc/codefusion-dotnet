@@ -22,7 +22,7 @@ sealed class Dialect
     public string LowerAscii = "lower({0} COLLATE \"C\")", UpperAscii = "upper({0} COLLATE \"C\")";
     public string Trim = "trim(both {1} from {0})", TrimStart = "trim(leading {1} from {0})", TrimEnd = "trim(trailing {1} from {0})";
     public string Replace = "replace({0}, {1}, {2})", RegexReplace = "regexp_replace({0}, {1}, {2}, 'g')";
-    public bool SelectsConditions = true, ReturningAfter = true, WritableCtes = true;
+    public bool SelectsConditions = true, ReturningAfter = true, WritableCtes = true, Lateral = true;
     public int InsertOrIgnore; // 0 ON CONFLICT DO NOTHING, 1 INSERT OR IGNORE, 2 none
 
     public static Dialect Of(INamedTypeSymbol provider, Known k)
@@ -58,6 +58,7 @@ sealed class Dialect
                     break;
                 case "SelectsConditions": d.SelectsConditions = (bool)v!; break;
                 case "WritableCtes": d.WritableCtes = (bool)v!; break;
+                case "Lateral": d.Lateral = (bool)v!; break;
                 case "BigIntLiteral": d.BigIntLiteral = (string)v!; break;
                 case "LockRows": d.LockRows = (string)v!; break;
                 case "LowerAscii": d.LowerAscii = (string)v!; break;

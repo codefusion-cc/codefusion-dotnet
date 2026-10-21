@@ -227,6 +227,8 @@ sealed class Row(EntityInfo entity, string? alias, Select? owner, RowMode mode =
     /// <summary>A row an inner join reached: its key is the foreign key it was joined on, which the hand-written
     /// statements correlate on (so Postgres evaluates subqueries at the same plan node).</summary>
     public string? KeyViaForeignKey;
+    /// <summary>The join that reached it, as written into its owner's select.</summary>
+    public string? JoinSql;
     /// <summary>Reached through a left join (here or before): every column may be NULL.</summary>
     public bool Optional;
     /// <summary>Through: the scalar subquery written for each column, so a column used twice is the same SQL.</summary>
@@ -674,9 +676,10 @@ sealed partial class Translator
         string alias = Aliases.ForTable(target.Table);
         // a nullable key, or a row a left join reached, may have no target: the join keeps the row either way
         bool optional = nav.ForeignKey.Kind.Nullable || row.Optional;
-        owner.Joins.Add($"{(optional ? "LEFT JOIN" : "JOIN")} {TableSql(target)} {alias} ON {alias}.{D.Quote(KeyOf(target, at).Name)} = {fk}");
+        string join = $"{(optional ? "LEFT JOIN" : "JOIN")} {TableSql(target)} {alias} ON {alias}.{D.Quote(KeyOf(target, at).Name)} = {fk}";
+        owner.Joins.Add(join);
         // equal under an inner join; a left join's NULL row would have a NULL key where the foreign key isn't
-        var r = new Row(target, alias, owner) { KeyViaForeignKey = optional ? null : fk, Optional = optional };
+        var r = new Row(target, alias, owner) { KeyViaForeignKey = optional ? null : fk, Optional = optional, JoinSql = join };
         row.Joins[nav.Property.Name] = r;
         return r;
     }

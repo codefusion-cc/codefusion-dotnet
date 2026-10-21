@@ -122,6 +122,10 @@ public sealed class SqlDialectAttribute : Attribute
     /// <summary>A bigint literal for a count's cap; {0} is the number: <c>{0}::bigint</c>.</summary>
     public string BigIntLiteral { get; init; } = "{0}::bigint";
 
+    /// <summary>Whether a subquery in FROM may refer to the rows before it (<c>CROSS JOIN LATERAL</c>). False (SQLite): a
+    /// page of the newest rows per group (<c>SelectMany</c> before <c>Page</c>) is refused.</summary>
+    public bool Lateral { get; init; } = true;
+
     /// <summary>Whether a CTE may write (<c>WITH w AS (INSERT ...) SELECT ...</c>), and a DELETE join other rows
     /// (<c>DELETE ... USING</c>). False (SQLite): a write from the rows a query found (<c>Query.Then</c>) is refused.</summary>
     public bool WritableCtes { get; init; } = true;

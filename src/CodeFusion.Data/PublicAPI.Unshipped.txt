@@ -253,6 +253,8 @@ CodeFusion.Data.SqlDialectAttribute.JsonArray.get -> string!
 CodeFusion.Data.SqlDialectAttribute.JsonArray.init -> void
 CodeFusion.Data.SqlDialectAttribute.LastInsertedKey.get -> string!
 CodeFusion.Data.SqlDialectAttribute.LastInsertedKey.init -> void
+CodeFusion.Data.SqlDialectAttribute.Lateral.get -> bool
+CodeFusion.Data.SqlDialectAttribute.Lateral.init -> void
 CodeFusion.Data.SqlDialectAttribute.ListRows.get -> string!
 CodeFusion.Data.SqlDialectAttribute.ListRows.init -> void
 CodeFusion.Data.SqlDialectAttribute.LockRows.get -> string!

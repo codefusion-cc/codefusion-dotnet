@@ -40,6 +40,9 @@ public readonly record struct ArticleListView(
         a.Favorites.Count(),
         viewer != 0 && a.Favorites.Any(f => f.UserId == viewer),
         ProfileView.Of(a.Author, viewer));
+
+    /// <summary>An article of the viewer's feed, whose author the viewer follows: the feed found it through the follow.</summary>
+    public static ArticleListView InFeed(Article a, long viewer) => Of(a, viewer) with { Author = new ProfileView(a.Author.Username, a.Author.Bio, a.Author.Image, true) };
 }
 
 [JsonEnvelope("comment")]

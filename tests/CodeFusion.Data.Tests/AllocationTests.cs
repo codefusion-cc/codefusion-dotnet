@@ -47,7 +47,7 @@ public sealed class AllocationTests(ConduitFixture fixture)
         for (int i = 0; i < requests; i++)
         {
             c.Next();
-            switch (i % 7)
+            switch (i % 8)
             {
                 case 0:
                     await c.Db.ArticleBySlug(Slug, 1).WriteAsync(c.Response).ConfigureAwait(false);
@@ -71,6 +71,11 @@ public sealed class AllocationTests(ConduitFixture fixture)
                     break;
                 case 5:
                     await c.Db.ArticlesByTag(Dragons, new Paging(10, 0), 0).WriteAsync(c.Response).ConfigureAwait(false);
+                    if (c.Response.Status != 200) bad++;
+                    break;
+                case 6:
+                    // the newest articles of the authors alice follows, each one's from a lateral join
+                    await c.Db.Feed(1, new Paging(20, 0)).WriteAsync(c.Response).ConfigureAwait(false);
                     if (c.Response.Status != 200) bad++;
                     break;
                 default:
