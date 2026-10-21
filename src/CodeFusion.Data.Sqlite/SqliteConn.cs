@@ -67,14 +67,15 @@ internal sealed unsafe class SqliteConn : IDisposable
     static int _initialized;
     static readonly Lock InitLock = new();
 
-    /// <summary>Once per process, before the first connection: SQLite's memory statistics off (a process-wide mutex on
-    /// every allocation otherwise), initialized, and its version checked.</summary>
+    /// <summary>Once per process, before the first connection: where the library comes from, SQLite's memory statistics
+    /// off (a process-wide mutex on every allocation otherwise), initialized, and its version checked.</summary>
     internal static void InitializeOnce()
     {
         if (Volatile.Read(ref _initialized) != 0) return;
         lock (InitLock)
         {
             if (_initialized != 0) return;
+            Sqlite3.UseAppDirectory();
             Sqlite3.DisableMemoryStatus();
             int rc = Sqlite3.Initialize();
             if (rc != Sqlite3.Ok) throw new SqliteException("sqlite3_initialize failed", rc);

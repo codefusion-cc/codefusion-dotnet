@@ -2,7 +2,8 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-// e_sqlite3 is the package's native asset, which the host finds through the app's deps.json; no library planted elsewhere is loaded.
+// e_sqlite3 is the package's native asset, which the host finds through the app's deps.json, or one the app ships in its
+// own directory (Sqlite3.UseAppDirectory); no library planted elsewhere is loaded.
 [assembly: DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
 
 namespace CodeFusion.Data.Sqlite;
@@ -16,6 +17,34 @@ namespace CodeFusion.Data.Sqlite;
 internal static unsafe partial class Sqlite3
 {
     const string Lib = "e_sqlite3";
+
+    /// <summary>The library's file name on this platform.</summary>
+    internal static string LibraryFileName =>
+        OperatingSystem.IsWindows() ? "e_sqlite3.dll" : OperatingSystem.IsMacOS() ? "libe_sqlite3.dylib" : "libe_sqlite3.so";
+
+    /// <summary>The library in <paramref name="directory"/>, loaded; 0 when it has none.</summary>
+    internal static nint LoadFrom(string directory)
+    {
+        string path = System.IO.Path.Combine(directory, LibraryFileName);
+        return System.IO.File.Exists(path) && NativeLibrary.TryLoad(path, out nint handle) ? handle : 0;
+    }
+
+    /// <summary>
+    /// Before the first call: e_sqlite3 from the app's own directory when the app ships it there (one that builds SQLite
+    /// itself, as a self-contained publish also puts the package's there), else from the package's native asset as the
+    /// search paths find it. Nothing outside those two.
+    /// </summary>
+    internal static void UseAppDirectory()
+    {
+        try
+        {
+            NativeLibrary.SetDllImportResolver(typeof(Sqlite3).Assembly, static (name, _, _) => name == Lib ? LoadFrom(AppContext.BaseDirectory) : 0);
+        }
+        catch (InvalidOperationException)
+        {
+            // the app set a resolver for this assembly itself: it decides
+        }
+    }
 
     // result codes
     public const int Ok = 0, Error = 1, Busy = 5, Locked = 6, NoMem = 7, ReadOnly = 8, Interrupt = 9, IoErr = 10, Corrupt = 11,
