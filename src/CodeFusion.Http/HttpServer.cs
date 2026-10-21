@@ -24,6 +24,18 @@ public sealed class HttpServer : IAsyncDisposable
     internal readonly HttpHandler Handler;
     internal readonly BufferPool RequestBuffers, ResponseBuffers;
 
+    /// <summary>Other pools the server's connections rent from on its loops (the app's arena chunks): each loop gets a
+    /// stack of its own in them too. Set before Start.</summary>
+    internal BufferPool[] LoopPools = [];
+
+    /// <summary>On loop <paramref name="loop"/>'s thread as it ends: its buffer stacks go back to the shards.</summary>
+    internal void DrainLoopPools(int loop)
+    {
+        RequestBuffers.DrainLoop(loop);
+        ResponseBuffers.DrainLoop(loop);
+        foreach (BufferPool pool in LoopPools) pool.DrainLoop(loop);
+    }
+
     /// <summary>Called on each exchange once its handler has completed (or failed), before the response is finished:
     /// the app flushes its JSON writer and resets the request's arena there.</summary>
     internal Action<HttpExchange>? HandlerDone;
@@ -195,6 +207,12 @@ public sealed class HttpServer : IAsyncDisposable
         // Linux event loops each listen on the port themselves (SO_REUSEPORT): the kernel spreads new connections
         // over them, and each loop accepts its own on its thread. Otherwise one listener and the runtime's accepts.
         bool own = Options.Transport == HttpTransport.EventLoop && Options.ListenerPerLoop && OperatingSystem.IsLinux();
+        if (Options.Transport == HttpTransport.EventLoop)
+        {
+            RequestBuffers.AttachLoops(this, Options.EventLoops);
+            ResponseBuffers.AttachLoops(this, Options.EventLoops);
+            foreach (BufferPool pool in LoopPools) pool.AttachLoops(this, Options.EventLoops);
+        }
         _batchReported = new int[BatchActions.Length + 1];
         var listeners = new Socket[own ? Options.EventLoops : 1];
         try
