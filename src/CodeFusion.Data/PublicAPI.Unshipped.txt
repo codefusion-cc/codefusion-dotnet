@@ -181,6 +181,7 @@ CodeFusion.Data.Query<T>.AsJson() -> CodeFusion.Data.One<CodeFusion.RawJson>
 CodeFusion.Data.Query<T>.Count() -> CodeFusion.Data.One<long>
 CodeFusion.Data.Query<T>.Delete() -> CodeFusion.Data.DeleteQuery<T>!
 CodeFusion.Data.Query<T>.DeleteIf(System.Func<T, bool>! condition) -> CodeFusion.Data.DeleteQuery<T>!
+CodeFusion.Data.Query<T>.Distinct() -> CodeFusion.Data.Query<T>!
 CodeFusion.Data.Query<T>.Many() -> CodeFusion.Data.Many<T>
 CodeFusion.Data.Query<T>.OrderBy<TKey>(System.Func<T, TKey>! key) -> CodeFusion.Data.OrderedQuery<T>!
 CodeFusion.Data.Query<T>.OrderByDescending<TKey>(System.Func<T, TKey>! key) -> CodeFusion.Data.OrderedQuery<T>!
@@ -249,6 +250,8 @@ CodeFusion.Data.SqlDialectAttribute.JsonArray.get -> string!
 CodeFusion.Data.SqlDialectAttribute.JsonArray.init -> void
 CodeFusion.Data.SqlDialectAttribute.LastInsertedKey.get -> string!
 CodeFusion.Data.SqlDialectAttribute.LastInsertedKey.init -> void
+CodeFusion.Data.SqlDialectAttribute.ListRows.get -> string!
+CodeFusion.Data.SqlDialectAttribute.ListRows.init -> void
 CodeFusion.Data.SqlDialectAttribute.LockRows.get -> string!
 CodeFusion.Data.SqlDialectAttribute.LockRows.init -> void
 CodeFusion.Data.SqlDialectAttribute.Limit.get -> string!
@@ -373,6 +376,7 @@ static CodeFusion.Data.RowJson.Timestamp<TRow>(System.Text.Json.Utf8JsonWriter! 
 static CodeFusion.Data.RowJson.TimestampValue<TRow>(System.Text.Json.Utf8JsonWriter! json, scoped in TRow row, int column) -> void
 static CodeFusion.Data.SqlFunctions.Now() -> CodeFusion.Timestamp
 static CodeFusion.Data.UpdateQuery<T>.implicit operator CodeFusion.Data.Write(CodeFusion.Data.UpdateQuery<T>! update) -> CodeFusion.Data.Write
+static CodeFusion.Data.Utf8ListOperators.AsRows(this CodeFusion.Utf8List list) -> CodeFusion.Data.Query<CodeFusion.Utf8>!
 static CodeFusion.Data.Utf8ListOperators.Contains(this CodeFusion.Utf8List list, CodeFusion.Utf8 text) -> bool
 static CodeFusion.Data.Utf8Operators.Concat(this CodeFusion.Utf8 text, long number) -> CodeFusion.Utf8
 static CodeFusion.Data.Utf8Operators.Concat(this CodeFusion.Utf8 text, System.ReadOnlySpan<byte> other) -> CodeFusion.Utf8

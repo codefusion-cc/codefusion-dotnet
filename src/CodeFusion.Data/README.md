@@ -42,6 +42,11 @@ public static Utf8 WithId(Utf8 title, long id) =>
     title.ReplaceMatches("[^A-Za-z0-9]+", "-").ToLowerAscii().Trim('-').Concat("-"u8).Concat(id);
 ```
 
+A list known when called is the rows of an insert through `AsRows()`, with Where, Distinct and one OrderBy before the
+Select: `Insert(Tags, names.AsRows().Distinct().OrderBy(n => n).Select(n => new Tag { Name = n })).OrIgnore()` is
+`INSERT INTO tags (name) SELECT DISTINCT n.v FROM unnest($1) n(v) ORDER BY n.v ON CONFLICT DO NOTHING`, alone or in
+an insert's unit (`ThenIf`).
+
 Entities follow EF's conventions (snake_case names, `AuthorId` with `Author`, `Many<T>` for the other side, and EF's
 attributes) and are never built at run time. Views are `record struct`s of `Utf8`, `Utf8?`, `Timestamp`,
 `RawJson`, numbers, bools and nested views, written as JSON by CodeFusion.Core's rules.

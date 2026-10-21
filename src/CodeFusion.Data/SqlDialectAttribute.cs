@@ -75,6 +75,10 @@ public sealed class SqlDialectAttribute : Attribute
     /// <summary>Whether {0} is one of the elements of the array parameter {1}: <c>{0} = ANY({1})</c>.</summary>
     public string InArray { get; init; } = "{0} = ANY({1})";
 
+    /// <summary>The elements of an array parameter as rows of one column named v, for an insert of a list's texts; {0}
+    /// is the parameter, {1} the rows' alias: <c>unnest({0}) {1}(v)</c>; SQLite <c>(SELECT value AS v FROM json_each({0})) {1}</c>.</summary>
+    public string ListRows { get; init; } = "unnest({0}) {1}(v)";
+
     /// <summary>Equality that holds for two NULLs: <c>{0} IS NOT DISTINCT FROM {1}</c>; SQLite <c>{0} IS {1}</c>.</summary>
     public string NullSafeEqual { get; init; } = "{0} IS NOT DISTINCT FROM {1}";
 

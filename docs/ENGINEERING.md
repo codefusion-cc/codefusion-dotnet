@@ -766,6 +766,32 @@ What it decided:
 - The Conduit context's slug rule is LINQ now (`Slugs.WithId`); its insert has the contest's plan (`PlanTests`
   `CreateArticle`), and `AllocationTests` creates articles with it.
 
+**An insert of a list's texts** (`Utf8ListOperators.AsRows`, `Query.Distinct`, `ListInsertTests`,
+`ShapeGeneratorTests.AListsTexts*`). `Insert(Tags, names.AsRows().Distinct().OrderBy(n => n).Select(n => new Tag
+{ Name = n })).OrIgnore()` is `INSERT INTO tags (name) SELECT DISTINCT n.v FROM unnest($1) n(v) ORDER BY n.v ON
+CONFLICT DO NOTHING`. Red before: every query using `AsRows` refused (`'names' as a query`).
+
+| Test | What it pins |
+|---|---|
+| `EachNewTextOnceInSortedOrderAndTakenOnesSkipped` | a name twice inserted once, a taken one skipped (its row unchanged), keys in the names' order, an empty list, 3,000 `ž` and an emoji |
+| `WithoutDistinctATextTwiceIsAConflictAndNothingIsWritten` | 409 and no row; Where and an order by an expression |
+| `InAUnitTheTextsUseTheInsertedRow` | a ThenIf's insert using the inserted row's key; no members, no statement |
+| `ConcurrentInsertsOfTheSameNewTextsAllSucceedAndInsertEachOnce` | 8 callers on two writer connections, half with the list reversed, 20 rounds: all Ok, each name once |
+| `AnInsertOfAListSqlWouldReadOtherwiseIsRefused`, `AListsRowsOnTheirOwnAndDistinctInAReadAreRefused` | the variants below |
+
+What it decided:
+
+- LINQ's Distinct is of the texts, SQL's of the columns the Select makes: the same only when a column is the text
+  itself, so a Select that sets none is refused (`Name = n.ToLowerAscii()` could make two rows one), and so is an
+  order by anything but the text (SQL orders distinct rows by what they hold).
+- Distinct is taken only there; in a read it is refused (`Distinct in a read`), as are a list's rows on their own.
+- The rows are a set-returning function in FROM (`SqlDialectAttribute.ListRows`, `unnest({0}) {1}(v)`), where Where
+  can filter them; the contest's statement has it in the select list. The plans differ in that node only (a
+  Function Scan for a ProjectSet over a Result, the same one pass over the array): `PlanTests` compares
+  `CreateArticle_2` with the contest's statement so rewritten.
+- The Conduit context's tag insert is this LINQ, inside `CreateArticle`'s unit; `AllocationTests` inserts tags that
+  are there already.
+
 ### Release cost
 
 Release keeps: a few fields (a bool per connection and per pooled box; a byte, an int and a reference per pooled job;

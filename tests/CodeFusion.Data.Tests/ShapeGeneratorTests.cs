@@ -83,4 +83,55 @@ public sealed class ShapeGeneratorTests
         Assert.Contains(why, Message(d), System.StringComparison.Ordinal);
         Assert.Contains("write this query with Sql<T>", Message(d), System.StringComparison.Ordinal);
     }
+
+    // ---------- an insert of a list's texts ----------
+
+    [Fact]
+    public void AListsTextsAreTheRowsOfAnInsert()
+    {
+        string source = Context("""
+                public Write AddNames(Utf8List names) => Insert(People, names.AsRows().Distinct().OrderBy(n => n).Select(n => new Person { Name = n })).OrIgnore();
+                public Write AddOthers(Utf8List names, int age) =>
+                    Insert(People, names.AsRows().Where(n => n != ""u8).OrderByDescending(n => n.ToUpperAscii()).Select(n => new Person { Name = n, Nick = n.ToLowerAscii(), Age = age }));
+                public Write<Name> InAUnit(Utf8 name, Utf8List pets) =>
+                    Insert(People, new Person { Name = name })
+                        .ThenIf(!pets.IsEmpty, p => Insert(Pets, pets.AsRows().Distinct().Select(x => new Pet { Name = x, OwnerId = p.Id })))
+                        .ThenSelect(p => new Name(p.Id, p.Name));
+            """);
+        var r = Run(source);
+        Clean(r);
+        Assert.Equal("INSERT INTO people (name) SELECT DISTINCT n.v FROM unnest($1) n(v) ORDER BY n.v ON CONFLICT DO NOTHING", r.Sql("AddNames"));
+        Assert.Equal("INSERT INTO people (name, nick, age) SELECT n.v, lower(n.v COLLATE \"C\"), $2 FROM unnest($1) n(v) WHERE n.v <> '' ORDER BY upper(n.v COLLATE \"C\") DESC", r.Sql("AddOthers"));
+        Assert.Equal("INSERT INTO pets (name, owner_id) SELECT DISTINCT x.v, currval(pg_get_serial_sequence('people', 'id')) FROM unnest($1) x(v)", r.Sql("InAUnit_2"));
+        Assert.Contains("AddNamesParameters => [global::CodeFusion.Data.DataType.TextArray]", r.Generated);
+    }
+
+    [Theory]
+    [InlineData("""Insert(People, names.AsRows().Distinct().OrderBy(n => n.ToUpperAscii()).Select(n => new Person { Name = n }))""", "names.AsRows().Distinct().OrderBy(n => n.ToUpperAscii())", "an order by something other than the text itself")]
+    [InlineData("""Insert(People, names.AsRows().Distinct().Select(n => new Person { Name = n.ToLowerAscii() }))""", "names.AsRows().Distinct().Select(n => new Person { Name = n.ToLowerAscii() })", "sets no column to the text itself")]
+    [InlineData("""Insert(People, names.AsRows().Take(2).Select(n => new Person { Name = n }))""", "names.AsRows().Take(2)", "'Take' in the rows of an insert from a list")]
+    [InlineData("""Insert(People, People.Where(p => p.Age > 1).Distinct().Select(p => new Person { Name = p.Name }))""", "People.Where(p => p.Age > 1).Distinct().Select(p => new Person { Name = p.Name })", "something other than Table.Where(...).Select")]
+    public void AnInsertOfAListSqlWouldReadOtherwiseIsRefused(string insert, string at, string why)
+    {
+        string source = Context($$"""
+                public Write Q(Utf8List names) => {{insert}};
+            """);
+        var d = Single(Run(source), "CFDATA001");
+        Assert.Equal(at, At(d, source));
+        Assert.Contains(why, Message(d), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AListsRowsOnTheirOwnAndDistinctInAReadAreRefused()
+    {
+        string source = Context("""
+                public Many<Name> Rows(Utf8List names) => names.AsRows().Select(n => new Name(1, n)).Many();
+                public Many<Utf8> Names() => People.Select(p => p.Name).Distinct().Many();
+            """);
+        var r = Run(source);
+        var errors = r.Generator.Where(d => d.Id == "CFDATA001").Select(Message).ToList();
+        Assert.Equal(2, errors.Count);
+        Assert.Contains(errors, m => m.Contains("a list's rows on their own", System.StringComparison.Ordinal));
+        Assert.Contains(errors, m => m.Contains("Distinct in a read", System.StringComparison.Ordinal));
+    }
 }

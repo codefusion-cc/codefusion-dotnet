@@ -12,6 +12,7 @@ sealed class Dialect
     public string Name = "postgres", Parameter = "${0}", Quotes = "\"\"", Paging = "LIMIT {0} OFFSET {1}", Limit = "LIMIT {0}";
     public string JsonArray = "array_to_json(ARRAY({0}))", JsonAggregate = "array_to_json(array_agg({0}{1}))";
     public string LastInsertedKey = "currval(pg_get_serial_sequence('{0}', '{1}'))", NextKey = "nextval(pg_get_serial_sequence('{0}', '{1}'))";
+    public string ListRows = "unnest({0}) {1}(v)";
     public string InArray = "{0} = ANY({1})", NullSafeEqual = "{0} IS NOT DISTINCT FROM {1}", Now = "now()", Concat = "{0} || {1}";
     public string True = "true", False = "false", BigIntLiteral = "{0}::bigint", LockRows = "FOR UPDATE OF {0}";
     // C#'s conversions between integers and floating point ({1} is the SQL type), the smaller and larger of two
@@ -46,6 +47,7 @@ sealed class Dialect
                 case "LastInsertedKey": d.LastInsertedKey = (string)v!; break;
                 case "NextKey": d.NextKey = (string)v!; break;
                 case "InArray": d.InArray = (string)v!; break;
+                case "ListRows": d.ListRows = (string)v!; break;
                 case "NullSafeEqual": d.NullSafeEqual = (string)v!; break;
                 case "Now": d.Now = (string)v!; break;
                 case "Concat": d.Concat = (string)v!; break;
@@ -168,6 +170,8 @@ sealed class Select
 {
     public readonly List<string> Ctes = new();
     public readonly List<(string Sql, string? Alias)> Columns = new();
+    /// <summary>Each row once: <c>SELECT DISTINCT</c>.</summary>
+    public bool Distinct;
     public string From = "";
     public readonly List<string> Joins = new();
     public readonly List<string> Where = new();
@@ -180,7 +184,7 @@ sealed class Select
     {
         var b = new StringBuilder();
         if (Ctes.Count > 0) b.Append("WITH ").Append(string.Join(", ", Ctes)).Append(' ');
-        b.Append("SELECT ");
+        b.Append(Distinct ? "SELECT DISTINCT " : "SELECT ");
         b.Append(Columns.Count == 0 ? "1" : string.Join(", ", Columns.Select(c => c.Alias is null ? c.Sql : c.Sql + " AS " + c.Alias)));
         if (From.Length > 0) b.Append(" FROM ").Append(From);
         foreach (var j in Joins) b.Append(' ').Append(j);

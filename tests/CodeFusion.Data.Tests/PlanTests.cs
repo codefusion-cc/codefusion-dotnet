@@ -55,7 +55,9 @@ public sealed class PlanTests
         ["Feed (Sql)"] = (ConduitDb.QuerySql.Feed, ConduitDb.QuerySql.FeedParameters.ToArray(), Sql.List[(int)Sql.ListKind.Feed], ["int8", "int8", "int8", "int8"]),
         ["ArticleBySlug"] = (ConduitDb.QuerySql.ArticleBySlug, ConduitDb.QuerySql.ArticleBySlugParameters.ToArray(), Sql.ArticleBySlug + OneRow, ["int8", "text"]),
         ["CreateArticle"] = (ConduitDb.QuerySql.CreateArticle, ConduitDb.QuerySql.CreateArticleParameters.ToArray(), Sql.InsertArticle, ["int8", "text", "text", "text"]),
-        ["CreateArticle_2 (Sql)"] = (ConduitDb.QuerySql.CreateArticle_2, ConduitDb.QuerySql.CreateArticle_2Parameters.ToArray(), Sql.InsertTags, ["text[]"]),
+        // unnest in FROM, where a Where can filter it: a Function Scan for the ProjectSet over a Result, the same one pass
+        ["CreateArticle_2"] = (ConduitDb.QuerySql.CreateArticle_2, ConduitDb.QuerySql.CreateArticle_2Parameters.ToArray(), Fixed(Sql.InsertTags,
+            ("SELECT DISTINCT unnest($1::text[]) ORDER BY 1", "SELECT DISTINCT n.v FROM unnest($1::text[]) n(v) ORDER BY 1")), ["text[]"]),
         ["CreateArticle_3"] = (ConduitDb.QuerySql.CreateArticle_3, ConduitDb.QuerySql.CreateArticle_3Parameters.ToArray(), Sql.InsertArticleTags, ["text[]"]),
         ["CreateArticle_4"] = (ConduitDb.QuerySql.CreateArticle_4, ConduitDb.QuerySql.CreateArticle_4Parameters.ToArray(), Sql.InsertedArticle, ["int8"]),
         ["UpdateArticle"] = (ConduitDb.QuerySql.UpdateArticle, ConduitDb.QuerySql.UpdateArticleParameters.ToArray(), Fixed(Sql.UpdateArticle,

@@ -52,6 +52,10 @@ public class Query<T>
     /// follow it, as SQL would apply them first.</summary>
     [QueryDefinition] public Query<T> Skip(long count) => Definition.Never<Query<T>>();
 
+    /// <summary>Each row once (<c>SELECT DISTINCT</c>). Only the rows of an insert from a list take it
+    /// (<see cref="Utf8ListOperators.AsRows"/>), where the order, if any, is by the text itself.</summary>
+    [QueryDefinition] public Query<T> Distinct() => Definition.Never<Query<T>>();
+
     /// <summary>
     /// One page of the list, ordered by its one key, with the list's length counted up to
     /// <paramref name="countUpTo"/>: the page's keys are picked first and only its rows are filled in. The query

@@ -119,10 +119,10 @@ public sealed partial class ConduitDb : DataContext<Postgres>
             .ThenIf(!tags.IsEmpty, n => Insert(ArticleTags, Tags.Where(t => tags.Contains(t.Name)).Select(t => new ArticleTag { ArticleId = n.Id, TagId = t.Id })))
             .ThenSelect(n => ArticleView.Of(n, author));
 
-    /// <summary>New names in sorted order: two creates adding the same new tags then wait on each other in one order
-    /// instead of deadlocking.</summary>
+    /// <summary>Each new name once, in sorted order: two creates adding the same new tags then wait on each other in one
+    /// order instead of deadlocking.</summary>
     public Write AddTags(Utf8List names) =>
-        Sql($"INSERT INTO tags (name) SELECT DISTINCT unnest({names}::text[]) ORDER BY 1 ON CONFLICT (name) DO NOTHING");
+        Insert(Tags, names.AsRows().Distinct().OrderBy(n => n).Select(n => new Tag { Name = n })).OrIgnore();
 
     /// <summary>Updates the viewer's own article: no row is an unknown slug, a refused one someone else's.</summary>
     public Write<ArticleView> UpdateArticle(long viewer, Utf8 slug, Utf8? title, Utf8? description, Utf8? body) =>

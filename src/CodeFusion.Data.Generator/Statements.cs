@@ -79,6 +79,7 @@ abstract record Source(Location At);
 sealed record TableSource(EntityInfo Entity, Location At) : Source(At);
 sealed record SqlSource(ExpressionSyntax Text, Env Env, Location At) : Source(At);
 sealed record InsertSource(EntityInfo Entity, IOperation Row, Env Env, Location At) : Source(At);
+sealed record ListSource(Host List, Location At) : Source(At);
 
 sealed partial class Translator
 {
@@ -167,6 +168,12 @@ sealed partial class Translator
                         }
                         throw new Refused(at, $"'{m.Name}'");
                     }
+                    if (Known.Same(m.ContainingType, K.Utf8ListOperators) && m.Name == "AsRows")
+                    {
+                        // a list known when called, whose texts are the rows
+                        if (Eval(args[0], env) is not Host list) throw new Refused(args[0].Syntax.GetLocation(), "AsRows of a list that isn't known when the query is called");
+                        return new Chain { Source = new ListSource(list, at) };
+                    }
                     var receiver = inv.Instance ?? (args.Count > 0 ? args[0] : throw new Refused(at, $"'{m.Name}' without a receiver"));
                     var chain = Parse(receiver, env);
                     chain.Steps.Add(new Step(m.Name, inv, env));
@@ -243,6 +250,8 @@ sealed partial class Translator
                 _q.IsWrite = true;
                 Insert(i, chain.Steps, null, root: thens.Count == 0);
                 break;
+            case ListSource l:
+                throw ListOnItsOwn(l);
         }
         Then(thens, null);
     }
@@ -452,6 +461,8 @@ sealed partial class Translator
                     Add(sel.Render(D), null);
                     return;
                 }
+                case "Distinct":
+                    throw new Refused(sat, "Distinct in a read (only the rows of an insert from a list, list.AsRows(), take it)");
                 default:
                     throw new Refused(sat, $"'{s.Name}' in a query");
             }
@@ -946,6 +957,11 @@ sealed partial class Translator
         // INSERT ... SELECT from a query whose Select makes the entity
         noKey = "an insert of a query's rows, which may be none or several";
         var chain = Parse(row, source.Env);
+        if (chain.Source is ListSource list)
+        {
+            noKey = "an insert of a list's rows, which may be none or several";
+            return $"{head} {ListRows(e, list, chain.Steps, at)}{tail}";
+        }
         if (chain.Source is not TableSource src || chain.Steps.Count == 0 || chain.Steps[chain.Steps.Count - 1].Name != "Select"
             || chain.Steps.Take(chain.Steps.Count - 1).Any(s => s.Name != "Where"))
             throw new Refused(row.Syntax.GetLocation(), $"an insert from something other than Table.Where(...).Select(x => new {e.Type.Name} {{ ... }})");
@@ -959,6 +975,62 @@ sealed partial class Translator
         foreach (var v in values) sel.Columns.Add((v, null));
         return $"{head} ({string.Join(", ", columns)}) {sel.Render(D)}{tail}";
     }
+
+    /// <summary>
+    /// The columns and rows of an insert from a list known when called: its texts as rows (the dialect's ListRows, the
+    /// list its array parameter), filtered, made distinct and ordered as the chain says, then made into the entity.
+    /// LINQ's Distinct is of the texts, SQL's of the columns made: they are the same when a column is the text itself,
+    /// and only then can SQL order the rows, by that text.
+    /// </summary>
+    string ListRows(EntityInfo e, ListSource list, List<Step> steps, Location at)
+    {
+        if (steps.Count == 0 || steps[steps.Count - 1].Name != "Select")
+            throw new Refused(list.At, $"an insert from a list that doesn't end in .Select(x => new {e.Type.Name} {{ ... }})");
+        var p = ParamOf(list.List, list.At);
+        if (p.Kind != ParamType.TextArray) throw new Refused(list.At, "AsRows of a list that isn't a list of Utf8");
+        string alias = Aliases.Take(LambdaName(steps) ?? "v");
+        var sel = new Select { From = Dialect.Format(D.ListRows, Params.Add(p), alias) };
+        var text = new SqlValue(alias + ".v", K.Utf8, false);
+        var ordering = new Ordering(sel);
+        Step? distinct = null, ordered = null;
+        foreach (var s in steps.Take(steps.Count - 1))
+        {
+            var sat = s.Call.Syntax.GetLocation();
+            switch (s.Name)
+            {
+                case "Where":
+                    sel.Where.Add(Condition(Apply(s.Lambda(0), s.Env, text), sat));
+                    break;
+                case "Distinct":
+                    distinct = s;
+                    break;
+                case "OrderBy" or "OrderByDescending" or "ThenBy" or "ThenByDescending":
+                    ordering.Add(s.Name, Operand(Apply(s.Lambda(0), s.Env, text), sat));
+                    ordered ??= s;
+                    break;
+                default:
+                    throw new Refused(sat, $"'{s.Name}' in the rows of an insert from a list (Where, Distinct and OrderBy come before its Select)");
+            }
+        }
+        var last = steps[steps.Count - 1];
+        var made = Apply(last.Lambda(0), last.Env, text) as ObjectValue
+            ?? throw new Refused(last.Call.Syntax.GetLocation(), $"an insert's Select that doesn't make a {e.Type.Name}");
+        var (columns, values) = Values(made, e, at);
+        if (distinct is not null)
+        {
+            if (!values.Contains(text.Sql))
+                throw new Refused(last.Call.Syntax.GetLocation(), "Distinct before a Select that sets no column to the text itself (SQL's DISTINCT is of the columns made, LINQ's of the texts)");
+            if (sel.OrderBy.Any(o => o.Sql != text.Sql))
+                throw new Refused(ordered!.Call.Syntax.GetLocation(), "Distinct with an order by something other than the text itself (SQL orders distinct rows only by what they hold)");
+            sel.Distinct = true;
+        }
+        foreach (var v in values) sel.Columns.Add((v, null));
+        return $"({string.Join(", ", columns)}) {sel.Render(D)}";
+    }
+
+    /// <summary>A list's rows used as anything but an insert's.</summary>
+    static Refused ListOnItsOwn(ListSource l) =>
+        new(l.At, "a list's rows on their own: they are the rows of an insert (Insert(table, list.AsRows()...Select(x => new T { ... })))");
 
     /// <summary>The key a row sets: a value known when called is the inserted row's key for later statements; one
     /// SQL computes, they can't name again.</summary>
@@ -1026,6 +1098,8 @@ sealed partial class Translator
                 else Update(t, chain.Steps, at, condition, root: false);
                 break;
             }
+            case ListSource l:
+                throw ListOnItsOwn(l);
         }
         Then(thens, condition);
     }

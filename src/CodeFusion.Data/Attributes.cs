@@ -90,4 +90,11 @@ public static class Utf8ListOperators
             if (t == text) return true;
         return false;
     }
+
+    /// <summary>
+    /// The list's texts as the rows of a query, for an insert of each (<c>unnest($1)</c>, the list the array
+    /// parameter): <c>Insert(Tags, names.AsRows().Distinct().OrderBy(n =&gt; n).Select(n =&gt; new Tag { Name = n })).OrIgnore()</c>
+    /// inserts each new name once, in sorted order. Before the Select come Where, Distinct and one OrderBy.
+    /// </summary>
+    [QueryDefinition] public static Query<Utf8> AsRows(this Utf8List list) => Definition.Never<Query<Utf8>>();
 }

@@ -418,6 +418,22 @@ public sealed partial class OpsDb : DataContext<Postgres>
         Insert(People, new Person { Name = name, Age = 3, Active = true, Born = SqlFunctions.Now() })
             .ThenIf(name.ToLowerAscii() == lowered, Sql($"UPDATE people SET nick = 'lowered' WHERE name = {name}"));
 
+    // ---------- inserts of a list's texts ----------
+
+    /// <summary>Each new name once, in sorted order; names taken already are skipped.</summary>
+    public Write AddPeopleNamed(Utf8List names, int age) =>
+        Insert(People, names.AsRows().Distinct().OrderBy(n => n).Select(n => new Person { Name = n, Age = age, Active = false, Born = SqlFunctions.Now() })).OrIgnore();
+
+    /// <summary>No Distinct: a name twice in the list is a unique violation.</summary>
+    public Write AddPeopleNamedOnce(Utf8List names) =>
+        Insert(People, names.AsRows().Where(n => n != ""u8).OrderByDescending(n => n.ToUpperAscii()).Select(n => new Person { Name = n, Nick = n.ToLowerAscii(), Age = 62, Active = false, Born = SqlFunctions.Now() }));
+
+    /// <summary>A team, its new members and the team read back, in one unit.</summary>
+    public Write<Name> AddTeamOf(long id, Utf8 name, Utf8List members) =>
+        Insert(Teams, new Team { Id = id, Name = name })
+            .ThenIf(!members.IsEmpty, t => Insert(People, members.AsRows().Distinct().Select(m => new Person { Name = m, Age = 63, Active = true, Born = SqlFunctions.Now(), TeamId = t.Id })).OrIgnore())
+            .ThenSelect(t => new Name(t.Id, t.Name));
+
     // ---------- SQL ----------
 
     public Many<Name> Raw(int min, Utf8 name) =>
