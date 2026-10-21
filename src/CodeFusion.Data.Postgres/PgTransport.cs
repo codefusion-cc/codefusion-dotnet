@@ -202,8 +202,12 @@ sealed unsafe class SocketTransport : PgTransport
             SendSocket(data, whileBlocked);
             return;
         }
-        // A large batch goes out non-blocking (macOS ignores MSG_DONTWAIT on send), so a full socket can't block it.
-        bool switched = whileBlocked is not null && _switchable && SystemNative_FcntlSetIsNonBlocking(_fd, 1) == 0;
+        // A send that may meet a full socket goes out non-blocking, so it can take replies in instead of waiting:
+        // on Linux with MSG_DONTWAIT, which costs no system call; macOS ignores that flag on send, so there the
+        // socket is switched for the send.
+        bool dontWait = whileBlocked is not null && OperatingSystem.IsLinux();
+        bool switched = whileBlocked is not null && !dontWait && _switchable && SystemNative_FcntlSetIsNonBlocking(_fd, 1) == 0;
+        int flags = dontWait ? NoSignal | DontWait : NoSignal;
         try
         {
             fixed (byte* start = data)
@@ -212,7 +216,7 @@ sealed unsafe class SocketTransport : PgTransport
                 nint left = data.Length;
                 while (left > 0)
                 {
-                    nint n = send(_fd, p, left, NoSignal);
+                    nint n = send(_fd, p, left, flags);
                     if (n > 0)
                     {
                         p += n;

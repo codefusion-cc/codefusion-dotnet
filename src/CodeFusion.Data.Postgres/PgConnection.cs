@@ -16,8 +16,9 @@ sealed class PgConnection : IDisposable
 {
     /// <summary>The largest message accepted (Postgres's own limit for a value is 1 GB).</summary>
     internal const int MaxMessage = 1 << 30;
-    /// <summary>A batch up to this size goes out in one blocking send: it fits the socket buffers, so it can't wait
-    /// on Postgres. A larger one is sent so that the replies are taken in whenever the socket takes no more.</summary>
+    /// <summary>A batch up to this size, with nothing else in flight, goes out in one blocking send: it fits the socket
+    /// buffers, so it can't wait on Postgres. A larger one, or any sent while an earlier batch is still answered, is
+    /// sent so that the replies are taken in whenever the socket takes no more.</summary>
     const int SendPiece = 64 << 10;
     /// <summary>Receive buffers grown past this for a huge row go back to the normal size afterwards.</summary>
     const int MaxKeptReceive = 8 << 20;
@@ -405,7 +406,9 @@ sealed class PgConnection : IDisposable
     internal void Flush()
     {
         Append([(byte)'S', 0, 0, 0, 4]);
-        _t.Send(_send.AsSpan(0, _sendLen), _sendLen > SendPiece ? _takeIn : null);
+        // A batch that may not fit the socket buffers, or one sent while another is still answered (its replies can
+        // fill ours while Postgres waits for us to read them), takes replies in whenever the socket is full
+        _t.Send(_send.AsSpan(0, _sendLen), _sendLen > SendPiece || _sentCount > 0 ? _takeIn : null);
         if (_send.Length > 1 << 20) _send = new byte[16 << 10];
         // in line behind the batches before it: its steps take a free slot's place, that slot's array is the next build's
         if (_sentCount == _sent.Length)

@@ -196,6 +196,42 @@ public sealed class PgPipelineTests : IAsyncDisposable
         Assert.True(reader.Counters.Pipelined > 0, "pipelined under load");
     }
 
+    // A batch sent while another is answered can meet socket buffers full of that one's replies, with Postgres
+    // waiting for us to read them: it must take them in while it waits, however small it is.
+    [Fact(Timeout = 30_000)]
+    public async Task ABatchSentWhileAnotherIsAnsweredTakesRepliesInWhileTheSocketIsFull()
+    {
+        var server = new FakeServer { Rows = _ => [[ServerWriter.BE64(1)]] };
+        using var gate = new ManualResetEventSlim();
+        int batches = 0;
+        server.Respond = (c, batch) =>
+        {
+            if (Interlocked.Increment(ref batches) == 2) gate.Wait(); // the warm-up is 1; the slow one is 2
+            server.Auto(c, batch);
+        };
+        var reader = new PgReader(server.Settings());
+        try
+        {
+            reader.Start(1);
+            Assert.Equal(PgStatus.Ok, (await Try(reader, Pid)).Status);
+            var conn = server.Connections.Single();
+            int alone = conn.SendsTakingIn;
+            var held = Try(reader, Pid);
+            await Task.Delay(100);
+            var next = Enumerable.Range(0, 40).Select(_ => Try(reader, Pid)).ToArray();
+            gate.Set();
+            await held;
+            await Task.WhenAll(next);
+            Assert.Equal(0, alone); // a batch alone, small, goes out in one blocking send
+            Assert.True(reader.Counters.Pipelined > 0);
+            Assert.True(conn.SendsTakingIn >= reader.Counters.Pipelined, $"{conn.SendsTakingIn} of {conn.Sends} sends took replies in, {reader.Counters.Pipelined} pipelined");
+        }
+        finally
+        {
+            reader.Complete();
+        }
+    }
+
     // A failing read's skipped reads go out again as a new batch. When that send fails (the server closed the
     // connection after answering), they must fail Broken with the rest, and the loop must keep both its groups:
     // before, they were in no list FailAll looked at, never answered, and the loop lost a group each time.
