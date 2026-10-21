@@ -92,7 +92,7 @@ public class AllocationTests(ITestOutputHelper output)
                            + "Authorization: Token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NSJ9.c2lnbmF0dXJlc2lnbmF0dXJlc2lnbmF0dXJl\r\n"
                            + "Content-Type: application/json\r\nContent-Length: 30\r\n\r\n{\"comment\":{\"body\":\"hello!!\"}}";
 
-    [Theory(Timeout = 120_000)]
+    [Theory(Timeout = 300_000)] // a loaded machine stretches each connection's 190,000 requests to minutes
     [InlineData(false, 1, HttpTransport.Sockets)]
     [InlineData(true, 1, HttpTransport.Sockets)]
     [InlineData(true, 8, HttpTransport.Sockets)]
@@ -114,31 +114,51 @@ public class AllocationTests(ITestOutputHelper output)
             responseLength[i] = FirstResponseLength(sockets[i], request);
         }
 
+        try
+        {
+            AssertKeepAliveAllocatesNothing(output, "", sockets, request, responseLength);
+        }
+        finally
+        {
+            foreach (var s in sockets) s.Dispose();
+        }
+    }
+
+    /// <summary>What an idle test process allocates on its own, the runner and the runtime's timers and thread starts:
+    /// about 250 B/s measured with and without a server, so this is four times that.</summary>
+    const double BackgroundBytesPerSecond = 1000;
+
+    /// <summary>Warms the connections up, then sends 50,000 requests on each, up to three times, and fails unless
+    /// one of those windows allocates under 0.5 B a request plus the background for its length. Something the
+    /// requests allocate shows in every window, and one allocation a request adds at least 24 B a request; a one-time
+    /// growth of the runtime's own buffers (the socket engine's event array, seen once on CI) shows in one. The
+    /// background is time, not requests: about 0.01 B a request in a 2 s window, but a loaded machine stretches the
+    /// window to a minute and it alone came to 0.49.</summary>
+    internal static void AssertKeepAliveAllocatesNothing(ITestOutputHelper output, string label, Socket[] sockets, byte[] request, int[] responseLength)
+    {
         const int warm = 20_000, measured = 50_000;
         RunClients(sockets, request, responseLength, warm).Go();
         Thread.Sleep(200); // let tiered compilation's background work settle
         RunClients(sockets, request, responseLength, warm).Go();
-        // Up to three windows, keeping the least. Whole-process noise (the listener's own event payloads, the test
-        // runner, a thread the pool starts) adds a few KB to one window; one allocation per request would add at
-        // least 24 bytes for each request in every window.
-        double perRequest = double.MaxValue;
-        for (int window = 0; window < 3 && perRequest >= 0.5; window++)
+        long requests = (long)measured * sockets.Length;
+        var windows = new System.Collections.Generic.List<string>();
+        for (int window = 0; window < 3; window++)
         {
             var clients = RunClients(sockets, request, responseLength, measured);
             GC.Collect();
             using var ticks = new AllocationTicks();
-            long before = GC.GetTotalAllocatedBytes(precise: true);
+            long began = Environment.TickCount64, before = GC.GetTotalAllocatedBytes(precise: true);
             clients.Go();
-            long allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
+            long allocated = GC.GetTotalAllocatedBytes(precise: true) - before, ms = Environment.TickCount64 - began;
             ticks.Dispose();
-            double inWindow = (double)allocated / (measured * connections);
-            output.WriteLine($"window {window + 1}: {allocated} bytes over {measured * connections} requests: {inWindow:F3} B/request");
+            double allowed = 0.5 * requests + BackgroundBytesPerSecond * ms / 1000;
+            windows.Add($"{allocated} bytes over {requests} requests in {ms} ms: {(double)allocated / requests:F3} B/request, {allowed:F0} bytes allowed");
+            output.WriteLine($"{label}window {window + 1}: {windows[^1]}");
             // The runtime samples an allocation about every 100 KB: what it saw names what still allocates.
             foreach (var g in ticks.Types.GroupBy(t => t).OrderByDescending(g => g.Count())) output.WriteLine($"  {g.Count(),4} samples: {g.Key}");
-            perRequest = Math.Min(perRequest, inWindow);
+            if (allocated < allowed) return;
         }
-        foreach (var s in sockets) s.Dispose();
-        Assert.True(perRequest < 0.5, $"{perRequest:F3} bytes per request");
+        Assert.Fail($"{label}every window allocated more than allowed: {string.Join("; ", windows)}");
     }
 
     internal static bool Debugger() => typeof(HttpServer).Assembly.GetCustomAttributes(typeof(System.Diagnostics.DebuggableAttribute), false)

@@ -50,6 +50,16 @@ public sealed class SlowClientTests
         return Environment.TickCount64 - since;
     }
 
+    /// <summary>From <paramref name="since"/>, taken before the connect, until the client sees the server close the
+    /// connection with nothing sent back. A server deadline counts from after the connect, so a busy machine only
+    /// makes this longer: a late test thread can't miss the close, as it can watching <see cref="HttpServer.Connections"/>
+    /// reach 1 and then 0. Its 10 s sits far above a 300 ms request timeout and far below the 30 s default.</summary>
+    static async Task<long> MillisecondsUntilTheClientSeesTheClose(Client c, long since)
+    {
+        Assert.True(await c.ClosedAsync(10_000), "the server answered or kept the connection");
+        return Environment.TickCount64 - since;
+    }
+
     [Fact(Timeout = 20_000)]
     public async Task ABodyDrippedBelowTheMinimumRateIsCutOff()
     {
@@ -118,7 +128,7 @@ public sealed class SlowClientTests
 
     // A rate so low a byte would pay for more milliseconds than a long holds made the deadline wrap negative, which
     // reads as no deadline: not even the request timeout ended the wait.
-    [Theory(Timeout = 20_000)]
+    [Theory(Timeout = 30_000)]
     [InlineData(1e-300)]
     [InlineData(double.Epsilon)]
     public async Task NoRateIsSoLowThatItTurnsTheBodyTimeoutOff(double rate)
@@ -128,12 +138,12 @@ public sealed class SlowClientTests
             o.MinRequestBodyDataRate = new MinDataRate(rate, TimeSpan.Zero);
             o.RequestTimeout = TimeSpan.FromMilliseconds(300);
         });
-        using Client c = await t.ConnectAsync();
         long start = Environment.TickCount64;
+        using Client c = await t.ConnectAsync();
         await c.SendAsync("POST /x HTTP/1.1\r\nHost: x\r\nContent-Length: 1000\r\n\r\n" + new string('a', 100));
-        long took = await MillisecondsUntilClosed(t, 3000, start);
-        Assert.InRange(took, 250, 2000);
-        Assert.True(await c.ClosedAsync(), "the stalled request got an answer");
+        long took = await MillisecondsUntilTheClientSeesTheClose(c, start);
+        Assert.InRange(took, 250, 10_000);
+        await t.ConnectionsReach(0);
     }
 
     // What the socket takes counts, and its buffers take the first part of a response however slowly the client
@@ -218,15 +228,15 @@ public sealed class SlowClientTests
         await drip;
     }
 
-    [Fact(Timeout = 20_000)]
+    [Fact(Timeout = 30_000)]
     public async Task ANewConnectionThatSendsNothingIsClosedAfterTheRequestTimeout()
     {
         await using var t = TestServer.Start(TestServer.Echo, o => o.RequestTimeout = TimeSpan.FromMilliseconds(300));
-        using Client c = await t.ConnectAsync();
         long start = Environment.TickCount64;
-        long took = await MillisecondsUntilClosed(t, 3000, start);
-        Assert.InRange(took, 250, 2000);
-        Assert.True(await c.ClosedAsync());
+        using Client c = await t.ConnectAsync();
+        long took = await MillisecondsUntilTheClientSeesTheClose(c, start);
+        Assert.InRange(took, 250, 10_000);
+        await t.ConnectionsReach(0);
     }
 
     [Fact(Timeout = 20_000)]
