@@ -430,8 +430,7 @@ public sealed class BlockingCloseTests
             try { await Task.Delay(10_000, x.Aborted); }
             catch (OperationCanceledException) { }
         }, o => o.RequestTimeout = TimeSpan.FromMilliseconds(300));
-        using Client a = await t.ConnectAsync();
-        await a.SendAsync(Get);
+        using Client a = t.ConnectAndSend(Get);
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await a.SendAsync(Get); // pipelined: the watch has nothing more to tell, so the heartbeat finds the reset
         await Task.Delay(100);
