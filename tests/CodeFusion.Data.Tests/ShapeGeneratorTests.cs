@@ -192,6 +192,10 @@ public sealed class ShapeGeneratorTests
         "p.Pets.Count()", "an ignored insert that doesn't set its whole key")]
     [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { Id = 5 })).Select(p => new Name(p.Pets.Count(), p.Name))""",
         "p.Pets.Count()", "a condition on a column the insert before the Select doesn't set")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { Id = p.Id + 100, OwnerId = 7 })).Select(p => new Name(p.Pets.Count(), p.Name))""",
+        "p.Pets.Count()", "the write from another row found may count too")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Pets.Where(x => x.Name == p.Name).Delete()).Select(p => new Name(p.Pets.Count(), p.Name))""",
+        "p.Pets.Count()", "the write from another row found may count too")]
     [InlineData("""Pets.Where(x => x.Id > 1).Then(x => Insert(People, new Person { Name = x.Name })).Select(x => new Name(x.Id, x.Owner.Name))""",
         "x.Owner", "a read of people in the Select after Then")]
     [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { OwnerId = p.Id })).Select(p => new Name(p.Id, Pets.Single(x => x.Id == 1).Name))""",
@@ -214,6 +218,7 @@ public sealed class ShapeGeneratorTests
                     People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { OwnerId = p.Id, Name = pet })).Select(p => new Name(p.Id, p.Name));
                 public Write Take(int age) => People.Where(p => p.Age > age).Then(p => Pets.Where(x => x.OwnerId == p.Id).Delete());
                 public Write TakeYounger(int age) => People.Where(p => p.Age > age).Then(p => Pets.Where(x => x.OwnerId == p.Id && x.Id < p.Age).Delete());
+                public Write TakeEither(int age) => People.Where(p => p.Age > age).Then(p => Pets.Where(x => x.Id < 5 || x.OwnerId == p.Id).Delete());
                 public Write All() => People.Then(p => Pets.Delete());
                 public Write<Name> InAUnitIsRefused(Utf8 name) =>
                     Insert(People, new Person { Name = name }).Then(People.Where(p => p.Name == name).Then(p => Pets.Delete())).ThenSelect(p => new Name(p.Id, p.Name));
@@ -224,6 +229,8 @@ public sealed class ShapeGeneratorTests
         Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > $1) DELETE FROM pets x WHERE x.owner_id = ANY(ARRAY(SELECT t.id FROM t))", r.Sql("Take"));
         // the rows found used otherwise than one key: joined
         Assert.Equal("WITH t AS (SELECT p.id, p.age FROM people p WHERE p.age > $1) DELETE FROM pets x USING t WHERE x.owner_id = t.id AND x.id < t.age", r.Sql("TakeYounger"));
+        // the link inside an OR: joined, so no row found deletes nothing
+        Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > $1) DELETE FROM pets x USING t WHERE (x.id < 5 OR x.owner_id = t.id)", r.Sql("TakeEither"));
         // a write that uses nothing of the row still runs once for each row found: none when none is
         Assert.Equal("WITH t AS (SELECT 1 FROM people p) DELETE FROM pets p2 USING t", r.Sql("All"));
         var errors = r.Generator.Where(d => d.Id == "CFDATA001").Select(Message).ToList();

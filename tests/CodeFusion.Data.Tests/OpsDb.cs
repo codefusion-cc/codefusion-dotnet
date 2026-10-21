@@ -454,6 +454,9 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Write<Number> TakePets(Utf8 name, int legs) =>
         People.Where(p => p.Name == name).Then(p => Pets.Where(x => x.OwnerId == p.Id && x.Legs == legs).Delete()).Select(p => new Number(p.Id, p.Age));
 
+    /// <summary>The pets with more legs or of the person found: none when no one is found.</summary>
+    public Write TakeLegsOrOwn(Utf8 name, int legs) => People.Where(p => p.Name == name).Then(p => Pets.Where(x => x.Legs > legs || x.OwnerId == p.Id).Delete());
+
     /// <summary>Each person of this age a pet keyed by their own id; nothing given back.</summary>
     public Write PetsForAge(int age) =>
         People.Where(p => p.Age == age).Then(p => Insert(Pets, new Pet { Id = p.Id + 50000, OwnerId = p.Id, Name = p.Name, Legs = 1 }).OrIgnore());

@@ -896,6 +896,28 @@ What it decided:
   (`ArticleListView.InFeed`). Its plan is the contest's (`PlanTests` `Feed`), the count's join and the semi-join of
   the contest's planned alike; `AllocationTests` reads it.
 
+**Review of the shapes.** A review of the five commits found these; each test was red on the code before its fix.
+
+| Finding | Test | Red before |
+|---|---|---|
+| a Count or Any after a write from several rows found was corrected by the current row's write only (a favorite of each of an author's articles by the author counted once in `a.Author.Favorites.Count()`) | `ShapeGeneratorTests.AWriteFromTheRowsFoundSqlWouldReadOtherwiseIsRefused` (an insert keyed by a constant owner, a delete keyed by a name) | no error |
+| a delete's link to the rows found inside an OR (`x.Legs > n \|\| x.OwnerId == p.Id`) taken as the link, so no row found still deleted | `FoundWriteTests.NoRowFoundDeletesNothingEvenWhereTheLinkIsOneOfTwoConditions`, `AWriteFromTheRowsFoundIsOneStatement` (`TakeEither`) | the pet deleted |
+| every ignored insert in Then named its key as the conflict target, so a conflict on another unique key was an error there and a skip everywhere else | `FoundWriteTests` (GivePet, PetsForAge: `ON CONFLICT DO NOTHING`) | `ON CONFLICT (id)` |
+
+What the fixes decided:
+
+- A correction is taken only where the write from another row found can't be one of the rows counted: made from a
+  second row found (t2), the inserted row's conditions hold only when t2's key is t's, or the delete's conditions tie
+  the counted row's column to t2's key where the count's tie it to t's. Every Conduit read is so (the favorites of
+  the article favorited, the followers of the user followed); anything else is refused, with what to count instead.
+- `Sql.EqualsColumnOf` takes `x = t.c` only with one term on each side.
+- The conflict target is the key only when a correction relies on a row of the key being there after; otherwise
+  OrIgnore skips on any unique key, as it does everywhere.
+- Not changed, and so noted: a delete's correction reads D on the snapshot's row while the DELETE rechecks it on the
+  newest version, so a concurrent update of a column D reads (not the key) can leave the count matching neither; the
+  Conduit deletes read key columns only. And `Prune` relies on the required navigation's row being there, which a
+  foreign key constraint makes sure of.
+
 All five of the Conduit context's `Sql(...)` queries are LINQ now; the context has none left. The app's own copy
 (`ConduitDb.cs` in the contest submission) needs the same entities: `[Key]` on Follow's and Favorite's two columns,
 and `User.Articles`.

@@ -13,11 +13,20 @@ sealed class WriteEffect(EntityInfo table)
     public EntityInfo Table { get; } = table;
     /// <summary>The inserted row; null for a delete.</summary>
     public ObjectValue? Inserted { get; init; }
-    /// <summary>OrIgnore, and whether it skips only a row of the inserted key (its conflict target is the key).</summary>
+    /// <summary>The insert's row as written, and its environment, to make it again from another row found.</summary>
+    public IOperation? Row { get; init; }
+    public Env? Env { get; init; }
+    /// <summary>OrIgnore; whether the row sets the table's whole key, and whether a read relies on it: then the insert
+    /// skips only a row of that key (its conflict target, <see cref="KeyConflict"/>), so a row of it is there after.</summary>
     public bool Ignored { get; init; }
-    public bool Targeted { get; init; }
+    public string? KeyConflict { get; init; }
+    public bool Targeted { get; set; }
     /// <summary>The delete's Where steps, whose environment holds the row found.</summary>
     public List<Step>? Deleted { get; init; }
+    /// <summary>The rows found: the CTE's name, their entity, and the parameter of Then's lambda.</summary>
+    public string Found { get; init; } = "";
+    public EntityInfo FoundEntity { get; init; } = null!;
+    public ISymbol FoundParameter { get; init; } = null!;
 }
 
 sealed partial class Translator
@@ -25,6 +34,9 @@ sealed partial class Translator
     /// <summary>The write of a Query.Then, while its Select is translated: the statement reads the table written as its
     /// snapshot has it, from before the write, so only a count or an Any of it is read, corrected by the write.</summary>
     WriteEffect? _written;
+
+    /// <summary>Where an ignored insert's conflict target goes, decided once its Select is translated.</summary>
+    const string ConflictMark = "\u0001conflict\u0001";
 
     /// <summary>Whether <paramref name="s"/> is Query.Then (a write from each row found), not Write.Then.</summary>
     bool IsFoundThen(Step s) => s.Name == "Then" && Known.Is(s.Call.TargetMethod.ContainingType, K.Query);
@@ -75,7 +87,7 @@ sealed partial class Translator
         var final = new Select { From = found };
         var row = new Row(e, found, final, RowMode.Cte);
         var write = Body(lambda.Body, lambda.Syntax.GetLocation());
-        string writeSql = WriteFrom(Parse(write, step.Env.With(lambda.Symbol.Parameters[0], new RowValue(writeRow))), e, found, write.Syntax.GetLocation(), out var written);
+        string writeSql = WriteFrom(Parse(write, step.Env.With(lambda.Symbol.Parameters[0], new RowValue(writeRow))), e, found, lambda.Symbol.Parameters[0], write.Syntax.GetLocation(), out var written);
         if (select)
         {
             var proj = rest[0];
@@ -91,6 +103,7 @@ sealed partial class Translator
                 _written = null;
             }
         }
+        writeSql = writeSql.Replace(ConflictMark, written.Targeted ? written.KeyConflict : " ON CONFLICT DO NOTHING");
         foreach (var c in writeRow.Needed.Concat(row.Needed).Distinct())
             find.Columns.Add((Column(findRow, e.Columns.Values.First(x => x.Name == c), at), null));
         string head = $"WITH {found} AS ({find.Render(D)})";
@@ -99,7 +112,7 @@ sealed partial class Translator
 
     /// <summary>The write of Query.Then, from each row of <paramref name="found"/> (the CTE): an insert of one row
     /// per row found, or a delete of another table's rows, joined to the rows found.</summary>
-    string WriteFrom(Chain chain, EntityInfo foundEntity, string found, Location at, out WriteEffect written)
+    string WriteFrom(Chain chain, EntityInfo foundEntity, string found, ISymbol foundParameter, Location at, out WriteEffect written)
     {
         var thens = Thens(chain);
         if (thens.Count > 0) throw new Refused(thens[0].Call.Syntax.GetLocation(), "a unit of writes in Then (it is one write from each row found: an insert, or a delete)");
@@ -122,9 +135,11 @@ sealed partial class Translator
                 var (head, tail) = InsertHead(i.Entity, ignore, i.At);
                 // a row that sets its whole key skips only a row of that key, so the Select knows one is there after
                 var keys = i.Entity.KeyColumns;
-                bool targeted = ignore && D.InsertOrIgnore == 0 && keys.Count > 0 && keys.All(k => row.Get(k.Property.Name) is not null);
-                if (targeted) tail = $" ON CONFLICT ({string.Join(", ", keys.Select(k => D.Quote(k.Name)))}) DO NOTHING";
-                written = new WriteEffect(i.Entity) { Inserted = row, Ignored = ignore, Targeted = targeted };
+                string? keyConflict = ignore && D.InsertOrIgnore == 0 && keys.Count > 0 && keys.All(k => row.Get(k.Property.Name) is not null)
+                    ? $" ON CONFLICT ({string.Join(", ", keys.Select(k => D.Quote(k.Name)))}) DO NOTHING" : null;
+                // the target is set once the Select is translated: the key, if a read relies on a row of it being there
+                if (keyConflict is not null) tail = ConflictMark;
+                written = new WriteEffect(i.Entity) { Inserted = row, Row = i.Row, Env = i.Env, Ignored = ignore, KeyConflict = keyConflict, Found = found, FoundEntity = foundEntity, FoundParameter = foundParameter };
                 var (cols, vals) = Values(row, i.Entity, i.At);
                 return $"{head} ({string.Join(", ", cols)}) SELECT {string.Join(", ", vals)} FROM {found}{tail}";
             }
@@ -133,7 +148,7 @@ sealed partial class Translator
                 NotTheFound(d.Entity, foundEntity, at);
                 var wheres = chain.Steps.Take(chain.Steps.Count - 1).ToList();
                 Expect(wheres.All(s => s.Name == "Where"), at, "operators before the delete in Then other than Where");
-                written = new WriteEffect(d.Entity) { Deleted = wheres };
+                written = new WriteEffect(d.Entity) { Deleted = wheres, Found = found, FoundEntity = foundEntity, FoundParameter = foundParameter };
                 string alias = Aliases.Take(LambdaName(wheres) ?? Initials(d.Entity.Table));
                 var target = new Row(d.Entity, alias, null);
                 var conds = wheres.SelectMany(s => Sql.Conjuncts(Condition(Apply(s.Lambda(0), s.Env, new RowValue(target)), s.Call.Syntax.GetLocation()))).ToList();
@@ -185,8 +200,13 @@ sealed partial class Translator
         string table = w.Table.Table;
         if (mv.Steps.Any(s => s.Name is "Select" or "Take"))
             throw new Refused(at, $"{name} after Select or Take of {table}, which the write before the Select changes (the write's correction is of rows counted), so it");
-        if (w.Inserted is not null && w.Ignored && !w.Targeted)
-            throw new Refused(at, $"{name} of {table} after an ignored insert that doesn't set its whole key ([Key] on each of its columns), so whether it wrote a row isn't known, and it");
+        if (w.Inserted is not null && w.Ignored)
+        {
+            if (w.KeyConflict is null)
+                throw new Refused(at, $"{name} of {table} after an ignored insert that doesn't set its whole key ([Key] on each of its columns), so whether it wrote a row isn't known, and it");
+            // the correction relies on a row of the key being there after: the insert skips only that
+            w.Targeted = true;
+        }
         var step = new Step(name, inv, env);
         return Nested(() =>
         {
@@ -205,6 +225,11 @@ sealed partial class Translator
             var child = ((RowValue)current).Row;
             if (step.ArgCount == 1) sub.Where.Add(Condition(Apply(step.Lambda(0), env, current), at));
             var p = sub.Where.SelectMany(Sql.Conjuncts).Distinct().ToList();
+            // every row found writes: the correction is of this row's write only, so another's may not be one of
+            // the rows counted for it (the write from another row found, t2, holds for them only when t2 is t)
+            if (!OnlyItsOwn(mv, step, env, w, child, p, at))
+                throw new Refused(at, $"{name} of {table} after a write from rows found that may be several, where the write from another row found may count too " +
+                    "(the correction is of each row's own write: count a navigation of the row found that the row written belongs to), so it");
             string Of(IEnumerable<string> where, string? column = null)
             {
                 var s = new Select { From = sub.From };
@@ -218,8 +243,7 @@ sealed partial class Translator
             if (w.Inserted is { } r)
             {
                 // the inserted row's values for the row counted: with OrIgnore, only its key's
-                var keyNames = new HashSet<string>(w.Table.KeyColumns.Select(k => k.Property.Name));
-                var seen = w.Ignored ? new ObjectValue(r.Type is INamedTypeSymbol n ? n : (INamedTypeSymbol)r.Type, r.Members.Where(m => keyNames.Contains(m.Name)).ToList()) : r;
+                var seen = w.Ignored ? KeyOnly(r, w.Table) : r;
                 string holds = Holds(mv, step, env, seen, w, at);
                 if (name == "Any") return Logic(holds, any, " OR ", type, false);
                 string added = holds;
@@ -243,6 +267,36 @@ sealed partial class Translator
             string gone = FixesKey(deleted, child.Alias!, w.Table) ? $"CASE WHEN EXISTS ({Of(p.Concat(deleted))}) THEN 1 ELSE 0 END" : $"({Of(p.Concat(deleted), "count(*)")})";
             return new SqlValue($"{count} - {gone}", type, false);
         });
+    }
+
+    /// <summary>The inserted row's key members only: what a row of its key, there before, has alike.</summary>
+    static ObjectValue KeyOnly(ObjectValue r, EntityInfo table)
+    {
+        var keys = new HashSet<string>(table.KeyColumns.Select(k => k.Property.Name));
+        return new ObjectValue(r.Type is INamedTypeSymbol n ? n : (INamedTypeSymbol)r.Type, r.Members.Where(m => keys.Contains(m.Name)).ToList());
+    }
+
+    /// <summary>
+    /// Whether only the write from this row found (t) can change the rows counted for it: the write from another row
+    /// found (t2, its row made or its conditions translated from t2) holds for them only when t2's key is t's. Then
+    /// the correction by this row's write alone is the whole of it.
+    /// </summary>
+    bool OnlyItsOwn(ManyValue mv, Step step, Env env, WriteEffect w, Row child, List<string> counted, Location at)
+    {
+        if (w.FoundEntity.Key is not { } key) return false;
+        string k = D.Quote(key.Name), own = w.Found + "." + k;
+        var other = new Row(w.FoundEntity, Aliases.Take(w.Found), null, RowMode.Cte);
+        var otherEnv = new RowValue(other);
+        if (w.Inserted is not null)
+        {
+            var made = (ObjectValue)Eval(w.Row!, w.Env!.With(w.FoundParameter, otherEnv));
+            string holds = Holds(mv, step, env, w.Ignored ? KeyOnly(made, w.Table) : made, w, at);
+            return holds == D.False || Sql.Conjuncts(holds).Any(c => Sql.EqualsColumnOf(c, other.Alias!, out var x, out var col) && col == k && x == own);
+        }
+        // a delete from another row found: one of its conditions ties the counted row's column to t2's key, which
+        // the count's ties to t's
+        return w.Deleted!.SelectMany(s => Sql.Conjuncts(Condition(Apply(s.Lambda(0), s.Env.With(w.FoundParameter, otherEnv), new RowValue(child)), s.Call.Syntax.GetLocation())))
+            .Any(c => Sql.EqualsColumnOf(c, other.Alias!, out var x, out var col) && col == k && (counted.Contains($"{x} = {own}") || counted.Contains($"{own} = {x}")));
     }
 
     /// <summary>Whether the counted rows' conditions hold for the inserted row <paramref name="r"/>, as SQL: the

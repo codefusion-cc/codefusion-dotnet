@@ -287,6 +287,8 @@ static class Sql
         }
         if (at < 0) return false;
         string left = condition.Substring(0, at), right = condition.Substring(at + 3);
+        // each side one term: in a OR x.c = t.id the other side is "a OR x.c", which no column is
+        if (!Atomic(left) || !Atomic(right)) return false;
         var name = new System.Text.RegularExpressions.Regex("^" + System.Text.RegularExpressions.Regex.Escape(alias) + @"\.(""(?:[^""]|"""")+""|[a-z_][a-z0-9_]*)$");
         if (name.Match(right) is { Success: true } r)
         {

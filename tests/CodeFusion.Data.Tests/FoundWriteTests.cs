@@ -41,7 +41,7 @@ public sealed class FoundWriteTests(OpsFixture fixture)
     public async Task AnInsertFromTheRowFoundAndTheRowGivenBack()
     {
         Assert.Equal("WITH t AS (SELECT p.id, p.name FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (id, owner_id, name, legs) SELECT $2, t.id, $3, 4 FROM t " +
-            "ON CONFLICT (id) DO NOTHING) SELECT t.id, t.name FROM t", Q.GivePet);
+            "ON CONFLICT DO NOTHING) SELECT t.id, t.name FROM t", Q.GivePet);
         var db = Db();
         Assert.Equal("""{"id":1,"text":"ann"}""", await Json(db.GivePet(U("ann"), 8001, U("fido"))));
         Assert.Equal(1L, await Scalar("SELECT owner_id FROM pets WHERE id = 8001 AND name = 'fido'"));
@@ -90,10 +90,23 @@ public sealed class FoundWriteTests(OpsFixture fixture)
     }
 
     [Fact]
+    public async Task NoRowFoundDeletesNothingEvenWhereTheLinkIsOneOfTwoConditions()
+    {
+        await using var admin = TestDb.Admin("cfdata_ops_w");
+        await admin.Execute("INSERT INTO pets VALUES (8301, 2, 'many legs', 777)");
+        var db = Db();
+        await Json(db.TakeLegsOrOwn(U("nobody"), 776));
+        Assert.Equal(204, _response.Status);
+        Assert.Equal(1L, await Scalar("SELECT count(*) FROM pets WHERE id = 8301"));
+        await Json(db.TakeLegsOrOwn(U("ben"), 776));
+        Assert.Equal(0L, await Scalar("SELECT count(*) FROM pets WHERE id = 8301"));
+    }
+
+    [Fact]
     public async Task EachRowFoundIsWrittenFrom()
     {
         Assert.Equal("WITH t AS (SELECT p.id, p.name FROM people p WHERE p.age = $1) INSERT INTO pets (id, owner_id, name, legs) SELECT t.id + 50000, t.id, t.name, 1 FROM t " +
-            "ON CONFLICT (id) DO NOTHING", Q.PetsForAge);
+            "ON CONFLICT DO NOTHING", Q.PetsForAge);
         var db = Db();
         await using var admin = TestDb.Admin("cfdata_ops_w");
         await admin.Execute("INSERT INTO people (id, name, age, active, born) VALUES (9701, 'a9701', 977, true, now()), (9702, 'a9702', 977, false, now())");
