@@ -145,7 +145,9 @@ the unique violation's path. What still allocates:
 
 - **The first time**: a connection prepares each statement on its first use, and the pools and queues fill up to
   what the load needs (at most 4,096 pooled commands).
-- **Large commands**: more than 64 parameters or 64 columns in a row; a command buffer past 64 KB isn't pooled.
+- **Large commands**: more than 64 parameters or 64 columns in a row; a command buffer past 64 KB isn't pooled. Rows
+  a write returns, or a read that joined an event-loop batch, are kept till the COMMIT: past 64 KB in buffers rented
+  from the shared array pool, so nothing once warm, but held in memory till the batch ends.
 - **Other failures**: a statement SQLite refuses for any other reason carries a `SqliteException` with its message.
 - **Your code**: replies, handlers and what you do with the rows.
 

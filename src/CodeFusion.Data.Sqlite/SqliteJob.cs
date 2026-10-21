@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Text;
@@ -86,7 +87,12 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
         Failed = false;
         BatchedRead = false;
         if (Buf.Length > JobPool.MaxPooledBytes) Buf = new byte[256];
-        if (Saved.Length > JobPool.MaxPooledBytes) Saved = new byte[256];
+        if (_savedOwn is not null)
+        {
+            ArrayPool<byte>.Shared.Return(Saved);
+            Saved = _savedOwn;
+            _savedOwn = null;
+        }
         _core.Reset();
         _life.Returned();
         JobLife.Poison(Buf);
@@ -242,9 +248,28 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
     internal static Action? SaveFault;
 #endif
 
+    /// <summary>The job's own buffer for kept rows while <see cref="Saved"/> is one rented for more than a job keeps
+    /// pooled with it; null otherwise.</summary>
+    byte[]? _savedOwn;
+
+    /// <summary>Room for <paramref name="n"/> more kept bytes. Past <see cref="JobPool.MaxPooledBytes"/>, the rows go in a
+    /// buffer rented from the shared array pool and given back with the job, so a large result kept till its COMMIT (a
+    /// read that joined an event-loop batch) allocates nothing once warm.</summary>
     void EnsureSaved(int n)
     {
-        if (SavedLen + n > Saved.Length) Array.Resize(ref Saved, Math.Max(SavedLen + n, Saved.Length * 2));
+        int need = SavedLen + n;
+        if (need <= Saved.Length) return;
+        int size = Math.Max(need, Saved.Length * 2);
+        if (size <= JobPool.MaxPooledBytes)
+        {
+            Array.Resize(ref Saved, size);
+            return;
+        }
+        var bigger = ArrayPool<byte>.Shared.Rent(size);
+        Saved.AsSpan(0, SavedLen).CopyTo(bigger);
+        if (_savedOwn is null) _savedOwn = Saved;
+        else ArrayPool<byte>.Shared.Return(Saved);
+        Saved = bigger;
     }
 
     /// <summary>Forgets an attempt whose transaction rolled back: the write runs again.</summary>

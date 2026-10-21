@@ -165,6 +165,48 @@ public sealed class ProviderAllocationTests : IDisposable
 
     // ---------- event-loop batches ----------
 
+    static readonly SqliteStatement TouchBig = new("UPDATE big SET n = n + 1 WHERE k = 1");
+    static readonly SqliteStatement ReadBig = new("SELECT s FROM big");
+
+    /// <summary>A read that joins a batch keeps its rows till the COMMIT: here about 100 KB, past what a job keeps pooled
+    /// with it, so the rows go in pooled buffers instead of new ones each time.</summary>
+    [Fact(Timeout = 60_000)]
+    public async Task LargeJoinedReadsAllocateNothingOnceWarm()
+    {
+        Assert.SkipWhen(Debug(), "Debug builds make every async state machine an object: run in Release");
+        var s = _db.Open(_db.Database(exclusive: true, batches: true, more: [
+            "CREATE TABLE big (k INTEGER PRIMARY KEY, n INTEGER NOT NULL, s TEXT NOT NULL); " +
+            "INSERT INTO big WITH RECURSIVE i(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM i WHERE x < 100) SELECT x, 0, printf('%.1000c', 'x') FROM i"]));
+        using var loop = new TestLoop(s);
+        var tasks = new ValueTask<DataResult>[3];
+        int reads = 1;
+        Action wakeUp = () =>
+        {
+            tasks[0] = Sqlite.Run<Value>(s.Write(TouchBig).Hold(), null, default);
+            for (int i = 1; i <= reads; i++) tasks[i] = Sqlite.Run<Value>(s.Read(ReadBig).Hold(), null, default); // joins: big was written
+        };
+        async Task<long> Measure(int wakeUps, int each)
+        {
+            reads = each;
+            long before = GC.GetTotalAllocatedBytes(precise: true);
+            for (int n = 0; n < wakeUps; n++)
+            {
+                await loop.WakeUp(wakeUp);
+                for (int i = 0; i <= each; i++)
+                    if (!tasks[i].Result.IsOk) throw new InvalidOperationException("a batched read or write failed");
+            }
+            return GC.GetTotalAllocatedBytes(precise: true) - before;
+        }
+        await Measure(50, 2); // warm
+        long once = long.MaxValue, twice = long.MaxValue;
+        for (int k = 0; k < 3; k++)
+        {
+            once = Math.Min(once, await Measure(100, 1));
+            twice = Math.Min(twice, await Measure(100, 2));
+        }
+        Assert.True(twice - once < 4_000, $"{once} B for 100 wake-ups with one 100 KB joined read, {twice} B with two");
+    }
+
     [Fact(Timeout = 30_000)]
     public async Task BatchedReadsOfUntouchedTablesAllocateNothingOnceWarm()
     {
