@@ -10,16 +10,19 @@ The goal: CodeFusion as fast as possible with zero allocations, beating or comin
 row is the latest measured result on the same machine and method; the iteration files have the details. Allocation
 is the GC collections and allocation rate of the CodeFusion process during a sustained run.
 
-| Workload | Machine | CodeFusion | Best Rust (entry) | Gap | Allocation | Iteration |
-|---|---|---|---|---|---|---|
-| Multicore contest: Conduit on Postgres, users at the 5-minute hold | GCP c4-highcpu-8 | not measured yet | not measured yet | | | |
-| $12 contest: feed on SQLite, users at the 5-minute hold | GCP C4 held to 1 vCPU / 2 GB | not measured yet | not measured yet | | | |
-| TechEmpower plaintext (pipelined 16), requests/s | reduced rig: app c4-highcpu-8, Postgres c4-highcpu-8, wrk n2-highcpu-16 | 7.51M | 8.91M (xitca-web) | -16% | 0 GC, 0 B/min | perf/techempower: codefusion-techempower notes, 2026-10-21 |
-| TechEmpower JSON, requests/s | same | 1.20M | 1.26M (xitca-web) | -5% | 0 GC, 0 B/min | same |
-| TechEmpower single query, requests/s | same | 706k | 628k (may-minihttp) | **+12%** | 0 GC, <=0.013 B/req | same |
-| TechEmpower multiple queries (20), requests/s | same | 64.9k | ~33.8k (may-minihttp; from the reported gap) | **+92%** | 0 GC, <=0.013 B/req | same |
-| TechEmpower fortunes, requests/s | same | 491k | ~578k (xitca-web; from the reported gap) | -15% | 0 GC, <=0.013 B/req | same |
-| TechEmpower updates (20), requests/s | same | 23.2k | ~22.6k (may-minihttp; from the reported gap) | **+2.5%** | 0 GC, <=0.013 B/req | same |
+| Workload | Machine | CodeFusion | Best Rust (entry) | Gap to Rust | Best other .NET (entry) | Allocation | Iteration |
+|---|---|---|---|---|---|---|---|
+| Multicore contest: Conduit on Postgres, users at the 5-minute hold | GCP c4-highcpu-8 | not measured yet | not measured yet | | | | |
+| $12 contest: feed on SQLite, users at the 5-minute hold | GCP C4 held to 1 vCPU / 2 GB | not measured yet | not measured yet | | | | |
+| TechEmpower plaintext (pipelined 16), requests/s | reduced TFB rig: app c4-highcpu-8, Postgres c4-highcpu-8, wrk n2-highcpu-16; TFB 57d92fbec6f8 | 7,506,549 | 8,908,020 (xitca-web) | -16% | 7,297,751 (aspnetcore Platform) | 0 GC, 0 B in a measured minute | perf/techempower: 2026-10-21-tfb-final.md |
+| TechEmpower JSON, requests/s | same | 1,201,705 | 1,263,920 (xitca-web) | -5% | 703,920 (aspnetcore Platform) | 0 GC, 0 B in a measured minute | same |
+| TechEmpower single query, requests/s | same | 706,377 | 628,393 (may-minihttp) | **+12%** | 381,963 (aspnetcore Platform) | 0 GC, at most 0.013 B/request | same |
+| TechEmpower multiple queries (20), requests/s | same | 64,920 | 33,892 (may-minihttp) | **+92%** | 32,210 (aspnetcore Platform) | 0 GC, at most 0.013 B/request | same |
+| TechEmpower fortunes, requests/s | same | 491,027 | 576,688 (xitca-web) | -15% | 307,474 (aspnetcore Platform) | 0 GC, at most 0.013 B/request | same |
+| TechEmpower updates (20), requests/s | same | 23,240 | 22,669 (may-minihttp) | **+2.5%** | 18,834 (aspnetcore minimal) | 0 GC, at most 0.013 B/request | same |
+
+The CodeFusion build is every performance branch merged: the event loop, pg-pipelining, data-batched-updates, two
+readers per core and four writers. These are reduced-rig numbers; the TechEmpower rounds run on larger hardware.
 
 ## Iterations
 
