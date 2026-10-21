@@ -10,16 +10,19 @@ The goal: CodeFusion as fast as possible with zero allocations, beating or comin
 row is the latest measured result on the same machine and method; the iteration files have the details. Allocation
 is the GC collections and allocation rate of the CodeFusion process during a sustained run.
 
-| Workload | Machine | CodeFusion | Best Rust (entry) | Gap | Allocation | Iteration |
-|---|---|---|---|---|---|---|
-| Multicore contest: Conduit on Postgres, users at the 5-minute hold | GCP c4-highcpu-8 | not measured yet | not measured yet | | | |
-| $12 contest: feed on SQLite, users at the 5-minute hold | GCP C4 held to 1 vCPU / 2 GB | not measured yet | not measured yet | | | |
-| TechEmpower plaintext (pipelined), requests/s | GCP C4 | not measured yet | not measured yet | | | |
-| TechEmpower JSON, requests/s | GCP C4 | not measured yet | not measured yet | | | |
-| TechEmpower single query, requests/s | GCP C4 | not measured yet | not measured yet | | | |
-| TechEmpower multiple queries (20), requests/s | GCP C4 | not measured yet | not measured yet | | | |
-| TechEmpower fortunes, requests/s | GCP C4 | not measured yet | not measured yet | | | |
-| TechEmpower updates (20), requests/s | GCP C4 | not measured yet | not measured yet | | | |
+| Workload | Machine | CodeFusion | Best Rust (entry) | Gap to Rust | Best other .NET (entry) | Allocation | Iteration |
+|---|---|---|---|---|---|---|---|
+| Multicore contest: Conduit on Postgres, users at the 5-minute hold | GCP c4-highcpu-8 | not measured yet | not measured yet | | | | |
+| $12 contest: feed on SQLite, users at the 5-minute hold | GCP C4 held to 1 vCPU / 2 GB | not measured yet | not measured yet | | | | |
+| TechEmpower plaintext (pipelined 16), requests/s | reduced TFB rig: app c4-highcpu-8, Postgres c4-highcpu-8, wrk n2-highcpu-16; TFB 57d92fbec6f8 | 7,506,549 | 8,908,020 (xitca-web) | -16% | 7,297,751 (aspnetcore Platform) | 0 GC, 0 B in a measured minute | perf/techempower: 2026-10-21-tfb-final.md |
+| TechEmpower JSON, requests/s | same | 1,201,705 | 1,263,920 (xitca-web) | -5% | 703,920 (aspnetcore Platform) | 0 GC, 0 B in a measured minute | same |
+| TechEmpower single query, requests/s | same | 706,377 | 628,393 (may-minihttp) | **+12%** | 381,963 (aspnetcore Platform) | 0 GC, at most 0.013 B/request | same |
+| TechEmpower multiple queries (20), requests/s | same | 64,920 | 33,892 (may-minihttp) | **+92%** | 32,210 (aspnetcore Platform) | 0 GC, at most 0.013 B/request | same |
+| TechEmpower fortunes, requests/s | same | 491,027 | 576,688 (xitca-web) | -15% | 307,474 (aspnetcore Platform) | 0 GC, at most 0.013 B/request | same |
+| TechEmpower updates (20), requests/s | same | 23,240 | 22,669 (may-minihttp) | **+2.5%** | 18,834 (aspnetcore minimal) | 0 GC, at most 0.013 B/request | same |
+
+The CodeFusion build is every performance branch merged: the event loop, pg-pipelining, data-batched-updates, two
+readers per core and four writers. These are reduced-rig numbers; the TechEmpower rounds run on larger hardware.
 
 ## Iterations
 
@@ -40,7 +43,9 @@ Name the file `YYYY-MM-DD-<short-slug>.md` and add a row to the table above.
 - **Code:** the commit or branch of each side (and of codefusion-dotnet, for a contest entry).
 - **Machine:** the hardware or VM shape, OS, .NET SDK, Postgres or SQLite version, and what else was running.
 - **Method:** the tool and its settings (BenchmarkDotNet job, load generator and users, the contest's scoring steps),
-  the rounds and their order, and how the result was picked (best of, median of).
+  the rounds and their order, and how the result was picked (best of, median of). Alternate the order (A B B A, or
+  rotate it each round): on a shared VM a build's place in the run moved results by ±5%, more than the change measured
+  (2026-10-21-mix-bisect.md).
 
 | Case | Before | After | Change |
 |---|---|---|---|

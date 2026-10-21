@@ -229,7 +229,7 @@ public sealed class PropertyTests
 
     public static Arbitrary<Pred[]> Predicates() => Gen.ArrayOf(PredGen(3), 12).ToArbitrary();
 
-    [Property(MaxTest = 8, Arbitrary = [typeof(PropertyTests)])]
+    [Property(MaxTest = 8, Arbitrary = [typeof(PropertyTests)], SkipUnless = nameof(TestDb.Set), SkipType = typeof(TestDb), Skip = "CODEFUSION_TEST_DB is not set")]
     public void APredicateSelectsInPostgresWhatItSelectsInCSharp(Pred[] predicates)
     {
         TestDb.Require();

@@ -19,6 +19,10 @@ static class TestDb
 
     public static void Require() => Assert.SkipWhen(ConnectionString is null, "CODEFUSION_TEST_DB is not set");
 
+    /// <summary>Whether CODEFUSION_TEST_DB is set: a property test skips on it through its attribute, since a skip thrown inside a
+    /// property counts as its failure.</summary>
+    public static bool Set => ConnectionString is not null;
+
     public static NpgsqlDataSource Admin(string? schema = null)
     {
         var b = new NpgsqlConnectionStringBuilder(ConnectionString!);
