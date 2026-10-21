@@ -53,6 +53,7 @@ is the GC collections and allocation rate of the CodeFusion process during a sus
 | 2026-10-21 | [twelve-entry-spec-options](2026-10-21-twelve-entry-spec-options.md) | The $12 entry on feat/http-spec-options, and the SQLite review fixes split out | spec options level; entry -11% (45.3-47.0k vs 51.3-53.5k), mostly the commit before a loop read; that line out: 49.1-50.1k |
 | 2026-10-21 | [sqlite-park-with-batches](2026-10-21-sqlite-park-with-batches.md) | SQLite Exclusive with event-loop batches: parking against spinning | NORMAL level; FULL with readers off the loop: loop -12 to -19%, readers +23 to +50%, both about -5% |
 | 2026-10-21 | [twelve-entry-read-in-batch](2026-10-21-twelve-entry-read-in-batch.md) | The $12 entry after the second SQLite review, against e3b4ce0, with probes | about -5% (49.5-52.6k vs 52.8-54.6k), p95/p99 level; all of it reads waiting for the COMMIT (not deferred: 55.5-55.9k) |
+| 2026-10-21 | [twelve-entry-reads-by-table](2026-10-21-twelve-entry-reads-by-table.md) | The $12 entry with reads joining the batch only by table, against e3b4ce0 | level within the spread (51.8-52.6k vs 51.5-53.9k), p95/p99 a little lower; most reads still wait, as the guarantee needs |
 
 ## Template
 
