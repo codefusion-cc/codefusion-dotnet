@@ -141,7 +141,7 @@ public sealed class ShapeGeneratorTests
 
     /// <summary>A provider whose dialect lacks what the shapes need, as SQLite's will.</summary>
     const string Lite = """
-        [SqlDialect("lite", WritableCtes = false, Lateral = false, RegexReplace = "")]
+        [SqlDialect("lite", WritableCtes = false, Lateral = false, RegexReplace = "", ListRows = "")]
         public readonly struct Lite : IDataProvider<Lite, PgStatement, PgCommand>
         {
             public static PgStatement Statement(string sql, params ReadOnlySpan<DataType> parameters) => throw null!;
@@ -157,6 +157,7 @@ public sealed class ShapeGeneratorTests
             public Write<Name> Then(Utf8 name) => People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { OwnerId = p.Id, Name = name })).Select(p => new Name(p.Id, p.Name));
             public Many<Name> Matches() => People.Select(p => new Name(p.Id, p.Name.ReplaceMatches("a+", "b"))).Many();
             public Page<Name> Groups(Paging page) => People.SelectMany(p => p.Pets, (p, x) => x).OrderByDescending(x => x.Id).Page(page, 10).Select(x => new Name(x.Id, x.Name));
+            public Write Names(Utf8List names) => Insert(People, names.AsRows().Select(n => new Person { Name = n }));
         }
         """;
 
@@ -165,10 +166,11 @@ public sealed class ShapeGeneratorTests
     {
         var r = Run(Entities + Lite);
         var errors = r.Generator.Where(d => d.Id == "CFDATA001").Select(Message).ToList();
-        Assert.Equal(3, errors.Count);
+        Assert.Equal(4, errors.Count);
         Assert.Contains(errors, m => m.Contains("Then in lite, which has no CTE that writes", System.StringComparison.Ordinal));
         Assert.Contains(errors, m => m.Contains("ReplaceMatches in lite", System.StringComparison.Ordinal));
         Assert.Contains(errors, m => m.Contains("a page of each row's children in lite, which has no LATERAL join", System.StringComparison.Ordinal));
+        Assert.Contains(errors, m => m.Contains("the rows of an insert from a list in lite", System.StringComparison.Ordinal));
     }
 
     [Theory]

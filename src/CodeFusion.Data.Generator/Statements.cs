@@ -1005,6 +1005,7 @@ sealed partial class Translator
     {
         if (steps.Count == 0 || steps[steps.Count - 1].Name != "Select")
             throw new Refused(list.At, $"an insert from a list that doesn't end in .Select(x => new {e.Type.Name} {{ ... }})");
+        if (D.ListRows.Length == 0) throw new Refused(list.At, $"the rows of an insert from a list in {D.Name}, which can't make a list's elements rows");
         var p = ParamOf(list.List, list.At);
         if (p.Kind != ParamType.TextArray) throw new Refused(list.At, "AsRows of a list that isn't a list of Utf8");
         string alias = Aliases.Take(LambdaName(steps) ?? "v");
