@@ -1,0 +1,24 @@
+# Weekly version updates. Security updates are on in the repository's settings and come whenever an advisory does.
+# Updates are grouped per ecosystem, so each week is one PR to review, and nothing auto-merges.
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    # The generators build against the oldest Roslyn they support, so they load in every .NET 10 SDK; a newer
+    # Microsoft.CodeAnalysis would break consumers on older SDKs, and CI (newest SDK) wouldn't notice. Raise these
+    # by hand, with the SDK floor in mind.
+    ignore:
+      - dependency-name: Microsoft.CodeAnalysis*
+    groups:
+      nuget:
+        patterns: ['*']
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']

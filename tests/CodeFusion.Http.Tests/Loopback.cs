@@ -27,11 +27,11 @@ internal sealed class TestServer : IAsyncDisposable
 
     public static TestServer Start(HttpHandler handler, Action<HttpServerOptions>? configure = null)
     {
-        var o = new HttpServerOptions
+        var o = TestTransport.Apply(new HttpServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, 0),
             HeartbeatInterval = TimeSpan.FromMilliseconds(20),
-        };
+        });
         configure?.Invoke(o);
         TestServer? t = null;
         o.OnHandlerError ??= (_, e) => { lock (t!.Errors) t.Errors.Add(e); };
@@ -48,6 +48,17 @@ internal sealed class TestServer : IAsyncDisposable
         while (Server.Connections != n)
         {
             if (Environment.TickCount64 > until) throw new TimeoutException($"{Server.Connections} connections, expected {n}");
+            await Task.Delay(5);
+        }
+    }
+
+    /// <summary>Waits until <paramref name="done"/>, failing the test with <paramref name="what"/> past the time.</summary>
+    public static async Task Until(Func<bool> done, int timeoutMs, Func<string> what)
+    {
+        long until = Environment.TickCount64 + timeoutMs;
+        while (!done())
+        {
+            if (Environment.TickCount64 > until) Assert.Fail(what());
             await Task.Delay(5);
         }
     }

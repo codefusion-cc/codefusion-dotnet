@@ -94,7 +94,9 @@ internal enum ParameterKind
     Aborted,
 }
 
-internal sealed record ParameterModel(string Name, ParameterKind Kind, string Type);
+/// <param name="Min">For a long or int route value with [Range]: the lowest value let in, a C# literal; null for 0.</param>
+/// <param name="Max">The highest, or null for the type's own.</param>
+internal sealed record ParameterModel(string Name, ParameterKind Kind, string Type, string? Min = null, string? Max = null);
 
 internal enum ReplyKind
 {

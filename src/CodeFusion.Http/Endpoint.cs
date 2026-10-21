@@ -25,6 +25,9 @@ public abstract class Endpoint
     /// <summary>How the dispatcher checks the Authorization header before <see cref="Invoke"/>.</summary>
     public AuthMode Auth { get; internal set; }
 
+    /// <summary>The reply to a route value that doesn't bind, when the endpoint names its own; null for the app's.</summary>
+    public ErrorReply? InvalidRouteValue { get; internal set; }
+
     /// <summary>Called once when the endpoint is mapped: resolves its route values, services and auth.</summary>
     public abstract void Initialize(EndpointSetup setup);
 
@@ -100,12 +103,23 @@ public sealed class EndpointBuilder
 
     internal Endpoint Endpoint => _endpoint;
 
-    /// <summary>Requests without a valid token (<c>Authorization: Token &lt;jwt&gt;</c>) get a 401.</summary>
+    /// <summary>Requests without a valid token (<c>Authorization: Token &lt;jwt&gt;</c>, or the scheme the app set) get a
+    /// 401.</summary>
     public EndpointBuilder AuthRequired() => Set(AuthMode.Required);
 
     /// <summary>A request without the header is anonymous (its <see cref="Viewer"/> is 0); one with a header that
     /// isn't a valid token gets a 401.</summary>
     public EndpointBuilder AuthOptional() => Set(AuthMode.Optional);
+
+    /// <summary>A long or int route value of this endpoint that doesn't bind gets <paramref name="error"/>, not
+    /// <see cref="HttpAppErrors.InvalidRouteValue"/>: <c>.WithInvalidRouteValue(Errors.InvalidUserId)</c>.</summary>
+    public EndpointBuilder WithInvalidRouteValue(ErrorReply error)
+    {
+        ArgumentNullException.ThrowIfNull(error);
+        _app.ThrowIfStarted();
+        _endpoint.InvalidRouteValue = error;
+        return this;
+    }
 
     EndpointBuilder Set(AuthMode mode)
     {

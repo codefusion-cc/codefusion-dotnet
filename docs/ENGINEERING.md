@@ -1103,9 +1103,125 @@ hot paths is the same as before: each check is a `[Conditional("DEBUG")]` call, 
 Http 505: all pass in Release (the 7 Debug-only check tests skip) and in Debug (the allocation tests skip), against a
 Postgres 18 with CODEFUSION_TEST_DB and the four CODEFUSION_TEST_PG_* logins set. The allocation tests pass in Release.
 
+## Options for an app's own spec (the feed API)
+
+The $12 contest's feed API couldn't be written with the library: it kept a hand-written auth layer and parsed its
+route values itself. Each gap became a public option with today's behavior as its default, not a case for that app.
+Each test was red first: on a stub of the API that compiled but didn't do it.
+
+| Gap | Option | Test | Red before |
+|---|---|---|---|
+| the scheme was `Token ` only | `JwtOptions.Scheme`, and `AddJwtAuth(secret, JwtOptions)` and `Jwt(secret, JwtOptions)` beside the old overloads | `JwtSchemeTests` (exact case, one space, no tab, a Cyrillic look-alike, any RFC 9110 token, invalid schemes refused at startup), `SpecOptionsTests.ABearerAppReadsBearerHeadersOnly`, `TheDefaultAppStillReadsToken` | 17 of 34: `Bearer` refused, `Token` still read |
+| no claim but `sub` reached a handler | `JwtClaim` (`Required`, `MinBytes`, `MaxBytes`) on `JwtOptions.Claims`; `Viewer.Claim`, `Viewer.TryGetClaim`; `Jwt.Issue(userId, params ReadOnlySpan<Utf8> claims)`, `Issue(userId, now, claims, dest)`, `MaxIssuedBytesWith` | `JwtClaimTests` (escapes, surrogate pairs and lone surrogates, raw invalid UTF-8, null, wrong types, lengths at 0, 1, max and max+1 once unescaped, a 2,900-byte claim, repeats, escaped names of 64 bytes, every bad `sub`, forged and expired tokens leaving the arena untouched, issue and read back, a property test of 3,000 payloads against a `JsonDocument` reading of the rules), `SpecOptionsTests.AHandlerReadsTheTokensClaimAsItWasIssued`, `AnOptionalClaimThatIsAbsentReadsAsNone` | 56 of 71 on a stub that read no claim |
+| one 401 body for every reason | `HttpAppErrors.MissingToken`, `InvalidToken`, `InvalidTokenPayload`, null by default | `SpecOptionsTests.EachRefusalHasItsOwnBody` (16 headers against a required and an optional endpoint: none, empty, spaces, another scheme, its case, the scheme alone, two spaces, not a JWT, forged, expired, bad sub, no claim, a claim of the wrong type, expired with a bad payload, valid), `UnsetReasonsAnswerWithUnauthorizedAsBefore`, `AnUnsetPayloadReasonAnswersAsAnInvalidToken`, `TheDefault401IsTheSameBytesForEveryReason` | 16 of 39 on properties that dispatch didn't read |
+| a body that isn't JSON and no body were the 422 of a body of another shape | `HttpAppErrors.MalformedBody`, `MissingBody`; `BodySource.MalformedBody`, `MissingBody`, `IsEmpty` and a constructor that takes them | `SpecOptionsTests.EachBodyFailureHasItsOwnReply`, `UnsetBodyReasonsAnswerWithInvalidBodyAsBefore`, `NoBodyIsMalformedUnlessTheAppSaysOtherwise` (27 bodies each: none, empty, a space, a BOM alone, cut short in five ways, trailing bytes, a bad escape, single quotes, a trailing comma, depth 65 and 63, every non-object root, missing and bad fields, raw invalid UTF-8 in a string), `AStructsOwnInvalidBodyGivesWayToTheAppsReasons`; the generator's snapshots | 34 of 134, among them `[1,`, which today's binder answered as another shape without reading on |
+| a route value that didn't bind was the app's 404, and nothing bounded one | `HttpAppErrors.InvalidRouteValue` (null: `NotFound`), `EndpointBuilder.WithInvalidRouteValue`; `[Range]` on a `long` or `int` route parameter; `RequestContext.RejectRouteValue` for the generated code | `SpecOptionsTests.ARouteValueThatDoesntBindGetsTheAppsReply` (23 paths: 0, -1, `+1`, `1.5`, `1e3`, `0x10`, spaces escaped either side, one past a long, Arabic-Indic and fullwidth digits, `%31`, leading zeros, int bounds and one past), `UnsetARouteValueThatDoesntBindIsANotFoundAsBefore`, `AuthIsCheckedBeforeTheRouteValue`, `AnEndpointCanNameItsOwnReply`, `AnEndpointsReplyIsCheckedWhenItIsSet`; `SnapshotTests.RouteValues`, `DiagnosticTests.RouteValueRangesItCantUse` and `RouteValueRangesItUses` | 23 of 170 on a stub; 7 of 11 diagnostic cases with the analysis taken out |
+| the feed API itself | `tests/CodeFusion.Http.Tests/Sample/FeedApp.cs`: the spec on these options alone, with an in-memory store | `FeedAppTests` (the spec's error table row by row: 15 auth failures on two endpoints, auth before the id, every body failure, trimming and the 500-character limit, likes); 10 `AppAllocationTests` cases | 1,176 B per request for a malformed body: a `JsonException` each |
+
+What it decided:
+
+- The scheme is matched as bytes, case included, then exactly one space, as `Token ` was. RFC 9110 calls schemes
+  case-insensitive and RFC 6750 allows several spaces; reading them leniently would change what `Token` apps accept,
+  and an exact match leaves nothing for a proxy and the app to read differently. Neither is an option yet.
+- Claims are declared for the whole app at runtime, not per endpoint: a token's payload is valid or not wherever it
+  is read. A handler reads them by name (`viewer.Claim("username"u8)`, a scan of at most 16 names), and an undeclared
+  name throws so that a typo can't read as an empty claim. A claim can't be a view of the request buffer, which holds
+  base64url: the payload is decoded into the arena, twice its size, so that an escaped value is unescaped at its own
+  offset in the second half, as `JsonBody` does. Without declared claims the payload stays on the stack as before,
+  and the arena isn't touched.
+- The verifier is one path, `Jwt.Check`, which reports why a token failed (`TokenCheck`). `Verify` and the
+  dispatcher both use it. A bad `sub` or claim no longer stops the read early: the rest is still read, so an expired
+  or malformed token is reported as invalid whatever its claims hold.
+- `JsonBody.TryTextEquals` unescaped into a fixed 96-byte buffer, enough for the names it had (at most 16 bytes). A
+  declared name may be 64 bytes, so it now takes what the raw name needs, at most six bytes for each byte compared
+  (`ALongDeclaredNameMatchesThroughEscapes`).
+- The reasons are nullable properties next to `Unauthorized`, not a new reply type: an app that set only
+  `Unauthorized` (Conduit's `{"errors":{"body":[...]}}`) keeps it for every reason. A header without the scheme is
+  the missing reason, as the feed spec says, even on an optional endpoint, where it stays a 401 as before.
+- (Superseded by the single pass below: nothing throws now, and malformed means `JsonCursor.Malformed`.) A body was
+  malformed when the reader threw: a syntax error, an end too early, anything after the root but whitespace, depth
+  past 64. A root that isn't an object is read to its end, so `[1,` is malformed and `[]` is another shape. That read is bounded by the body limit, and no binder stops early on a well-formed body anyway.
+  Raw invalid UTF-8 inside a string isn't a syntax error to `Utf8JsonReader`, so it stays a bad field, as before.
+  Missing means no bytes at all; whitespace is malformed. Neither new reply is a struct member: a struct's own
+  `InvalidBody` already answers for its shape, and a reason the app names wins over it.
+- A route value's bounds are a `[Range]` on the handler's parameter, read by the generator as it reads them on query
+  fields (its ends rounded inward, an exclusive end moved in by one), and compiled into the parse's own `if`: no
+  `[Range]` emits the same check as before. A `[Range]` on a `Utf8` route value, one the generator can't read, and
+  one that leaves no value of digits are CFH0103. The reply is the endpoint's, then the app's, then `NotFound`, one
+  `??` chain in `RejectRouteValue`. Auth runs in the dispatcher before the endpoint binds anything, as before.
+- A malformed body cost a `JsonException` (1,176 B per request in `AppAllocationTests`), as it had since the binders
+  were written; it mattered once a malformed body had its own reply. For one commit the binder checked every body's
+  syntax first, without throwing (`JsonSyntax`, about 150 lines, one pass, since folded into `JsonCursor`). The check is never stricter than the
+  reader: `JsonSyntaxTests` (60 cases, 25,000 generated inputs, depth 63 to 1,000) and the `json-syntax` fuzz target
+  hold them to the same verdict. Broken on purpose (leading zeros taken, the depth limit one off), the property test
+  failed.
+- That read a well-formed body twice: binding got 65 to 75% slower
+  ([2026-10-21-body-syntax-check.md](benchmarks/2026-10-21-body-syntax-check.md)). Binding first again gave that
+  back but made a malformed body throw (1,192 B, about 4 µs).
+- Now one reader does both, in one pass: `JsonCursor`, that state machine read a token at a time, with
+  `Utf8JsonReader`'s tokens (type, start, value bytes, escape flag, `TryGetInt64`, `TryGetInt32`, `TryGetDouble`,
+  `Skip`). It reports a syntax error as `Malformed` instead of throwing. `JsonBody` reads through it, the generated
+  binders have no `try` or `catch`, and `ReadToEnd()` says whether the body was JSON before any field's reply. A
+  malformed body costs no exception and no allocation, and stops where it breaks (23 ns at its second byte). On the
+  three bodies measured (57 B to 2 KB), valid and bad-field bodies bind within noise to 35% faster than before the
+  branch (third iteration of the benchmark file).
+  - Held to the reader token by token: `JsonSyntaxTests` (60 cases, 25,000 generated inputs with numbers at and past
+    the Int32, Int64 and Double limits, 5,000 arbitrary byte arrays, depth 63 to 1,000) and the `json-syntax` fuzz
+    target, replayed at 20 times its mutations.
+  - The differential found two of the cursor's own mistakes before anything ran on it: `Utf8JsonReader.TryGetDouble`
+    returns an infinity for `1e400` rather than false (the binder refuses it with `IsFinite`, as before), and a
+    closing token kept the previous string's escape flag.
+  - `SpecOptionsTests.NoBodyThrowsWhileItIsBound` counts first-chance exceptions while all 42 bodies of the table bind
+    (20 of them threw before). `EdgeTests.ABodyIsBoundAndCheckedInOnePassWithoutExceptions` pins the generated code.
+  - `AppAllocationTests` has the malformed feed case back under 0.5 B, with no allowance.
+- The JWT verifier keeps `Utf8JsonReader` and its `catch`: it parses only a payload the secret signed, so a flood of
+  forged tokens never reaches a parser.
+- An Opus review of the diff found nothing critical or high. Fixed, each test red on the code before:
+  `Jwt.Issue` asked the arena for six times a value's length before checking the value (a 1 MB claim took about
+  8 MB from the pool, then a 500), and its size sum could overflow: the claims are checked first now, sized by their
+  real escapes, and refused once the payload passes `MaxTokenBytes`, so the payload fits on the stack and the
+  `ArrayPool` is gone (`AValueIssueRefusesTakesNothingFromTheArena`, `IssuingChecksTheClaimsAsReadingWould`). A
+  `Viewer` kept past its request read the connection's next claims beside its own `Id`; each request now has a
+  generation, and a stale `Viewer` throws on `Claim` (`AViewerKeptPastItsRequestCantReadTheNextRequestsClaims`). The
+  lifetime overloads named `options` in their exception (`ABadLifetimeIsNamedAsTheCallerWroteIt`). Two summaries I
+  had left as placeholders got their text.
+- Changes an existing app can notice, all deliberate: a `[Range]` on a `long` or `int` route parameter was ignored
+  and is now enforced (an out-of-range value gets `NotFound` unless the app sets a reply), and one on a `Utf8` route
+  value is CFH0103; a signed token with bytes after its header or payload object is refused; an anonymous `Viewer` is
+  no longer `default(Viewer)`; `jwt.Issue(id, default)`, which bound to the `Span<byte>` overload, is now ambiguous.
+  `Issue` writes every declared claim when it is given values, so it can't leave out one optional claim and keep
+  another; that needs a way to tell an absent `Utf8` from an empty one.
+- `FeedApp` is the proof that the spec needs nothing app-specific: it reads no header and parses no id itself. What
+  it still does by hand is the spec's own: trimming the post and counting its characters. `Utf8.Trim()` and
+  `Utf8.Slice(start, length)` came for it: views of the same bytes, bounds-checked against the text and not its
+  buffer, so the trimmed post is no longer copied into the arena (`Utf8Tests`: edges, out-of-range starts and lengths
+  including `int.MaxValue`, JSON whitespace only, a property test against `Span.Trim`, no allocation; 21 of 48 red
+  on a stub).
+
+### Second security review (d1a1f85)
+
+Twelve findings: 0 critical, 0 high, 1 medium, 6 low, 5 info. `JsonCursor` held: no divergence from `Utf8JsonReader`
+was found, and no invalid UTF-8 reaches a handler or a response. Each fix's test was red on the code before it,
+except where the row says the test is a guard.
+
+| # | Finding | Fix | Test | Red before |
+|---|---|---|---|---|
+| 1 | A `Viewer` read from another thread checked the generation once, then read the claim's place: it could read the next request's place, or a torn one | a seqlock: the generation is read (`Volatile.Read`) before and after the place, with a full fence between; `HandlerDone` bumps it first with `Interlocked.Increment` | `SpecOptionsTests.AViewerReadFromAnotherThreadThrowsOrReadsItsOwnRequest`: 16 threads read a kept `Viewer` for 3 s while one connection alternates alice and bob | 1,891 and 55,215 bad reads in two runs (absent, bob's place, `ArgumentOutOfRangeException`); 0 in three runs after |
+| 5 | A `Viewer` made by hand read every claim as absent, so a typo passed its unit test | every name throws on a `Viewer` the dispatcher didn't make | `AViewerMadeByHandHasNoClaimsSoEveryNameThrows` | no exception |
+| 12 | The claim ranges started at 0, "present at 0, length 0" | they start at -1 | the claim tests, as a guard | (hardening) |
+| 2 | `Issue` held only the payload to the token's limit before asking the arena: a 2,950 to 4,010-byte value took 4 to 5 KB, then was refused | the exact token, numbers at their real length, is checked before anything is written or allocated | `ATokenPastItsLimitIsRefusedBeforeTheArenaIsAsked` (a 3,200-byte value at `MaxBytes` 4096), `ATokenIsRefusedExactlyWhenItWouldPassTheLimit` (2,900 to 3,100 bytes against the formula, a guard) | 1 allocation |
+| 9 | `Issue` wrote `"sub":"0"` and `"sub":"-5"`, which every request then refused | a user ≤ 0 throws `ArgumentOutOfRangeException`, before the arena | `AUserTheVerifierWouldRefuseIsntIssued` (0, -5, `long.MinValue`) | issued |
+| 3 | A later envelope reset each field but not a nested field's value and error, so the first wrapper's reason answered for the last (older than the spec options) | the reset clears `n{i}` and `e{i}` too | `ALaterWrapperReplacesAnEarlierOnesNestedErrorsToo` (three orders) | 1 of 3: `bad age` for a last wrapper with no author |
+| 4 | On a body cut short in an array, `ReadTextArray` returned an array whose count ran past its texts; no handler saw it, since `ReadToEnd` decides first | `Invalid` when the cursor is malformed | `AnArrayInAMalformedBodyIsInvalid` (four cuts) | 4 of 4 |
+| 8 | A signed `exp` of `1e400` reads as an infinity, so the token never expired (older than the spec options) | an `exp` or `nbf` that isn't finite makes the payload invalid; a past one, `-1e400` among them, stays expired | `ATimeThatIsntAFiniteNumberIsntAUsablePayload` (seven cases, `Verify` too) | 3 of 7: valid |
+| 10 | `Jwt.Viewer` and `JsonSyntax.IsValid` were called only by tests, and the auth property test covered `Jwt.Viewer`, not the dispatcher's path | both deleted; the dispatcher's rule is `HttpApp.Refuses`, which `Dispatch`, `BinderPropertyTests` (through `JwtSchemeTests.Dispatched`: `Authenticate` and `Refuses`) and the hand-written benchmark app all call; the cursor check is test code | `ViewersMatchTheContestAuth`, `ArbitraryHeadersAgreeToo` | with the rule broken on purpose (a header without the scheme taken as anonymous), 2 red; the old test stayed green on that |
+| 11 | `[Range(typeof(ulong), ...)]` was CFH0103 | `UInt64` among the types the generator reads | `RouteValueRangesItUses` (`typeof(ulong)`, `typeof(byte)`) | CFH0103 |
+| 7 | `TryTextEquals` said its text was ASCII of at most 16 bytes; a paragraph said a body is malformed when the reader throws; `JsonSyntax` was described as the binders' check | rewritten or marked superseded | (comments) | |
+| 6 | The benchmark's conclusions went past what two small bodies, best of two rounds, could support | `BodyBindingBenchmarks` adds a 2 KB order (numbers, a bool, nested objects, skipped keys, a long escaped note) and an early malformation, checks each body binds as its kind says, and runs three rounds for a median; the docs now claim what that measures | third iteration in `docs/benchmarks/2026-10-21-body-syntax-check.md` | (claims) |
+
 ## Fuzzing (tests/CodeFusion.Fuzz)
 
-Coverage-guided fuzzing of everything that reads network bytes: 11 SharpFuzz targets (the table is in
+Coverage-guided fuzzing of everything that reads network bytes: 13 SharpFuzz targets (the table is in
 `tests/CodeFusion.Fuzz/README.md`). Each throws when an invariant breaks, and the same `Run` serves three engines:
 
 - `dotnet test`: `Corpus/<target>/` (551 seeds taken from the existing tests' inputs, plus the regressions below) and a
@@ -1134,8 +1250,9 @@ Directory.Packages.props: nothing else uses it.
 | 3 | `PgConnection.Fill` | `R` + length 0x3FFFFFFF (5 bytes) | allocated 1 GB before any of the message came; without TLS anyone on the path can send it | Fixed: the buffer doubles as the message's bytes fill it, up to its length. `PgProtocolTests.AnAnnouncedGigabyteIsNotAllocatedBeforeItArrives`, `AMessageLargerThanTheBufferGrowsItAsItArrives` |
 | 4 | `PgConnection.CheckParameter` | ParameterStatus `integer_datetimes\0` (a name, no value) | `ArgumentOutOfRangeException` from the value's slice, at startup and mid-query | Fixed: refused as malformed. `AParameterStatusWithoutAValueIsMalformed`, rows in `BadStartups` and `Malformed` |
 | 5 | `PgSettings.Parse` | `Port=9999999993` | `OverflowException` where callers expect `FormatException` | Fixed. `MalformedSettingsAreRefused` rows |
+| 6 | `Jwt` payload and header (`jwt-claims`, on its first replay) | `{"sub":"2","user\u006eame":"","exp":1700000600}+`, and a 0xBF byte after the object | taken: the reader stopped at the root object's end and never read what followed, so a signed payload or header with trailing bytes verified. Only the secret's holder could make one, and every token issued here ends at its `}` | Fixed: whatever follows must be whitespace, as `JsonDocument` requires. `JwtClaimTests.AnythingAfterThePayloadOrHeaderMakesTheTokenInvalid`, `ARawByteAfterThePayloadIsInvalid` |
 
-All five were red before their fix. Each minimized input is in `Corpus/` as `regression.*`. Nothing committed in either tree.
+All six were red before their fix. Each minimized input is in `Corpus/` as `regression.*`. Nothing committed in either tree.
 
 Seen, not changed then: `PgRow.GetUnixMicroseconds` added the 1970-to-2000 offset unchecked, so a value in Postgres's
 last 30 years wrapped silently. Fixed with the Postgres client's review fixes.
@@ -1240,3 +1357,172 @@ include (`--test-project` can add them).
 
 Targeted reruns: `mutate` takes character spans, `**/File.cs{start..end}`, so a rerun of only the lines that had
 survivors takes minutes instead of the whole file's run.
+
+## The event-loop transport (HttpTransport.EventLoop)
+
+### Why
+
+On one pinned CPU with 256 keep-alive connections the Sockets transport made 2 `recvfrom` and 1 `sendto` per
+response. The first receive is the zero-byte one that waits for the next request: .NET's `ReceiveAsync` always tries
+the call at once before it registers for readiness, and right after a response the client hasn't answered yet, so
+that try finds nothing. Its readiness completion then costs no call (the runtime skips the syscall for a zero-byte
+read), and the real `Receive` reads the request. No option of `System.Net.Sockets` skips the first try: any receive
+started while its queue is ready makes the call. So one receive per request needs readiness from somewhere else.
+
+### How
+
+`HttpServerOptions.Transport = HttpTransport.EventLoop` starts `EventLoops` threads (one per core by default), each
+with its own epoll (Linux) or kqueue (macOS) set. A connection's socket is added once, for reading (and for writing
+once a send has had to wait) and edge-triggered (`EPOLLIN | EPOLLRDHUP | EPOLLET`, `EVFILT_READ` with `EV_CLEAR`), with its slot and a connection id
+as the event's data, so a late event of a closed socket can't reach the connection object's next socket. The
+connection's wait for a request becomes `Arm()`: no call, only a flag. The loop's edge completes the wait on the
+loop's thread, and the request is read, handled and answered there until the handler first waits. Everything else in
+`HttpExchange` (the parse, deadlines, the close watch, the linger, the send-rate checks) is the same code for both
+transports; a send that waits for room waits on the loop (see the review fixes, 7).
+
+Edges are not repeated, so the exchange keeps one that comes while no wait is armed (`_edge`), and whoever turns
+`_armed` from 1 to 0 completes the wait, exactly once. Three ways an edge would be lost, each with its test:
+
+- A receive that fills the buffer may leave bytes the kernel won't announce again: it sets the edge itself
+  (`ARequestLargerThanTheBufferIsReadWhole`).
+- The client's last bytes and its FIN or reset can come in one edge; the short read takes the bytes and doesn't see
+  the end. An edge with `EPOLLRDHUP`, `EPOLLHUP`, `EPOLLERR` or `EV_EOF` stays set until a receive sees the end
+  (`BytesAndTheCloseInOneEdgeStillCloseTheConnection`, which holds the loop with another connection's handler so both
+  arrive in one edge). The stress test found this one: 30 to 60 of 1,200 connections that sent half a head and reset
+  stayed open.
+- Closing a socket takes it out of the set without an event. The connection's own close takes back its armed wait
+  (`AnAsyncHandlersLastAnswerEndsTheConnection`); a timeout or the stop's abort, which close it from the heartbeat or
+  the stop, queue a made-up edge to the thread pool (`AnIdleConnectionPastItsKeepAliveTimeoutIsClosed`,
+  `AHeadThatStallsIsClosedAfterTheRequestTimeout`, `AStopClosesIdleConnectionsAtOnce`).
+
+The loops end with the server's stop, after its connections; `ServerChecks` now fails a test whose server left one
+running. Descriptors are `SafeFileHandle`s, so an `Add` racing the end gets `ObjectDisposedException` (the connection
+closes quietly) rather than a reused descriptor; a refused `epoll_ctl` is an `IOException`, reported as a failed
+connection. `struct epoll_event` is 12 bytes on x86 and x86-64 (packed) and 16 elsewhere; CI runs the suite on both.
+
+A handler that blocks its thread holds up every connection on its loop. The default became EventLoop on Linux once
+the 8-core TechEmpower run measured it (plaintext +20%, json +42%, db and fortunes +9% over Sockets); Sockets stays the
+default elsewhere, and the choice for handlers that block or apps that put the p99 under a mixed load first.
+
+### Direct calls, batches and listeners (later on the same branch)
+
+- **Direct calls:** a loop's connections call `recv` and `send` themselves (`DirectSocket`: LibraryImport with
+  SuppressGCTransition, since neither can block on a non-blocking socket). The handle is held for each call, as Socket
+  holds it, so a socket the heartbeat closed is an ObjectDisposedException, never a call on a reused descriptor number.
+  EAGAIN maps to WouldBlock and EINTR is retried. Peeks stay on Socket. One call copies at most 64 KB, so a GC never
+  waits long on a call without its transition, and a receive that took 64 KB counts as one that filled the buffer.
+- **Batches:** a loop handles every connection one wake-up found ready, runs the batch's actions
+  (`HttpServerOptions.OnEventLoopBatch`, then the app's `IServiceRegistry.OnEventLoopBatch` registrations, in order),
+  sends every held answer, then lets each connection go on. A connection that goes on into a pipelined request holds
+  its answer again, and the actions run again: up to 8 rounds per wake-up, after which the next wait doesn't block.
+  - The hold is awaited in `RunAsync`, whose box lives as long as the connection. Held inside `FlushAsync`, it
+    allocated 17 to 20 B/request with 8 connections: the runtime's pooled boxes run out when several are held at once.
+  - A handler the hook completes (a commit) runs its rest inside the hook, and its answer joins the batch.
+  - The stop's wake ends the loop only after its batch is sent.
+  - `CodeFusion.EventLoopThread.Current` (Core) is the loop's index on its thread and -1 elsewhere.
+- **Listeners:** on Linux each loop has its own listening socket (SO_REUSEPORT), level-triggered in its epoll set.
+  - It accepts up to 64 connections per wake-up with `accept4` and starts each on its own thread.
+  - Out of descriptors or memory, it stops watching the listener (one report per run of failures), and the heartbeat
+    watches it again. The pause is one state changed by compare-and-swap, set after the listener is off.
+  - The kernel spreads connections by a hash of their addresses, not in turn: a few long-lived connections may share a
+    loop. `ListenerPerLoop = false` keeps one listener and gives connections to the loops in turn.
+  - A loop that fails hands its listener to the runtime's accepts, so its queued connections aren't reset; with every
+    loop failed, connections wait on their sockets as Sockets' do. The connections it had are closed with a FIN, as a
+    timeout closes them: a reset (it used `Close(0)`) reached a connection it had just accepted before its client's
+    own connect had finished, and failed that connect (Linux CI, arm64 and x64).
+  - The runtime's `ReuseAddress` sets SO_REUSEPORT on Unix anyway (checked on macOS), so port sharing by a process of
+    the same user is no different from Sockets'.
+  - macOS keeps one listener and the runtime's accepts.
+
+### Review fixes (review of f00a731)
+
+Each fix had its test first, seen failing on the code before it (`EventLoopGuaranteeTests` unless named).
+
+| Finding | Fix | Test |
+|---|---|---|
+| 1 (high): a made-up "closed" edge (a timeout's Kick, a stale event) landing on the pooled object's next connection made every wait complete at once: a spin with no end | The edge word counts edges in its upper bits; a receive that finds nothing clears a hang-up seen before it began if no edge came since (after a FIN or an error recv never says EAGAIN). A Kick carries the connection id it was queued for. | `ALateClosedEdgeOnAReusedConnectionCostsOneReadNotASpin`: the late edge returns, costs at most 4 reads, and the connection and a new one still answer |
+| 2 (high): the stop joined each loop with no limit, so a handler blocking a loop held the stop | Loops signal `Exited`; the stop waits for them at most a second, as it waits for a handler that never completes, and leaves a held loop's background thread to end with the handler | `AStopEndsWithinItsHardAbortWhileAHandlerHoldsTheLoop` |
+| 3 (medium): a client keeping every read full held its loop | 16 reads per connection per wake-up on the loop's thread, then its armed wait goes to the loop's next round (after a wait that doesn't block), behind the others | `AClientThatPipelinesWithoutPauseDoesNotHoldItsLoop`: a neighbour answered within 500 ms while one client floods |
+| 4 (medium): CI never ran the Debug-only tests on epoll | Left to the coordinator, who adds a Linux Debug pass in PR #1 | |
+| 5 (medium): the cancel of `Aborted`, and what the handler runs after it, ran on the loop's thread | `Gone` is queued to the thread pool for a loop's connection, as the heartbeat's is | `ACancelCallbackThatBlocksDoesNotHoldTheLoop`: a callback sleeping 3 s, a neighbour answered within 1 s |
+| 6 (low): the id check before `Readable` leaves a window for a stale event | Harmless after 1: a stale edge costs one read | |
+| 7 (low): a send that waited registered the socket with the runtime's epoll for good | A send waits for room on its loop: EPOLLOUT added edge-triggered to the socket's registration (it fires only when a full socket gets room), or a one-shot EVFILT_WRITE. A Kick, and the slow-send cut, wake it. | `ASendThatWaitsWaitsOnTheLoop`: 8 MB answers, no runtime send waits on the loop, at least one on Sockets |
+| 8 (low): a loop whose wait failed kept getting connections, closed without a word | The failed loop closes its listener (the kernel sends new connections to the others) and its connections; new ones go to the loops still running, or to Sockets' waits with none left | `ALoopThatFailsTakesNoNewConnections`, with a Debug hook that fails one wait |
+| 9 (low): `BytesAndTheCloseInOneEdgeStillCloseTheConnection` failed if `/block` ran on a pool thread | It holds only the loop's thread and sends `/block` again until it runs there | |
+| 10 (low): the docs didn't say what the loop gives up | SECURITY.md, `Aborted`, the package README | |
+| 11 (low): copied helpers, a server without the suite's transport, allocation rows run twice in CI | `TestTransport.Use` and `UseWithHook` over `EventLoop.Supported`; `SlowClientTests` applies the transport; CI's second run leaves out the allocation classes | |
+
+### Second review fixes (review of 3a8d89d)
+
+| Finding | Fix | Test |
+|---|---|---|
+| 1 (medium): a handler started while answers were sent, after the batch's actions, could wait for a commit that never came | Everything on a loop's thread is in a batch; the actions run again while sending started handlers, up to 8 rounds, then the next wait doesn't block | `PipelinedWritesThatOnlyTheHookCompletesAreAllAnswered` (red with one round) |
+| 2 (medium): a heartbeat's resume between "paused" and "listener off" left it off | One accept state changed by compare-and-swap, published after the listener is off | `OnLinuxALoopOutOfDescriptorsPausesAndTheHeartbeatResumesIt`, with a hook that resumes mid-pause (Linux, CI only) |
+| 3 (medium): the budget counted reads, and the send phase ran a connection's backlog before its neighbours' answers went | 16 handler calls per connection per wake-up as well (past it the connection parks at a request boundary until the next round); the send phase sends every held answer before any connection goes on | `ANeighbourOfAFloodOfSlowRequestsWaitsAtMostOneShare`: 1 ms handlers flooded, a neighbour within 200 ms (1,120 ms without the budget) |
+| 4 (low): MaxConnections could be passed by loops admitting at once | The limit is checked where the count goes up, under the lock | `OnLinuxMaxConnectionsHoldsAcrossLoops` (Linux, CI only) |
+| 5 (low): the out-of-descriptors branch could throw past the loop, and reported the errno as a SocketError | The listener's branch is guarded like a connection's; the pause catches a listener the stop closed; the report is an IOException with the errno | `OnLinuxAStopStartedByTheAcceptFailureReportEndsClean`, `OnLinuxAnAcceptErrorOfOneConnectionSkipsOnlyIt` (Linux, CI only) |
+| 6 (low): sends without a GC transition had no size bound | One direct call copies at most 64 KB; a receive that took 64 KB counts as full | `ConnectionsOnTheLoopsKeepWorkingThroughCollections`; the 300 KB body row (not red on macOS: its buffers never leave 64 KB queued) |
+| 7 (low): hash spreading, resets on a failed loop, no real fallback | `ListenerPerLoop` (on by default) keeps one listener and turns when off; a failed loop hands its listener to the runtime's accepts; with every loop failed, connections fall back to Sockets' waits | `WithOneListenerConnectionsGoToTheLoopsInTurn`, `ALoopThatFailsTakesNoNewConnections(listenerPerLoop)`, `WhenEveryLoopFailsConnectionsFallBackToSockets` |
+| 8 (low): test gaps | The Linux accept tests above; the stop test's bound 4 s; EventLoop allocation rows for a body, an error, a 404 and a 401 | |
+| 9 (low): stale docs | This section, the package README, SECURITY.md (the exact bound, and port sharing for both transports) | |
+| (coordinator) a connection's first request ran on the pool thread that started it, outside any batch | A new connection starts with no edge (epoll's ADD and kqueue's EV_ADD report bytes already waiting), and one the runtime accepted is started on its loop's thread (a queue per loop, and its wake) | `AConnectionsFirstRequestIsHandledInABatch`, for both listener settings (red before) |
+
+### Buffers per loop (perf/http-loop-pools)
+
+The C4 profile of json (1.17M req/s) had `System.Threading.Lock` at about 2% of the app's time: `BufferPool`'s locked
+shards, rented and returned around every request.
+- Each pool the server's connections use (request, response, and the app's arena chunks) now keeps a stack per event
+  loop, touched only by that loop's thread, so no lock.
+- A rent or return on a loop's thread goes there first. Any other thread (a continuation off the loop, Sockets) uses
+  the shards, as does what a full stack can't take. A loop's stack never sees another thread.
+- Each stack holds capacity / (2 x loops) arrays (at least one, while the capacity has one per loop), taken out of the
+  shards' share: `MaxPooledBuffers` stays the whole bound. With fewer arrays than loops there are no stacks.
+- A loop that ends (its wait failed, or the stop) gives its stacks back to the shards on its own thread.
+- Tests (`LoopPoolTests`), each red with its part broken:
+  - rents and returns go through the loop's stack;
+  - a buffer given back off its loop goes to the shards;
+  - each loop keeps exactly its share (red with the stacks off);
+  - the pools keep no more than `MaxPooledBuffers` in all (red with the shards at the full capacity);
+  - a failed loop's stacks go back to the shards (red without the drain);
+  - the arena's chunks use it too.
+- `ServerChecks`' pool balance counts the loop stacks; the allocation tests are unchanged.
+
+### Tests
+
+`EventLoopTests`, `EventLoopBatchTests`, `EventLoopGuaranteeTests` and `LoopPoolTests`, on kqueue here and epoll in CI. `AllocationTests` and `AppAllocationTests` have EventLoop rows
+(0.004 to 0.05 B/request, as Sockets). `TestTransport` makes every server the tests start use the transport that
+`CODEFUSION_HTTP_TRANSPORT` names, and CI runs `CodeFusion.Http.Tests` a second time with `EventLoop`. Debug builds count
+every receive call (`HttpServer.SocketReceives`): `EachKeepAliveRequestCostsThisManyReceives` asserts 1 per request on
+the loop and 2 on Sockets.
+
+Proven red (broken in the tree, seen failing, restored): no edge after a full read (the 64 KB body hangs); the close
+flag ignored (both close-in-one-edge cases); no made-up edge after a timeout or abort (the three timeout and stop
+tests); no disarm on close (the async handler's last answer leaves the connection open).
+
+Green on this Mac (SDK 10.0.402), 0 warnings for the whole tree in Debug and Release. `CodeFusion.Http.Tests`: Debug
+516 pass and 26 skip, Release 532 pass and 10 skip, each with Sockets and with `CODEFUSION_HTTP_TRANSPORT=EventLoop`.
+
+### Numbers
+
+The $12 challenge entry (csharp-codefusion-XeonFX) with this library, in the cf-bench VM (server pinned to one arm64
+CPU with 2 GB, load generator on three others, 256 keep-alive connections, no think time; health, post and feed for
+15 s each, the mix for 30 s). "Before" is the parent commit's library, "after" the same entry with `Transport =
+HttpTransport.EventLoop`. Syscalls from `strace -c -f` over 5 s, per `sendto` (one per response).
+
+| | before (Sockets) | after (EventLoop) | change |
+|---|---:|---:|---:|
+| GET /health | 110,272 req/s | 133,529 | +21% |
+| GET /posts/:id | 74,377 | 84,842 | +14% |
+| GET /feed | 34,272 | 37,570 | +10% |
+| mix | 33,710 | 35,370 | +5% |
+| recvfrom per response (health, mix) | 2.000, 2.000 | 1.000, 1.000 | |
+| sendto per response | 1.000 | 1.000 | |
+| epoll_pwait per response (health) | 0.001 | 0.004 | |
+
+The challenge's 42 checks pass on both. The same library with Sockets did 115 and 118k on health against 112 and 116k
+before, so that path didn't move. In the same session the epoll entry (#74) did 181k on health: per request it spends
+about 5.1 µs in the kernel, this server 6.0 µs in the kernel and 1 µs in its own code and libc, spread thin
+(`RunAsync` 1.4%, `ParseHead` 0.8%, `FlushAsync` 0.6%, the runtime's send wrapper 0.6%). Both spend about 20% in
+`__wake_up_sync_key`, the wakeup of the client, and both now make one receive and one send per request. #74 reads
+every ready connection before it sends any answer; whether batching the sends that way explains the kernel's extra
+0.9 µs is not measured.

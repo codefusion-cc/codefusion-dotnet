@@ -55,8 +55,10 @@ CodeFusion.Utf8.Equals(CodeFusion.Utf8 other) -> bool
 CodeFusion.Utf8.Equals(System.ReadOnlySpan<byte> other) -> bool
 CodeFusion.Utf8.IsEmpty.get -> bool
 CodeFusion.Utf8.Length.get -> int
+CodeFusion.Utf8.Slice(int start, int length) -> CodeFusion.Utf8
 CodeFusion.Utf8.Span.get -> System.ReadOnlySpan<byte>
 CodeFusion.Utf8.ToReadOnlySpan() -> System.ReadOnlySpan<byte>
+CodeFusion.Utf8.Trim() -> CodeFusion.Utf8
 CodeFusion.Utf8.Utf8() -> void
 CodeFusion.Utf8.Utf8(byte[]! buffer, int start, int length) -> void
 CodeFusion.Utf8List
@@ -103,3 +105,7 @@ static CodeFusion.Utf8List.operator !=(CodeFusion.Utf8List left, CodeFusion.Utf8
 static CodeFusion.Utf8List.operator ==(CodeFusion.Utf8List left, CodeFusion.Utf8List right) -> bool
 static CodeFusion.Utf8List.RecordBytes(int textBytes, int count) -> int
 static CodeFusion.Utf8List.Write(System.ReadOnlySpan<byte> text, System.Span<byte> destination) -> int
+CodeFusion.EventLoopThread
+CodeFusion.IServiceRegistry.OnEventLoopBatch(System.Action<int>! onBatch) -> void
+static CodeFusion.EventLoopThread.Current.get -> int
+static CodeFusion.EventLoopThread.RequestBatchEnd() -> void

@@ -14,7 +14,7 @@ public sealed class HttpServerOptions
     public IPEndPoint EndPoint { get; set; } = new(IPAddress.Loopback, 3000);
 
     /// <summary>The default 512 overflows while tens of thousands of clients connect at once; the kernel caps it
-    /// at net.core.somaxconn.</summary>
+    /// at net.core.somaxconn. With <see cref="ListenerPerLoop"/> it applies to each loop's listener.</summary>
     public int Backlog { get; set; } = 65535;
 
     /// <summary>How long a connection may wait for the first byte of its next request. Browsers keep an idle
@@ -69,12 +69,41 @@ public sealed class HttpServerOptions
     public int ResponseBufferSize { get; set; } = 16 * 1024;
 
     /// <summary>Request and response buffers kept for reuse, of each size. Only connections with a request in
-    /// flight hold one.</summary>
+    /// flight hold one. On <see cref="HttpTransport.EventLoop"/> half of them are shared out among the loops, each
+    /// keeping its share for its own connections without a lock (at least one each, while there are as many buffers
+    /// as loops; with fewer, every rent takes the shared pool's lock).</summary>
     public int MaxPooledBuffers { get; set; } = 4096;
 
     /// <summary>Connection objects (with their socket event args and the handler's per-connection state) kept for
     /// reuse after their socket closes.</summary>
     public int MaxPooledConnections { get; set; } = 4096;
+
+    /// <summary>How connections wait for their requests. On Linux the default is the server's own event loops
+    /// (<see cref="HttpTransport.EventLoop"/>, one per core), which measured 9 to 42% faster on 8 cores; elsewhere
+    /// <see cref="HttpTransport.Sockets"/>. Choose Sockets on Linux too when handlers block before their first await
+    /// (a blocking handler holds every connection on its loop), or when the p99 under a mixed load matters more than
+    /// throughput: a slow request holds its loop's neighbours, where Sockets spreads them over the thread pool.</summary>
+    public HttpTransport Transport { get; set; } = OperatingSystem.IsLinux() ? HttpTransport.EventLoop : HttpTransport.Sockets;
+
+    /// <summary>How many threads <see cref="HttpTransport.EventLoop"/> runs, each with its share of the connections
+    /// and their handlers until they wait: one per core by default.</summary>
+    public int EventLoops { get; set; } = Environment.ProcessorCount;
+
+    /// <summary>Linux, with <see cref="HttpTransport.EventLoop"/>: each loop listens on the port itself (SO_REUSEPORT)
+    /// and accepts its own connections, with no handoff between threads. The kernel spreads them by a hash of their
+    /// addresses, with no balance: a few long-lived connections (a proxy's pool) may share a loop while another idles.
+    /// False: one listener, the runtime's accepts, and connections given to the loops in turn. True by default; macOS
+    /// always has one listener.</summary>
+    public bool ListenerPerLoop { get; set; } = true;
+
+    /// <summary>Called on an event loop's thread with its index (0 to <see cref="EventLoops"/> - 1) once the loop has
+    /// handled every connection that one wake-up found ready, before it sends their answers: a database provider
+    /// commits the batch's writes here, and a handler waiting for that commit, completed here, answers in the same
+    /// batch. It runs on the loop's thread, which every connection on that loop shares: it must not block. What it
+    /// throws is counted, reported the first time, and the answers go out anyway. Only
+    /// <see cref="HttpTransport.EventLoop"/> calls it; an answer finished on another thread is sent at once. An app
+    /// registers its actions with <see cref="IServiceRegistry.OnEventLoopBatch"/>, which run after this one.</summary>
+    public Action<int>? OnEventLoopBatch { get; set; }
 
     /// <summary>How often the Date header is refreshed, timeouts are checked, and a reset is looked for that only the
     /// socket's error shows (<see cref="HttpExchange.Aborted"/>).</summary>
@@ -107,8 +136,10 @@ public sealed class HttpServerOptions
         if (Backlog < 1 || MaxRequestLineSize < 16 || MaxRequestHeadersTotalSize < 2 || MaxRequestHeaderCount < 0
             || MaxRequestBodySize < 0 || RequestBufferSize < 256 || ResponseBufferSize < 1024 || MaxPooledBuffers < 0
             || MaxPooledConnections < 0 || KeepAliveTimeout <= TimeSpan.Zero || RequestTimeout <= TimeSpan.Zero
-            || HeartbeatInterval <= TimeSpan.Zero || MaxConnections < 1)
+            || HeartbeatInterval <= TimeSpan.Zero || MaxConnections < 1 || !Enum.IsDefined(Transport) || EventLoops < 1)
             throw new ArgumentException("an HttpServerOptions value is out of range");
+        if (Transport == HttpTransport.EventLoop && !EventLoop.Supported)
+            throw new PlatformNotSupportedException("HttpTransport.EventLoop runs on Linux and macOS");
     }
 }
 
