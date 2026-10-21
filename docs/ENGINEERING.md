@@ -965,11 +965,11 @@ pass on both the old fallback and the new one; each fails when the fallback blam
 
 ## The SQLite provider (tests/CodeFusion.Data.Sqlite.Tests)
 
-228 tests, nothing to set up. 47 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked unchanged:
+232 tests, nothing to set up. 47 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked unchanged:
 the same Conduit queries, seed and expected replies as on Postgres. 51 are the operator tests ported: each query's SQL
 in SQLite's dialect, checked as text, and the same results on the same seed. 5 are the conditional-write tests both
 providers run (`tests/Shared/Ops/ConditionalWriteTests.cs`). The rest are the provider's own: group commit (9), reads
-and snapshots (8), migrations (4), the one-connection `Exclusive` mode (8), one transaction per event-loop wake-up (14,
+and snapshots (8), migrations (4), the one-connection `Exclusive` mode (10), one transaction per event-loop wake-up (14,
 12 on which reads join a batch and how SQLite reports a statement's tables, and 1 under HttpServer's real event loop),
 durability when SQLite rolls back, a statement can't be prepared, a COMMIT fails or the source stops (14), the SQLite
 build loaded and where from (17 and 4), its keywords (1), the CodeFusion versions loaded (5), allocations and spinning
@@ -1004,6 +1004,9 @@ SQL.
 | Exclusive: the writer waits while any read waits | both `ReadsAndWritesThatNeverStopTakeTurns` tests (hung till their 60 s timeout) |
 | Exclusive: reads stop only once the writer says so, not once one has gone after it came | both turn tests in Debug under the full suite on cf-bench, at 4 CPUs and at 1: 3 to 7 reads started while one write waited, where 2 may (4 of 4 runs) |
 | Exclusive: waiters spin and never park, without that rule (as at 6384f10, which parked only for a loop's batch) | the same two (4 to 10 reads, 4 of 4 runs), and `NothingSpinsWhileALoopsBatchHoldsTheConnection` |
+| Exclusive: two takers at once (the writer's group and a loop's batch) raise and clear one set of marks, with no turnstile | `TwoTakersWaitingAtOnceEachKeepTheirTurn` (5 to 33 reads where 4 may, Debug and Release, 10 of 10 runs) and `TheWriterAndALoopsBatchWaitingBesideReadsEachKeepTheirTurn` (3 to 40 reads started where 2 may, Debug, 8 of 8 runs) |
+| Exclusive: takers served in whatever order wins a CAS, not by ticket | `TwoTakersWaitingAtOnceEachKeepTheirTurn` (9 to 12 reads, 3 of 3 runs) |
+| Exclusive: the next taker raises its own marks once woken, not as the one before hands over | `TwoTakersWaitingAtOnceEachKeepTheirTurn` (6 reads, 1 of 3 runs) |
 | Exclusive: a read keeps the last group's time for `cf_now()` | `NowInAReadIsTheTimeOfTheRead` |
 | Exclusive: Stop closes the writer before the reads stop | the run hung or crashed, with no summary |
 | a cancelled write completed inside the transaction | `AContinuationOnTheWritersThreadReadsAndWrites` (with `CompleteOnWriterThread`, its continuation read on the held connection) |
@@ -1160,6 +1163,16 @@ A short check found the 10 fixes right, and 6 more, all low, plus 2 untested spo
 - `WritesPastAFullQueueAreBusyAtOnce` assumed the writer took the long write alone; it takes whatever has queued as
   one group, which freed the queue. The test now holds the file's write lock from another connection and waits until
   the writer took its first write (`SqliteWriter.Queued`).
+- Three tests failed on a busy machine (cf-bench, 4 CPUs beside 8 busy loops, or 1 beside 16;
+  docs/benchmarks/2026-10-21-sqlite-flaky-tests.md). `AWriteOffTheLoopGoesToTheWriterAndWaitsForTheBatch` and
+  `ABatchsCompletionsStayItsOwnWhileAnotherLoopBatches` slept 100 ms for a loop to make its writes, then checked they
+  hadn't completed; a write not made yet is a default `ValueTask`, which is complete. They now wait until the writes
+  are made. `ABatchOpenedAfterItsEndRanStillEndsInItsWakeUp` gave each request 2 s, and one took 2.6 s; the first is now a
+  warm-up, the bound is 30 s, and the heartbeat a batch left open would wait for is 120 s.
+  `ATransactionSqliteRollsBackRunsAgainWithoutTheWriteThatFailed` queued its group behind a 100,000-row write, which
+  the 500 ms timeout meant for its slow write interrupted too (6 of 6 runs at 1 CPU); another connection's write lock
+  now holds the writer instead. Each old test failed with the machine's delay put in on purpose (300 ms before the
+  writes, 3 s in the first request), or under the load; the new ones passed both.
 
 ### Not done here
 

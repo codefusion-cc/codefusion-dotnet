@@ -108,13 +108,22 @@ public sealed class GroupCommitTests : IDisposable
     public async Task ATransactionSqliteRollsBackRunsAgainWithoutTheWriteThatFailed()
     {
         // an interrupted write rolls back its whole transaction: the writes before it in the group run again
-        var s = _db.Open(_db.Database(timeout: TimeSpan.FromMilliseconds(500)));
-        var blocker = Kv.WriteMany(s, "b", 100_000);
+        var db = _db.Database(timeout: TimeSpan.FromSeconds(2));
+        var s = _db.Open(db);
+        // another connection holds the file's write lock, so the four queue behind the first as one group (a long first
+        // write did this, and on a busy machine the timeout meant for the slow one interrupted it too)
+        using var other = SqliteConn.Open(db.Path, db, writer: true);
+        Assert.Equal(0, other.Once(new SqliteStatement("BEGIN IMMEDIATE")));
+        var first = Kv.Write(s, "first", 0);
+        var waited = System.Diagnostics.Stopwatch.StartNew();
+        while (s.Writer.Queued > 0) Assert.True(waited.Elapsed < TimeSpan.FromSeconds(10), "the writer never took the first write");
         var a = Kv.Write(s, "a", 1);
         var b = Kv.Write(s, "b-one", 1);
         var slow = Kv.WriteMany(s, "slow", 100_000_000);
         var c = Kv.Write(s, "c", 1);
-        Assert.True((await blocker).IsOk);
+        Assert.Equal(4, s.Writer.Queued);
+        Assert.Equal(0, other.Once(new SqliteStatement("ROLLBACK")));
+        Assert.True((await first).IsOk);
         Assert.True((await a).IsOk);
         Assert.True((await b).IsOk);
         Assert.Equal(DataStatus.StatementTimeout, (await slow).Status);

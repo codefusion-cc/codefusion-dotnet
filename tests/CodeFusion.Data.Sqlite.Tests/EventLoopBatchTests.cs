@@ -33,6 +33,7 @@ public sealed class EventLoopBatchTests : IDisposable
         using var completing = new ManualResetEventSlim();
         using var resume = new ManualResetEventSlim();
         using var beforeEnd = new ManualResetEventSlim();
+        using var holding = new ManualResetEventSlim();
         var r = new ValueTask<DataResult>[3];
         var y = new ValueTask<DataResult>[3];
         // loop one ends its batch and, completing r0, waits: the connection is free, r1 and r2 not completed yet
@@ -56,9 +57,11 @@ public sealed class EventLoopBatchTests : IDisposable
             var second = two.WakeUp(() =>
             {
                 for (int i = 0; i < y.Length; i++) y[i] = Kv.Write(s, "y" + i, i);
+                holding.Set();
                 beforeEnd.Wait();
             });
-            await Task.Delay(100, TestContext.Current.CancellationToken);
+            // its batch holds them before loop one goes on: until then y is default, which is complete
+            Assert.True(holding.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
             resume.Set();
             await first.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
             Assert.False(Array.Exists(y, w => w.IsCompleted), "loop one completed loop two's writes before their COMMIT");
@@ -252,14 +255,19 @@ public sealed class EventLoopBatchTests : IDisposable
         var s = Open();
         using var loop = new TestLoop(s);
         using var release = new ManualResetEventSlim();
+        using var made = new ManualResetEventSlim();
         ValueTask<DataResult> offLoop = default, onLoop = default;
         var wake = loop.WakeUp(() =>
         {
             onLoop = Kv.Write(s, "on", 1);
             offLoop = Task.Run(() => Kv.Write(s, "off", 2)).GetAwaiter().GetResult();
+            made.Set();
             release.Wait(TestContext.Current.CancellationToken);
         });
-        await Task.Delay(100, TestContext.Current.CancellationToken);
+        // both writes made: until then offLoop is default, which is complete (on a busy machine the loop and the pool
+        // thread can take longer than the wait below to get there)
+        Assert.True(made.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken));
+        await Task.Delay(100, TestContext.Current.CancellationToken); // the writer has had time to run it, were it not waiting
         Assert.False(offLoop.IsCompleted); // the writer waits for the loop's transaction
         release.Set();
         await wake;

@@ -144,6 +144,130 @@ public sealed class ExclusiveTests : IDisposable
         Assert.True(readsBeside >= 100, $"{readsBeside} reads beside 200 writes");
     }
 
+    /// <summary>Two takers at once, as the writer's group and a loop's batch (or two loops' batches) are: each keeps its
+    /// turn. Marks one cleared as it took the connection left the other waiting unmarked, overtaken by every read.</summary>
+    [Fact(Timeout = 60_000)]
+    public async Task TwoTakersWaitingAtOnceEachKeepTheirTurn()
+    {
+        var s = _db.Open(_db.Database(exclusive: true));
+        Assert.True((await Kv.WriteMany(s, "seed", 2_000)).IsOk);
+        var r = s.Readers;
+        // one clock for both sides: a read counts against a wait if it was asked for after the wait began and ended
+        // before the wait did, so a read already running, or one whose thread was slow to say it ended, never counts
+        long clock = 0;
+        int stop = 0;
+        var reads = new System.Collections.Generic.List<(long Asked, long Ended)>[4];
+        var threads = new Thread[reads.Length];
+        for (int t = 0; t < threads.Length; t++)
+        {
+            var mine = reads[t] = [];
+            threads[t] = new Thread(() =>
+            {
+                while (Volatile.Read(ref stop) == 0)
+                {
+                    long asked = Interlocked.Increment(ref clock);
+                    Kv.Count(s, "seed%");
+                    mine.Add((asked, Interlocked.Increment(ref clock)));
+                }
+            }) { IsBackground = true };
+            threads[t].Start();
+        }
+        await Task.Delay(50, TestContext.Current.CancellationToken); // the readers are reading
+        var waits = new System.Collections.Generic.List<(long Began, long Ended)>[2];
+        var takers = new Thread[waits.Length];
+        for (int t = 0; t < takers.Length; t++)
+        {
+            var mine = waits[t] = [];
+            takers[t] = new Thread(() =>
+            {
+                for (int i = 0; i < 300; i++)
+                {
+                    long began = Interlocked.Increment(ref clock);
+                    if (!r.Enter()) return;
+                    mine.Add((began, Interlocked.Increment(ref clock)));
+                    r.Exit();
+                }
+            }) { IsBackground = true };
+            takers[t].Start();
+        }
+        foreach (var t in takers) t.Join();
+        Volatile.Write(ref stop, 1);
+        foreach (var t in threads) t.Join();
+        var all = new System.Collections.Generic.List<(long Asked, long Ended)>();
+        foreach (var l in reads) all.AddRange(l);
+        int most = 0;
+        foreach (var l in waits)
+        {
+            Assert.Equal(300, l.Count);
+            foreach (var (began, ended) in l)
+            {
+                int within = 0;
+                foreach (var (asked, done) in all)
+                    if (asked > began && done < ended) within++;
+                most = Math.Max(most, within);
+            }
+        }
+        // each wait lets through at most one read for its own turn and one for the taker ahead of it, and each of those
+        // turns one more read that took the connection as the marks went up
+        Assert.True(most <= 4, $"{most} reads asked for and done while one taker waited beside another");
+#if DEBUG
+        // and once its marks are up, at most the two of its own turn
+        Assert.True(r.MostReadsBeforeAWrite <= 2, $"{r.MostReadsBeforeAWrite} reads started while one taker's marks were up");
+#endif
+    }
+
+    /// <summary>The $12 entry's setup: the writer thread and a loop's batch wait at once beside reads that never stop (a
+    /// batch on one loop sends the other loops' writes to the writer thread), and each keeps its turn.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheWriterAndALoopsBatchWaitingBesideReadsEachKeepTheirTurn()
+    {
+        const int Writes = 1_000;
+        var s = _db.Open(_db.Database(exclusive: true, batches: true));
+        Assert.True((await Kv.WriteMany(s, "seed", 20_000)).IsOk);
+        int stop = 0;
+        var threads = new Thread[Environment.ProcessorCount + 2];
+        for (int t = 0; t < threads.Length; t++)
+        {
+            threads[t] = new Thread(() =>
+            {
+                while (Volatile.Read(ref stop) == 0) Kv.Count(s, "seed%");
+            }) { IsBackground = true };
+            threads[t].Start();
+        }
+        using var loop = new TestLoop(s);
+        await Task.Delay(50, TestContext.Current.CancellationToken); // the readers are reading
+        // the loop wakes back to back with a write each, in its batch; a plain thread's writes go to the writer thread
+        var looping = Task.Run(async () =>
+        {
+            for (int i = 0; i < Writes; i++)
+            {
+                ValueTask<DataResult> w = default;
+                await loop.WakeUp(() => w = Kv.Write(s, "loop-" + i, i));
+                Assert.True((await w).IsOk);
+            }
+        }, TestContext.Current.CancellationToken);
+        var writing = Task.Run(async () =>
+        {
+            for (int i = 0; i < Writes; i++) Assert.True((await Kv.Write(s, "thread-" + i, i)).IsOk);
+        }, TestContext.Current.CancellationToken);
+        try
+        {
+            // a waiter overtaken by every read finishes too, only late: this is a guard against a hang
+            await Task.WhenAll(looping, writing).WaitAsync(TimeSpan.FromSeconds(60), TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            Volatile.Write(ref stop, 1);
+            foreach (var t in threads) t.Join();
+        }
+        Assert.Equal(Writes, Kv.Count(s, "loop-%"));
+        Assert.Equal(Writes, Kv.Count(s, "thread-%"));
+#if DEBUG
+        int most = s.Readers.MostReadsBeforeAWrite;
+        Assert.True(most <= 2, $"{threads.Length} readers: {most} reads started while the writer or the batch waited");
+#endif
+    }
+
     [Fact(Timeout = 30_000)]
     public async Task AContinuationOnTheWritersThreadReadsAndWrites()
     {

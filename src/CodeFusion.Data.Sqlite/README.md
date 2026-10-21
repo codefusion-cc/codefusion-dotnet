@@ -102,10 +102,11 @@ instead of reading beside it. On one core, where they take turns anyway, that is
 | the same, `Full` | 74 to 75 k ops/s | 120 to 198 k ops/s |
 
 (`benchmarks/CodeFusion.Data.Sqlite.Throughput`: 100,000 rows, reads and updates by key, in a container pinned to one
-CPU of a Colima VM, linux-arm64; three rounds alternating the two, two with `Full`.) Reads and the writer take turns,
-each waiting for at most one of the other's, however long the writer waits for a CPU. On more cores it costs: reads no
-longer run beside each other, so 4 threads on an 8-core Mac read 1.2 to 1.8 M/s where the default reads 6.4 M/s. The
-runs, and the ones before them, are in [docs/benchmarks](../../docs/benchmarks/README.md).
+CPU of a Colima VM, linux-arm64; three rounds alternating the two, two with `Full`.) Reads and the writer take turns: a
+read waits for at most one group, and the writer for the read running and at most one more, however long it waits for
+a CPU. On more cores it costs: reads no longer run beside each other, so 4 threads on an 8-core Mac read 1.2 to 1.8
+M/s where the default reads 6.4 M/s. The runs, and the ones before them, are in
+[docs/benchmarks](../../docs/benchmarks/README.md).
 
 Behind CodeFusion.Http's event loops (`HttpTransport.EventLoop`), `EventLoopBatches = true` goes one step further: a
 write made on a loop runs there at once, inside one transaction per loop wake-up, and every write of the wake-up commits
