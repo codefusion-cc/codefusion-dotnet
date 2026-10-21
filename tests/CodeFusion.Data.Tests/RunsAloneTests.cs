@@ -51,4 +51,24 @@ public sealed class RunsAloneTests(OpsFixture fixture)
         Assert.Equal(3, (await Db(write: false).ByName(U("cid"))).Value.Id);
         Assert.Equal(1, counters.Alone - alone);
     }
+
+    [Fact]
+    public async Task AKeyedUpdateMarkedRunsAloneRunsAloneAndIsNeverMerged()
+    {
+        var db = Db(write: true);
+        var counters = fixture.Writes.Writer.Counters;
+        long alone = counters.Alone, merged = counters.Merged;
+        var pause = db.Pause();
+        await Task.Delay(30);
+        var first = Db(write: true).SetAgeAlone(1, 31);
+        var second = Db(write: true).SetAgeAlone(2, 26);
+        Assert.True((await pause).IsOk);
+        Assert.True((await first).IsOk);
+        Assert.True((await second).IsOk);
+        Assert.Equal(2, counters.Alone - alone);
+        Assert.Equal(0, counters.Merged - merged);
+        await using var admin = TestDb.Admin("cfdata_ops_w");
+        Assert.Equal("31 26", await admin.Scalar("SELECT string_agg(age::text, ' ' ORDER BY id) FROM people WHERE id IN (1, 2)"));
+        await admin.Execute("UPDATE people SET age = 30 WHERE id = 1; UPDATE people SET age = 25 WHERE id = 2");
+    }
 }
