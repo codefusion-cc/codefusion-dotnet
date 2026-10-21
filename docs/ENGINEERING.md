@@ -842,7 +842,7 @@ Postgres 18 with CODEFUSION_TEST_DB and the four CODEFUSION_TEST_PG_* logins set
 the same Conduit queries, seed and expected replies as on Postgres. 51 are the operator tests ported: each query's SQL
 in SQLite's dialect, checked as text, and the same results on the same seed. 5 are the conditional-write tests both
 providers run (`tests/Shared/Ops/ConditionalWriteTests.cs`). The rest are the provider's own: group commit (9), reads
-and snapshots (8), migrations (4), the one-connection `Exclusive` mode (7, one of them timed and alone), one transaction per event-loop wake-up (14,
+and snapshots (8), migrations (4), the one-connection `Exclusive` mode (7), one transaction per event-loop wake-up (14,
 12 on which reads join a batch and how SQLite reports a statement's tables, and 1 under HttpServer's real event loop),
 durability when SQLite rolls back, a statement can't be prepared, a COMMIT fails or the source stops (14), the SQLite
 build loaded and where from (17 and 4), its keywords (1), the CodeFusion versions loaded (5), allocations and spinning
@@ -873,8 +873,7 @@ SQL.
 | a key read from `sqlite_sequence` by the quoted table name | `AnInsertedKeyOfATableNeedingQuotes` |
 | Exclusive: the writer runs a group without taking the connection from the reads | `AReadSeesEveryWriteThatCompletedBeforeItAndNoUnitHalfDone` and the watchdog test, then the run died |
 | Exclusive: the writer gives the connection back after completing the group | the run hung, with no summary |
-| Exclusive: the writer doesn't end the reads' transaction before its BEGIN | 5 of the 7 Exclusive tests |
-| Exclusive: the writer waits while any read waits, so reads that never stop starve it | `ReadsAndWritesThatNeverStopTakeTurns` (two readers, as on a 4-core runner: 27 s against a bound of a few) |
+| Exclusive: the writer doesn't end the reads' transaction before its BEGIN | 5 of the 7 `ExclusiveTests` |
 | Exclusive: a read keeps the last group's time for `cf_now()` | `NowInAReadIsTheTimeOfTheRead` |
 | Exclusive: Stop closes the writer before the reads stop | the run hung or crashed, with no summary |
 | a cancelled write completed inside the transaction | `AContinuationOnTheWritersThreadReadsAndWrites` (with `CompleteOnWriterThread`, its continuation read on the held connection) |
