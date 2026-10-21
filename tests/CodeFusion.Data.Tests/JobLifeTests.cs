@@ -98,18 +98,18 @@ public sealed class JobLifeTests
     {
         Assert.SkipUnless(Debug, "the checks compile away in Release");
         var life = new JobLife("Test", queuesUnheld: false);
-        Assert.Contains("went from Pooled to Queued", Assert.Throws<InvalidOperationException>(() => life.To(JobStep.Queued)).Message, StringComparison.Ordinal);
+        Assert.Contains("went from Pooled to Queued", Assert.Throws<JobLifeException>(() => life.To(JobStep.Queued)).Message, StringComparison.Ordinal);
         life.To(JobStep.Building);
         // only a provider that queues unheld jobs may skip the hold
-        Assert.Throws<InvalidOperationException>(() => life.To(JobStep.Queued));
+        Assert.Throws<JobLifeException>(() => life.To(JobStep.Queued));
         var unheld = new JobLife("Test", queuesUnheld: true);
         unheld.To(JobStep.Building);
         unheld.To(JobStep.Queued);
         unheld.To(JobStep.Completed);
-        Assert.Contains("completed while Completed", Assert.Throws<InvalidOperationException>(() => unheld.To(JobStep.Completed)).Message, StringComparison.Ordinal);
+        Assert.Contains("completed while Completed", Assert.Throws<JobLifeException>(() => unheld.To(JobStep.Completed)).Message, StringComparison.Ordinal);
         unheld.Returned();
-        Assert.Contains("returned twice", Assert.Throws<InvalidOperationException>(() => unheld.CheckReturnable()).Message, StringComparison.Ordinal);
-        Assert.Throws<InvalidOperationException>(() => unheld.CheckIs(JobStep.Queued));
+        Assert.Contains("returned twice", Assert.Throws<JobLifeException>(() => unheld.CheckReturnable()).Message, StringComparison.Ordinal);
+        Assert.Throws<JobLifeException>(() => unheld.CheckIs(JobStep.Queued));
     }
 
     [Fact]
@@ -135,7 +135,7 @@ public sealed class JobLifeTests
         life.CheckPoisoned(buffer);
         life.CheckPoisoned(null);
         buffer[15] = 1;
-        Assert.Contains("written to after its return", Assert.Throws<InvalidOperationException>(() => life.CheckPoisoned(buffer)).Message, StringComparison.Ordinal);
+        Assert.Contains("written to after its return", Assert.Throws<JobLifeException>(() => life.CheckPoisoned(buffer)).Message, StringComparison.Ordinal);
     }
 
     sealed class LocalJob;
