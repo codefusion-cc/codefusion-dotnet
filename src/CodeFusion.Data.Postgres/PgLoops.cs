@@ -448,8 +448,9 @@ public abstract class PgLoops
             if (again >= 0 && again < counts[g])
             {
                 Interlocked.Increment(ref Counters.Reruns);
-                Send(conn!, groups[g], again, counts[g]);
+                // in flight before it goes: should the send fail, FailAll ends these reads with the rest and frees g
                 flight[(flightHead + flightCount++) % depth] = (g, again);
+                Send(conn!, groups[g], again, counts[g]);
                 return;
             }
             Array.Clear(groups[g], 0, counts[g]);

@@ -181,6 +181,60 @@ public sealed class PgPipelineTests : IAsyncDisposable
         Assert.True(reader.Counters.Pipelined > 0, "pipelined under load");
     }
 
+    // A failing read's skipped reads go out again as a new batch. When that send fails (the server closed the
+    // connection after answering), they must fail Broken with the rest, and the loop must keep both its groups:
+    // before, they were in no list FailAll looked at, never answered, and the loop lost a group each time.
+    [Fact(Timeout = 30_000)]
+    public async Task ARerunWhoseSendFailsEndsItsReadsBrokenAndTheLoopGoesOn()
+    {
+        var server = new FakeServer { Rows = _ => [[ServerWriter.BE64(1)]] };
+        using var gate = new ManualResetEventSlim();
+        int batches = 0;
+        int round = 0;
+        server.Respond = (c, batch) =>
+        {
+            int k = Interlocked.Increment(ref batches);
+            int first = Volatile.Read(ref round) * 3;
+            if (k == first + 1)
+            {
+                gate.Wait(); // holds the loop in its send while the test queues the next 40
+                server.Auto(c, batch);
+            }
+            else if (k == first + 2)
+                c.Write(new ServerWriter().Error("ERROR", "22012", "division by zero").Ready().ToArray()); // A: its first read fails
+            else if (k == first + 3)
+                c.Close(); // B: unanswered, and the connection closes after A's replies
+            else
+                server.Auto(c, batch);
+        };
+        var reader = new PgReader(server.Settings());
+        try
+        {
+            reader.Start(1);
+            for (; round < 2; round++)
+            {
+                gate.Reset();
+                var held = Try(reader, Pid);
+                await Task.Delay(100); // the loop is in held's send, at the gate
+                var reads = Enumerable.Range(0, 40).Select(_ => Try(reader, Pid)).ToArray();
+                Assert.All(reads, r => Assert.False(r.IsCompleted));
+                gate.Set();
+                Assert.Equal(PgStatus.Ok, (await held).Status);
+                var all = await Task.WhenAll(reads).WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(PgStatus.ServerError, all[0].Status);
+                Assert.All(all.Skip(1), r => Assert.Equal(PgStatus.Broken, r.Status));
+                for (int i = 0; i < 200 && reader.Sleeping != 1; i++) await Task.Delay(10);
+                Assert.Equal(1, reader.Sleeping); // asleep in its queue, not spinning without a free group
+                Interlocked.Exchange(ref batches, (round + 1) * 3); // the next round's held read is batch 1 again
+            }
+            Assert.Equal(PgStatus.Ok, (await Try(reader, Pid).WaitAsync(TimeSpan.FromSeconds(10))).Status);
+        }
+        finally
+        {
+            reader.Complete();
+        }
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_reader is not null) LoopChecks.Stop(_reader);
