@@ -305,6 +305,8 @@ sealed partial class Translator
         var sub = new Select();
         var parent = mv.Parent;
         var target = mv.Target;
+        Unwritten(target, at);
+        if (mv.Nav.IsThrough) Unwritten(mv.Nav.JoinTable!, null, at);
         string parentKey = Column(parent, KeyOf(parent.Entity, at), at);
         string? hint = mv.Steps.Select(s => Unwrap(s.Call.Arguments.LastOrDefault()?.Value ?? s.Call)).OfType<IAnonymousFunctionOperation>()
             .Select(f => f.Symbol.Parameters.FirstOrDefault()?.Name).FirstOrDefault(n => n is not null);

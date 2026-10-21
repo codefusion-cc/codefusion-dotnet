@@ -134,4 +134,93 @@ public sealed class ShapeGeneratorTests
         Assert.Contains(errors, m => m.Contains("a list's rows on their own", System.StringComparison.Ordinal));
         Assert.Contains(errors, m => m.Contains("Distinct in a read", System.StringComparison.Ordinal));
     }
+
+    // ---------- a write from the rows a query found ----------
+
+    /// <summary>A provider whose dialect lacks what the shapes need, as SQLite's will.</summary>
+    const string Lite = """
+        [SqlDialect("lite", WritableCtes = false, RegexReplace = "")]
+        public readonly struct Lite : IDataProvider<Lite, PgStatement, PgCommand>
+        {
+            public static PgStatement Statement(string sql, params ReadOnlySpan<DataType> parameters) => throw null!;
+            public static PgCommand Read(DataContext context, PgStatement statement) => throw null!;
+            public static PgCommand Write(DataContext context, PgStatement statement) => throw null!;
+            public static System.Threading.Tasks.ValueTask<DataResult> Run<TReader>(in PendingCommand command, object? state, System.Threading.CancellationToken aborted) where TReader : IRowReader => throw null!;
+            public static void Discard(in PendingCommand command) => throw null!;
+        }
+        public sealed partial class LiteDb : DataContext<Lite>
+        {
+            public Table<Person> People => Table<Person>();
+            public Table<Pet> Pets => Table<Pet>();
+            public Write<Name> Then(Utf8 name) => People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { OwnerId = p.Id, Name = name })).Select(p => new Name(p.Id, p.Name));
+            public Many<Name> Matches() => People.Select(p => new Name(p.Id, p.Name.ReplaceMatches("a+", "b"))).Many();
+        }
+        """;
+
+    [Fact]
+    public void ADialectWithoutWhatAShapeNeedsRefusesIt()
+    {
+        var r = Run(Entities + Lite);
+        var errors = r.Generator.Where(d => d.Id == "CFDATA001").Select(Message).ToList();
+        Assert.Equal(2, errors.Count);
+        Assert.Contains(errors, m => m.Contains("Then in lite, which has no CTE that writes", System.StringComparison.Ordinal));
+        Assert.Contains(errors, m => m.Contains("ReplaceMatches in lite", System.StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("""People.OrderBy(p => p.Id).Then(p => Insert(Pets, new Pet { OwnerId = p.Id })).Select(p => new Name(p.Id, p.Name))""",
+        "People.OrderBy(p => p.Id).Then(p => Insert(Pets, new Pet { OwnerId = p.Id }))", "operators before Then other than Where")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => People.Where(x => x.Id == p.Id).Delete()).Select(p => new Name(p.Id, p.Name))""",
+        "People.Where(x => x.Id == p.Id).Delete()", "the table the rows are found in")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Pets.Where(x => x.OwnerId == p.Id).Update(x => new Pet { Name = p.Name })).Select(p => new Name(p.Id, p.Name))""",
+        "Pets.Where(x => x.OwnerId == p.Id).Update(x => new Pet { Name = p.Name })", "a write in Then other than an insert")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Pets.Where(x => x.OwnerId == p.Id).DeleteIf(x => x.Id > 1)).Select(p => new Name(p.Id, p.Name))""",
+        "Pets.Where(x => x.OwnerId == p.Id).DeleteIf(x => x.Id > 1)", "a write in Then other than an insert")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Sql($"DELETE FROM pets")).Select(p => new Name(p.Id, p.Name))""",
+        "Sql($\"DELETE FROM pets\")", "a write in Then other than an insert")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, Pets.Where(x => x.Id == 1).Select(x => new Pet { OwnerId = p.Id }))).Select(p => new Name(p.Id, p.Name))""",
+        "Pets.Where(x => x.Id == 1).Select(x => new Pet { OwnerId = p.Id })", "an insert in Then that isn't 'new Pet { ... }'")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { OwnerId = p.Id }).Then(Sql($"DELETE FROM pets"))).Select(p => new Name(p.Id, p.Name))""",
+        "Insert(Pets, new Pet { OwnerId = p.Id }).Then(Sql($\"DELETE FROM pets\"))", "a unit of writes in Then")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { OwnerId = p.Id })).Select(p => new Name(p.Pets.Count(), p.Name))""",
+        "p.Pets.Count()", "a read of pets in the Select after Then")]
+    [InlineData("""Pets.Where(x => x.Id > 1).Then(x => Insert(People, new Person { Name = x.Name })).Select(x => new Name(x.Id, x.Owner.Name))""",
+        "x.Owner", "a read of people in the Select after Then")]
+    [InlineData("""People.Where(p => p.Age > 1).Then(p => Insert(Pets, new Pet { OwnerId = p.Id })).Select(p => new Name(p.Id, Pets.Single(x => x.Id == 1).Name))""",
+        "Pets.Single(x => x.Id == 1).Name", "a read of pets in the Select after Then")]
+    public void AWriteFromTheRowsFoundSqlWouldReadOtherwiseIsRefused(string query, string at, string why)
+    {
+        string source = Context($$"""
+                public Write<Name> Q() => {{query}};
+            """);
+        var d = Single(Run(source), "CFDATA001");
+        Assert.Equal(at, At(d, source));
+        Assert.Contains(why, Message(d), System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AWriteFromTheRowsFoundIsOneStatement()
+    {
+        string source = Context("""
+                public Write<Name> Give(Utf8 name, Utf8 pet) =>
+                    People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { OwnerId = p.Id, Name = pet })).Select(p => new Name(p.Id, p.Name));
+                public Write Take(int age) => People.Where(p => p.Age > age).Then(p => Pets.Where(x => x.OwnerId == p.Id).Delete());
+                public Write TakeYounger(int age) => People.Where(p => p.Age > age).Then(p => Pets.Where(x => x.OwnerId == p.Id && x.Id < p.Age).Delete());
+                public Write All() => People.Then(p => Pets.Delete());
+                public Write<Name> InAUnitIsRefused(Utf8 name) =>
+                    Insert(People, new Person { Name = name }).Then(People.Where(p => p.Name == name).Then(p => Pets.Delete())).ThenSelect(p => new Name(p.Id, p.Name));
+                public Write<Name> WithoutSelect(Utf8 name) => People.Where(p => p.Name == name).Then(p => Pets.Delete());
+            """);
+        var r = Run(source);
+        Assert.Equal("WITH t AS (SELECT p.id, p.name FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (owner_id, name) SELECT t.id, $2 FROM t) SELECT t.id, t.name FROM t", r.Sql("Give"));
+        Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > $1) DELETE FROM pets x WHERE x.owner_id = ANY(ARRAY(SELECT t.id FROM t))", r.Sql("Take"));
+        // the rows found used otherwise than one key: joined
+        Assert.Equal("WITH t AS (SELECT p.id, p.age FROM people p WHERE p.age > $1) DELETE FROM pets x USING t WHERE x.owner_id = t.id AND x.id < t.age", r.Sql("TakeYounger"));
+        // a write that uses nothing of the row still runs once for each row found: none when none is
+        Assert.Equal("WITH t AS (SELECT 1 FROM people p) DELETE FROM pets p2 USING t", r.Sql("All"));
+        var errors = r.Generator.Where(d => d.Id == "CFDATA001").Select(Message).ToList();
+        Assert.Equal(2, errors.Count);
+        Assert.Contains(errors, m => m.Contains("Then from the rows a query found inside a unit", System.StringComparison.Ordinal));
+        Assert.Contains(errors, m => m.Contains("Then without a Select in a method that returns rows", System.StringComparison.Ordinal));
+    }
 }

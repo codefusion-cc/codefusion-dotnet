@@ -22,7 +22,7 @@ sealed class Dialect
     public string LowerAscii = "lower({0} COLLATE \"C\")", UpperAscii = "upper({0} COLLATE \"C\")";
     public string Trim = "trim(both {1} from {0})", TrimStart = "trim(leading {1} from {0})", TrimEnd = "trim(trailing {1} from {0})";
     public string Replace = "replace({0}, {1}, {2})", RegexReplace = "regexp_replace({0}, {1}, {2}, 'g')";
-    public bool SelectsConditions = true, ReturningAfter = true;
+    public bool SelectsConditions = true, ReturningAfter = true, WritableCtes = true;
     public int InsertOrIgnore; // 0 ON CONFLICT DO NOTHING, 1 INSERT OR IGNORE, 2 none
 
     public static Dialect Of(INamedTypeSymbol provider, Known k)
@@ -57,6 +57,7 @@ sealed class Dialect
                     d.False = parts.Length > 1 ? parts[1] : parts[0];
                     break;
                 case "SelectsConditions": d.SelectsConditions = (bool)v!; break;
+                case "WritableCtes": d.WritableCtes = (bool)v!; break;
                 case "BigIntLiteral": d.BigIntLiteral = (string)v!; break;
                 case "LockRows": d.LockRows = (string)v!; break;
                 case "LowerAscii": d.LowerAscii = (string)v!; break;
@@ -238,6 +239,66 @@ static class Sql
         return true;
     }
 
+
+    /// <summary>The conditions <paramref name="sql"/> ANDs together at its top level, each as it is written.</summary>
+    public static List<string> Conjuncts(string sql)
+    {
+        var parts = new List<string>();
+        int depth = 0, start = 0;
+        bool quoted = false;
+        for (int i = 0; i < sql.Length; i++)
+        {
+            char c = sql[i];
+            if (c == '\'') quoted = !quoted;
+            else if (quoted) continue;
+            else if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (depth == 0 && string.CompareOrdinal(sql, i, " AND ", 0, 5) == 0)
+            {
+                parts.Add(sql.Substring(start, i - start));
+                start = i + 5;
+                i += 4;
+            }
+        }
+        parts.Add(sql.Substring(start));
+        return parts;
+    }
+
+    /// <summary>Whether <paramref name="condition"/> is <c>x = alias.column</c> (or the other way round), the one
+    /// <c>=</c> at its top level: <paramref name="other"/> is x.</summary>
+    public static bool EqualsColumnOf(string condition, string alias, out string other, out string column)
+    {
+        other = column = "";
+        int at = -1, depth = 0;
+        bool quoted = false;
+        for (int i = 0; i < condition.Length; i++)
+        {
+            char c = condition[i];
+            if (c == '\'') quoted = !quoted;
+            else if (quoted) continue;
+            else if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (depth == 0 && string.CompareOrdinal(condition, i, " = ", 0, 3) == 0)
+            {
+                if (at >= 0) return false;
+                at = i;
+            }
+        }
+        if (at < 0) return false;
+        string left = condition.Substring(0, at), right = condition.Substring(at + 3);
+        var name = new System.Text.RegularExpressions.Regex("^" + System.Text.RegularExpressions.Regex.Escape(alias) + @"\.(""(?:[^""]|"""")+""|[a-z_][a-z0-9_]*)$");
+        if (name.Match(right) is { Success: true } r)
+        {
+            (other, column) = (left, r.Groups[1].Value);
+            return true;
+        }
+        if (name.Match(left) is { Success: true } l)
+        {
+            (other, column) = (right, l.Groups[1].Value);
+            return true;
+        }
+        return false;
+    }
     /// <summary><paramref name="sql"/> in parentheses unless it is one term.</summary>
     public static string Group(string sql) => Atomic(sql) ? sql : "(" + sql + ")";
 

@@ -434,6 +434,23 @@ public sealed partial class OpsDb : DataContext<Postgres>
             .ThenIf(!members.IsEmpty, t => Insert(People, members.AsRows().Distinct().Select(m => new Person { Name = m, Age = 63, Active = true, Born = SqlFunctions.Now(), TeamId = t.Id })).OrIgnore())
             .ThenSelect(t => new Name(t.Id, t.Name));
 
+    // ---------- writes from the rows a query found ----------
+
+    /// <summary>A pet for the person of this name, and the person given back; a pet key taken already is skipped.</summary>
+    public Write<Name> GivePet(Utf8 name, long id, Utf8 pet) =>
+        People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { Id = id, OwnerId = p.Id, Name = pet, Legs = 4 }).OrIgnore()).Select(p => Name.Of(p));
+
+    /// <summary>Without OrIgnore a taken key is a conflict, and nothing is written; the Select joins the row's team.</summary>
+    public Write<WithTeam> GivePetStrict(Utf8 name, long id) =>
+        People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { Id = id, OwnerId = p.Id, Name = p.Name, Legs = 3 })).Select(p => new WithTeam(p.Name, p.Team.Name));
+
+    public Write<Number> TakePets(Utf8 name, int legs) =>
+        People.Where(p => p.Name == name).Then(p => Pets.Where(x => x.OwnerId == p.Id && x.Legs == legs).Delete()).Select(p => new Number(p.Id, p.Age));
+
+    /// <summary>Each person of this age a pet keyed by their own id; nothing given back.</summary>
+    public Write PetsForAge(int age) =>
+        People.Where(p => p.Age == age).Then(p => Insert(Pets, new Pet { Id = p.Id + 50000, OwnerId = p.Id, Name = p.Name, Legs = 1 }).OrIgnore());
+
     // ---------- SQL ----------
 
     public Many<Name> Raw(int min, Utf8 name) =>

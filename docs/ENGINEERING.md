@@ -792,6 +792,37 @@ What it decided:
 - The Conduit context's tag insert is this LINQ, inside `CreateArticle`'s unit; `AllocationTests` inserts tags that
   are there already.
 
+**A write from the rows a query found** (`Query.Then`, `FoundQuery`, `FoundWriteTests`,
+`ShapeGeneratorTests.AWriteFromTheRowsFound*`). `Users.Where(...).Then(u => <insert or delete>).Select(...)` is one
+statement: the rows found in a CTE, the write as a CTE that writes (the statement itself without a Select), and the
+Select over the CTE. Red before: every such query refused (`'Then' in a query`).
+
+| Test | What it pins |
+|---|---|
+| `AnInsertFromTheRowFoundAndTheRowGivenBack` | the row back as a reply and awaited; again, skipped by OrIgnore, row still back; no row found: 404 and nothing written |
+| `AConflictWritesNothingAndTheSelectJoinsAsAnyOther` | without OrIgnore a taken key is 409 and nothing; the Select's join (a left one for a nullable key) |
+| `ADeleteOfAnotherTablesRowsJoinedToTheRowFound` | only the matching rows deleted; nothing left, row still back; no row, 404 |
+| `EachRowFoundIsWrittenFrom` | two rows found, two written; none found, none |
+| `ConcurrentWritesFromTheSameRowAllSucceedAndWriteOnce` | 8 callers on two writer connections, 10 rounds: all found, one row each |
+| `AWriteFromTheRowsFoundSqlWouldReadOtherwiseIsRefused` (10 variants), `AWriteFromTheRowsFoundIsOneStatement`, `ADialectWithoutWhatAShapeNeedsRefusesIt` | the refusals below |
+
+What it decided:
+
+- The write is one per row found: an insert of `new T { ... }` is `INSERT ... SELECT ... FROM t`; a delete whose one
+  condition on the rows found is `x.col = t.col` makes the column one of their values (`x.col = ANY(ARRAY(SELECT
+  t.col FROM t))`, an index condition), and any other use of them joins them (`DELETE ... USING t`). The contest's
+  `= (SELECT id FROM t)` fails on a second row; for Unfollow the plan is better than the contest's (an index
+  condition on the whole primary key instead of the followee index and a filter), which `PlanTests` shows with the
+  contest's statement so rewritten. Follow has the contest's plan as it is.
+- Refused: operators before Then other than Where; an update, a conditional write, SQL, an insert of a query's rows
+  or a unit as the write; a write to the table the rows are found in (UpdateIf and DeleteIf write those); Then in a
+  unit; a dialect without writable CTEs (`SqlDialectAttribute.WritableCtes`, false for SQLite).
+- The statement reads one snapshot, from before the write, so the Select may not read the table written (a join, a
+  navigation's subquery or a `Single`): refused, as it would show the table as it was. Templates are SQL the
+  generator doesn't read and aren't checked.
+- Of several rows found, each is written from and the reply is one of them, in no set order (the contest's has none).
+- The Conduit context's Follow and Unfollow are this LINQ, with `following` given as written.
+
 ### Release cost
 
 Release keeps: a few fields (a bool per connection and per pooled box; a byte, an int and a reference per pooled job;

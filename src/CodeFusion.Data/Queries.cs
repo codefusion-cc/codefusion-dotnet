@@ -107,6 +107,14 @@ public class Query<T>
 
     /// <summary>Updates every row found with <paramref name="set"/>.</summary>
     [QueryDefinition] public UpdateQuery<T> Update(Func<T, T> set) => Definition.Never<UpdateQuery<T>>();
+
+    /// <summary>
+    /// For each row found, <paramref name="write"/>, which may use the row: an insert, or a delete of another table's
+    /// rows (<c>u =&gt; Insert(Follows, new Follow { FollowerId = viewer, FolloweeId = u.Id }).OrIgnore()</c>). One
+    /// statement, so one round trip and atomic, run on the writer; no row found writes nothing. Its <c>Select</c> gives
+    /// back the rows as found, a missing one <see cref="Write{T}.OrNotFound"/>'s reply.
+    /// </summary>
+    [QueryDefinition] public FoundQuery<T> Then(Func<T, Write> write) => Definition.Never<FoundQuery<T>>();
 }
 
 /// <summary>The query operators whose results need a struct row.</summary>
@@ -177,6 +185,19 @@ public sealed class UpdateQuery<T>
 
     /// <summary>The update alone, giving back nothing.</summary>
     [QueryDefinition] public static implicit operator Write(UpdateQuery<T> update) => Definition.Never<Write>();
+}
+
+/// <summary>The rows a query found, each with a write made from it (<see cref="Query{T}.Then"/>).</summary>
+public sealed class FoundQuery<T>
+{
+    FoundQuery() { }
+
+    /// <summary>What to give back of each row found: one of them is the reply, a missing one
+    /// <see cref="Write{T}.OrNotFound"/>'s.</summary>
+    [QueryDefinition] public Write<TResult> Select<TResult>(Func<T, TResult> selector) where TResult : struct => Definition.Never<Write<TResult>>();
+
+    /// <summary>The writes alone, giving back nothing.</summary>
+    [QueryDefinition] public static implicit operator Write(FoundQuery<T> found) => Definition.Never<Write>();
 }
 
 /// <summary>An insert being defined (<see cref="DataContext.Insert{T}(Table{T}, T)"/>), and the statements that follow it in its unit.</summary>

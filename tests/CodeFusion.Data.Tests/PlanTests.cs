@@ -46,8 +46,10 @@ public sealed class PlanTests
         ["CurrentUser"] = (ConduitDb.QuerySql.CurrentUser, ConduitDb.QuerySql.CurrentUserParameters.ToArray(), Sql.CurrentUser + OneRow, ["int8"]),
         ["UpdateUser"] = (ConduitDb.QuerySql.UpdateUser, ConduitDb.QuerySql.UpdateUserParameters.ToArray(), Sql.UpdateUser, ["int8", "text", "text", "text", "text", "text"]),
         ["Profile"] = (ConduitDb.QuerySql.Profile, ConduitDb.QuerySql.ProfileParameters.ToArray(), Sql.Profile + OneRow, ["int8", "text"]),
-        ["Follow (Sql)"] = (ConduitDb.QuerySql.Follow, ConduitDb.QuerySql.FollowParameters.ToArray(), Sql.Follow, ["int8", "text"]),
-        ["Unfollow (Sql)"] = (ConduitDb.QuerySql.Unfollow, ConduitDb.QuerySql.UnfollowParameters.ToArray(), Sql.Unfollow, ["int8", "text"]),
+        ["Follow"] = (ConduitDb.QuerySql.Follow, ConduitDb.QuerySql.FollowParameters.ToArray(), Sql.Follow, ["int8", "text"]),
+        // the followee one of the ids found, as many as there are, where = (SELECT ...) takes one: an index condition on
+        // the whole primary key, where the contest's scans the followee index and filters by follower
+        ["Unfollow"] = (ConduitDb.QuerySql.Unfollow, ConduitDb.QuerySql.UnfollowParameters.ToArray(), Fixed(Sql.Unfollow, ("followee_id = (SELECT id FROM t)", "followee_id = ANY(ARRAY(SELECT id FROM t))")), ["int8", "text"]),
         ["AllArticles"] = (ConduitDb.QuerySql.AllArticles, ConduitDb.QuerySql.AllArticlesParameters.ToArray(), Sql.List[(int)Sql.ListKind.Global], ["int8", "int8", "int8"]),
         ["ArticlesByTag"] = (ConduitDb.QuerySql.ArticlesByTag, ConduitDb.QuerySql.ArticlesByTagParameters.ToArray(), Sql.List[(int)Sql.ListKind.Tag], ["int8", "int8", "int8", "text"]),
         ["ArticlesBy"] = (ConduitDb.QuerySql.ArticlesBy, ConduitDb.QuerySql.ArticlesByParameters.ToArray(), Sql.List[(int)Sql.ListKind.Author], ["int8", "int8", "int8", "text"]),

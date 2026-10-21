@@ -122,6 +122,10 @@ public sealed class SqlDialectAttribute : Attribute
     /// <summary>A bigint literal for a count's cap; {0} is the number: <c>{0}::bigint</c>.</summary>
     public string BigIntLiteral { get; init; } = "{0}::bigint";
 
+    /// <summary>Whether a CTE may write (<c>WITH w AS (INSERT ...) SELECT ...</c>), and a DELETE join other rows
+    /// (<c>DELETE ... USING</c>). False (SQLite): a write from the rows a query found (<c>Query.Then</c>) is refused.</summary>
+    public bool WritableCtes { get; init; } = true;
+
     /// <summary>The lock a conditional write (<c>UpdateIf</c>, <c>DeleteIf</c>) takes on the rows it finds, so their
     /// condition is checked as a concurrent write left them; {0} is the table's alias: <c>FOR UPDATE OF {0}</c>.
     /// Empty: no lock.</summary>

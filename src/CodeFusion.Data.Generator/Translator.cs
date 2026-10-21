@@ -667,6 +667,7 @@ sealed partial class Translator
         if (row.Mode is RowMode.Inserted or RowMode.NewKey or RowMode.Through)
             throw new Refused(at, $"the navigation '{nav.Property.Name}' from this row");
         var target = Entity(nav.Target, at);
+        Unwritten(target, at);
         var owner = row.Owner ?? throw new Refused(at, $"the navigation '{nav.Property.Name}' here (it would need a join)");
         string fk = Column(row, nav.ForeignKey, at);
         string alias = Aliases.ForTable(target.Table);
@@ -683,6 +684,7 @@ sealed partial class Translator
     Value SingleColumn(SingleValue s, IPropertySymbol prop, Location at)
     {
         if (!s.Entity.Columns.TryGetValue(prop.Name, out var col)) throw new Refused(at, $"'{prop.Name}' of Single(...): use one of its columns");
+        Unwritten(s.Entity, at);
         return Nested(() =>
         {
             var sub = new Select();

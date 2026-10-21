@@ -47,6 +47,23 @@ Select: `Insert(Tags, names.AsRows().Distinct().OrderBy(n => n).Select(n => new 
 `INSERT INTO tags (name) SELECT DISTINCT n.v FROM unnest($1) n(v) ORDER BY n.v ON CONFLICT DO NOTHING`, alone or in
 an insert's unit (`ThenIf`).
 
+`Then` after a query's Where writes from each row found, in one statement (one round trip, all or nothing), and its
+Select gives the rows back as found; a missing row is a 404 and writes nothing:
+
+```csharp
+public Write<ProfileView> Follow(long viewer, Utf8 username) =>
+    Users.Where(u => u.Username == username)
+        .Then(u => Insert(Follows, new Follow { FollowerId = viewer, FolloweeId = u.Id }).OrIgnore())
+        .Select(u => new ProfileView(u.Username, u.Bio, u.Image, true));
+// WITH t AS (SELECT u.id, u.username, u.bio, u.image FROM users u WHERE u.username = $1),
+//   w AS (INSERT INTO follows (follower_id, followee_id) SELECT $2, t.id FROM t ON CONFLICT DO NOTHING)
+// SELECT t.username, t.bio, t.image, true FROM t
+```
+
+The write is an insert of `new T { ... }` or a delete (`Follows.Where(f => f.FolloweeId == u.Id).Delete()`, the
+followee one of the ids found). The statement reads the snapshot it started with, so the Select may not read the
+table the write changes.
+
 Entities follow EF's conventions (snake_case names, `AuthorId` with `Author`, `Many<T>` for the other side, and EF's
 attributes) and are never built at run time. Views are `record struct`s of `Utf8`, `Utf8?`, `Timestamp`,
 `RawJson`, numbers, bools and nested views, written as JSON by CodeFusion.Core's rules.

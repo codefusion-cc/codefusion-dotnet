@@ -50,15 +50,16 @@ public sealed partial class ConduitDb : DataContext<Postgres>
     public One<ProfileView> Profile(Utf8 username, long viewer) =>
         Users.Where(u => u.Username == username).Select(u => ProfileView.Of(u, viewer)).One();
 
-    public Write<ProfileView> Follow(long viewer, Utf8 username) => Sql<ProfileView>(
-        $"WITH t AS (SELECT id, username, bio, image FROM users WHERE username = {username}), " +
-        $"w AS (INSERT INTO follows (follower_id, followee_id) SELECT {viewer}, id FROM t ON CONFLICT DO NOTHING) " +
-        $"SELECT username, bio, image, true FROM t").Write();
+    /// <summary>The follow written from the user found by name, in one statement; the profile as found, now followed.</summary>
+    public Write<ProfileView> Follow(long viewer, Utf8 username) =>
+        Users.Where(u => u.Username == username)
+            .Then(u => Insert(Follows, new Follow { FollowerId = viewer, FolloweeId = u.Id }).OrIgnore())
+            .Select(u => new ProfileView(u.Username, u.Bio, u.Image, true));
 
-    public Write<ProfileView> Unfollow(long viewer, Utf8 username) => Sql<ProfileView>(
-        $"WITH t AS (SELECT id, username, bio, image FROM users WHERE username = {username}), " +
-        $"w AS (DELETE FROM follows WHERE follower_id = {viewer} AND followee_id = (SELECT id FROM t)) " +
-        $"SELECT username, bio, image, false FROM t").Write();
+    public Write<ProfileView> Unfollow(long viewer, Utf8 username) =>
+        Users.Where(u => u.Username == username)
+            .Then(u => Follows.Where(f => f.FollowerId == viewer && f.FolloweeId == u.Id).Delete())
+            .Select(u => new ProfileView(u.Username, u.Bio, u.Image, false));
 
     // ---------- article lists ----------
 

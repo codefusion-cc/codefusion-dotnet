@@ -225,6 +225,13 @@ sealed partial class Translator
         {
             case TableSource t:
             {
+                int then = chain.Steps.FindIndex(IsFoundThen);
+                if (then >= 0)
+                {
+                    Expect(thens.Count == 0, at, "a unit after Then (Then is one write from each row found)");
+                    FoundWrite(t, chain.Steps, then);
+                    break;
+                }
                 int write = chain.Steps.FindIndex(s => s.Name is "DeleteIf" or "Delete" or "UpdateIf" or "Update");
                 if (write >= 0)
                 {
@@ -922,14 +929,7 @@ sealed partial class Translator
         var e = source.Entity;
         keySet = null;
         noKey = null;
-        string head = $"INSERT INTO {TableSql(e)}";
-        string tail = ignore ? D.InsertOrIgnore switch
-        {
-            0 => " ON CONFLICT DO NOTHING",
-            1 => "",
-            _ => throw new Refused(at, $"OrIgnore in {D.Name}"),
-        } : "";
-        if (ignore && D.InsertOrIgnore == 1) head = $"INSERT OR IGNORE INTO {TableSql(e)}";
+        var (head, tail) = InsertHead(e, ignore, at);
         var row = source.Row;
         if (row is IAnonymousFunctionOperation lambda)
         {
@@ -1032,6 +1032,19 @@ sealed partial class Translator
     static Refused ListOnItsOwn(ListSource l) =>
         new(l.At, "a list's rows on their own: they are the rows of an insert (Insert(table, list.AsRows()...Select(x => new T { ... })))");
 
+    /// <summary>An insert's words around its columns and rows: <c>INSERT INTO t</c>, and the dialect's skip of a row a
+    /// unique key holds already when <paramref name="ignore"/>.</summary>
+    (string Head, string Tail) InsertHead(EntityInfo e, bool ignore, Location at)
+    {
+        if (!ignore) return ($"INSERT INTO {TableSql(e)}", "");
+        return D.InsertOrIgnore switch
+        {
+            0 => ($"INSERT INTO {TableSql(e)}", " ON CONFLICT DO NOTHING"),
+            1 => ($"INSERT OR IGNORE INTO {TableSql(e)}", ""),
+            _ => throw new Refused(at, $"OrIgnore in {D.Name}"),
+        };
+    }
+
     /// <summary>The key a row sets: a value known when called is the inserted row's key for later statements; one
     /// SQL computes, they can't name again.</summary>
     static void KeySet(ObjectValue o, EntityInfo e, ref Value? keySet, ref string? noKey)
@@ -1093,6 +1106,7 @@ sealed partial class Translator
             case TableSource t:
             {
                 int at = chain.Steps.FindIndex(x => x.Name is "DeleteIf" or "Delete" or "UpdateIf" or "Update");
+                if (chain.Steps.Any(IsFoundThen)) throw new Refused(write.Syntax.GetLocation(), "Then from the rows a query found inside a unit (it is a statement of its own: make it a query method's whole definition)");
                 if (at < 0) throw new Refused(write.Syntax.GetLocation(), "a read as a write of the unit");
                 if (chain.Steps[at].Name is "DeleteIf" or "Delete") Delete(t, chain.Steps, at, condition, root: false);
                 else Update(t, chain.Steps, at, condition, root: false);

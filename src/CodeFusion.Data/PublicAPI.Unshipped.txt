@@ -67,6 +67,8 @@ CodeFusion.Data.DataType.TextArray = 6 -> CodeFusion.Data.DataType
 CodeFusion.Data.DataType.Timestamp = 5 -> CodeFusion.Data.DataType
 CodeFusion.Data.DeleteQuery<T>
 CodeFusion.Data.DeleteQuery<T>.Select<TResult>(System.Func<T, TResult>! selector) -> CodeFusion.Data.WriteQuery<TResult>!
+CodeFusion.Data.FoundQuery<T>
+CodeFusion.Data.FoundQuery<T>.Select<TResult>(System.Func<T, TResult>! selector) -> CodeFusion.Data.Write<TResult>
 CodeFusion.Data.IDataCommand<TStatement>
 CodeFusion.Data.IDataCommand<TStatement>.BeginTextArray() -> void
 CodeFusion.Data.IDataCommand<TStatement>.Boolean(bool value) -> void
@@ -191,6 +193,7 @@ CodeFusion.Data.Query<T>.SelectMany<TChild, TResult>(System.Func<T, CodeFusion.D
 CodeFusion.Data.Query<T>.Single(System.Func<T, bool>! predicate) -> T
 CodeFusion.Data.Query<T>.Skip(long count) -> CodeFusion.Data.Query<T>!
 CodeFusion.Data.Query<T>.Take(long count) -> CodeFusion.Data.Query<T>!
+CodeFusion.Data.Query<T>.Then(System.Func<T, CodeFusion.Data.Write>! write) -> CodeFusion.Data.FoundQuery<T>!
 CodeFusion.Data.Query<T>.Update(System.Func<T, T>! set) -> CodeFusion.Data.UpdateQuery<T>!
 CodeFusion.Data.Query<T>.UpdateIf(System.Func<T, bool>! condition, System.Func<T, T>! set) -> CodeFusion.Data.UpdateQuery<T>!
 CodeFusion.Data.Query<T>.Where(System.Func<T, bool>! predicate) -> CodeFusion.Data.Query<T>!
@@ -288,6 +291,8 @@ CodeFusion.Data.SqlDialectAttribute.TrimStart.get -> string!
 CodeFusion.Data.SqlDialectAttribute.TrimStart.init -> void
 CodeFusion.Data.SqlDialectAttribute.UpperAscii.get -> string!
 CodeFusion.Data.SqlDialectAttribute.UpperAscii.init -> void
+CodeFusion.Data.SqlDialectAttribute.WritableCtes.get -> bool
+CodeFusion.Data.SqlDialectAttribute.WritableCtes.init -> void
 CodeFusion.Data.SqlFunctions
 CodeFusion.Data.SqlInsertOrIgnore
 CodeFusion.Data.SqlInsertOrIgnore.InsertOrIgnore = 1 -> CodeFusion.Data.SqlInsertOrIgnore
@@ -340,6 +345,7 @@ override CodeFusion.Data.Paging.GetHashCode() -> int
 static CodeFusion.Data.DataErrors.Default.get -> CodeFusion.Data.DataErrors!
 static CodeFusion.Data.DataResult.Of(CodeFusion.Data.DataStatus status) -> CodeFusion.Data.DataResult
 static CodeFusion.Data.DeleteQuery<T>.implicit operator CodeFusion.Data.Write(CodeFusion.Data.DeleteQuery<T>! delete) -> CodeFusion.Data.Write
+static CodeFusion.Data.FoundQuery<T>.implicit operator CodeFusion.Data.Write(CodeFusion.Data.FoundQuery<T>! found) -> CodeFusion.Data.Write
 static CodeFusion.Data.Insert<T>.implicit operator CodeFusion.Data.Write(CodeFusion.Data.Insert<T!>! insert) -> CodeFusion.Data.Write
 static CodeFusion.Data.Paging.operator !=(CodeFusion.Data.Paging left, CodeFusion.Data.Paging right) -> bool
 static CodeFusion.Data.Paging.operator ==(CodeFusion.Data.Paging left, CodeFusion.Data.Paging right) -> bool
