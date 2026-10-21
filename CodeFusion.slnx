@@ -19,6 +19,7 @@
     <Project Path="src/CodeFusion.Security.Bcrypt.Generators/CodeFusion.Security.Bcrypt.Generators.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/CodeFusion.ContestBench.Tests/CodeFusion.ContestBench.Tests.csproj" />
     <Project Path="tests/CodeFusion.Core.Tests/CodeFusion.Core.Tests.csproj" />
     <Project Path="tests/CodeFusion.Data.Tests/CodeFusion.Data.Tests.csproj" />
     <Project Path="tests/CodeFusion.Data.Postgres.Tests/CodeFusion.Data.Postgres.Tests.csproj" />

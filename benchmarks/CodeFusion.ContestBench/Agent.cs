@@ -61,7 +61,9 @@ internal static class Agent
         if (!Directory.Exists(Path.Combine(dir, "app"))) { Console.Error.WriteLine($"no entry {name}: deploy it first"); return 1; }
         string front = File.ReadAllText(Path.Combine(dir, "front")).Trim();
         bool direct = front == "direct";
-        Log($"{name} ({front}) on the {contest} box: {File.ReadAllText(Path.Combine(dir, "source"))}");
+        string build = Path.Combine(dir, "build");
+        Log($"{name} ({front}) on the {contest} box: {File.ReadAllText(Path.Combine(dir, "source"))}, build " +
+            (File.Exists(build) ? File.ReadAllText(build).Trim() : "none (its build didn't finish, or it predates build ids)"));
         var mem = MemInfo();
         Log($"box: nproc {Environment.ProcessorCount}, MemTotal {mem.GetValueOrDefault("MemTotal") / 1024} MB, " +
             $"SwapTotal {mem.GetValueOrDefault("SwapTotal") / 1024} MB, kernel {File.ReadAllText("/proc/cmdline").Trim()}");
@@ -378,14 +380,21 @@ internal static class Agent
         return 0;
     }
 
-    static List<string> SplitCsv(string line)
+    /// <summary>One CSV line's fields (RFC 4180: a quoted field may hold commas, and "" is a quote).</summary>
+    internal static List<string> SplitCsv(string line)
     {
         var f = new List<string>();
         var sb = new StringBuilder();
         bool q = false;
-        foreach (char ch in line)
+        for (int i = 0; i < line.Length; i++)
         {
-            if (q) { if (ch == '"') q = false; else sb.Append(ch); }
+            char ch = line[i];
+            if (q)
+            {
+                if (ch != '"') sb.Append(ch);
+                else if (i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); i++; }
+                else q = false;
+            }
             else if (ch == '"') q = true;
             else if (ch == ',') { f.Add(sb.ToString()); sb.Clear(); }
             else sb.Append(ch);
@@ -461,7 +470,7 @@ internal sealed class Hist
         Count += n;
     }
 
-    static long Key(long us)
+    internal static long Key(long us)
     {
         if (us < 1000) return us;
         long p = (long)Math.Pow(10, Math.Floor(Math.Log10(us)) - 2);

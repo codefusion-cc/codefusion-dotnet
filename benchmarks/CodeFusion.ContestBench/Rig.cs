@@ -17,7 +17,7 @@ internal sealed record Contest(
     /// the local port range is the limit), and target + loads stay inside the project's 32-vCPU quota.
     /// </summary>
     public static readonly Contest Multicore = new(
-        "multicore", "/Volumes/Dev/Projects/multicore-server-challenge", "origin/main",
+        "multicore", Checkout("CBENCH_MULTICORE_REPO", "multicore-server-challenge"), "origin/main",
         "cbench-mc-target", new Shape("c4-highcpu-8", 8, 16, 50, "hyperdisk-balanced", false), "cbench-multicore",
         "cbench-mc-load", new Shape("n2-highcpu-4", 4, 4, 20, "pd-balanced", true), 5,
         new Shape("c4-highcpu-8", 8, 16, 50, "hyperdisk-balanced", false));
@@ -29,7 +29,7 @@ internal sealed record Contest(
     /// memory (k6 keeps a JavaScript VM per user and every sample), so n2-highmem-4 spot.
     /// </summary>
     public static readonly Contest Twelve = new(
-        "twelve", "/Volumes/Dev/Projects/twelve-dollar-codefusion", "origin/main",
+        "twelve", Checkout("CBENCH_TWELVE_REPO", "twelve-dollar-codefusion"), "origin/main",
         "cbench-tw-target", new Shape("c4-highcpu-2", 2, 4, 25, "hyperdisk-balanced", false), "cbench-twelve",
         "cbench-tw-load", new Shape("n2-highmem-4", 4, 32, 20, "pd-balanced", true), 1,
         new Shape("c4-highcpu-2", 2, 4, 25, "hyperdisk-balanced", false));
@@ -45,6 +45,10 @@ internal sealed record Contest(
     };
 
     public string LoadName(int i) => $"{LoadPrefix}-{i}";
+
+    /// <summary>A contest's checkout: the variable when set, else a folder of that name next to this repository.</summary>
+    static string Checkout(string variable, string folder) =>
+        Environment.GetEnvironmentVariable(variable) is { Length: > 0 } v ? Path.GetFullPath(v) : Path.GetFullPath(Path.Combine(Paths.RepoRoot(), "..", folder));
 }
 
 internal static class Rig
@@ -55,7 +59,10 @@ internal static class Rig
     const string Ubuntu = "ubuntu-2404-lts-amd64";
     const string UbuntuProject = "ubuntu-os-cloud";
 
-    /// <summary>Creates whatever of the contest's target and load boxes is missing, then readies them.</summary>
+    /// <summary>
+    /// Creates whatever of the contest's target and load boxes is missing, then readies them. When any step fails, or
+    /// on Ctrl-C, the VMs this run created are deleted again; ones that were already up stay.
+    /// </summary>
     public static void Up(Contest c, int loads)
     {
         if (!Gcp.ImageExists(c.TargetFamily)) throw new RigException($"no image {c.TargetFamily}: run `image {c.Key}` first");
@@ -63,16 +70,41 @@ internal static class Rig
         var have = Gcp.List().ToDictionary(v => v.Name);
         var want = new List<(string Name, string Role, Shape Shape, string Family)> { (c.TargetName, c.Key + "-target", c.Target, c.TargetFamily) };
         for (int i = 0; i < loads; i++) want.Add((c.LoadName(i), c.Key + "-load", c.Load, LoadFamily));
-        Parallel.ForEach(want.Where(w => !have.ContainsKey(w.Name)), w => Gcp.Create(w.Name, w.Role, w.Shape, w.Family));
+        try
+        {
+            Parallel.ForEach(want.Where(w => !have.ContainsKey(w.Name)), w => Gcp.Create(w.Name, w.Role, w.Shape, w.Family));
+            Ready(c, want.Select(w => w.Name).ToList());
+        }
+        catch (Exception ex) when (ex is RigException or AggregateException)
+        {
+            string why = ex is AggregateException a ? string.Join("; ", a.Flatten().InnerExceptions.Select(e => e.Message)) : ex.Message;
+            var made = Cleanup.Tracked();
+            if (made.Count > 0)
+            {
+                Console.Error.WriteLine($"rig up failed; deleting the VMs it created: {string.Join(", ", made)}");
+                Gcp.Delete(made);
+            }
+            throw new RigException(why);
+        }
+        Cleanup.Keep(want.Select(w => w.Name));
+        Status();
+    }
+
+    static void Ready(Contest c, List<string> names)
+    {
         var vms = Gcp.List().ToDictionary(v => v.Name);
-        Parallel.ForEach(want, w => Gcp.WaitSsh(vms[w.Name].ExternalIp, TimeSpan.FromMinutes(4)));
+        Parallel.ForEach(names, n => Gcp.WaitSsh(vms[n].ExternalIp, TimeSpan.FromMinutes(4)));
         var target = vms[c.TargetName];
-        var boxes = want.Skip(1).Select(w => vms[w.Name]).ToList();
-        // The first load box runs the multicore search and drives the target and the other boxes over ssh as root.
+        var boxes = names.Skip(1).Select(n => vms[n]).ToList();
+        // The first load box runs the multicore search and drives the target and the other boxes over ssh as root,
+        // with a key of its own made there: the rig's key never leaves the Mac.
         if (c == Contest.Multicore)
         {
-            Ssh.Upload(boxes[0].ExternalIp, Gcp.Key, "/root/.ssh/id_ed25519");
-            Ssh.Check(boxes[0].ExternalIp, "chmod 600 /root/.ssh/id_ed25519 && " + string.Join(" && ",
+            string pub = Ssh.Check(boxes[0].ExternalIp, "test -f /root/.ssh/id_ed25519 || ssh-keygen -q -t ed25519 -N '' -C cbench-load-0 -f /root/.ssh/id_ed25519; " +
+                "cat /root/.ssh/id_ed25519.pub").Trim();
+            foreach (var b in boxes.Skip(1).Append(target))
+                Ssh.Check(b.ExternalIp, $"grep -qxF {Shell.Q(pub)} /root/.ssh/authorized_keys || echo {Shell.Q(pub)} >> /root/.ssh/authorized_keys");
+            Ssh.Check(boxes[0].ExternalIp, string.Join(" && ",
                 boxes.Skip(1).Select(b => b.InternalIp).Append(target.InternalIp).Select(ip =>
                     $"ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new root@{ip} true")));
         }
@@ -87,7 +119,6 @@ internal static class Rig
             throw new RigException("the $12 box must have one CPU (nr_cpus=1 on the kernel command line)");
         // A disk made from an image reads each block slowly the first time: read the data once.
         Ssh.Check(target.ExternalIp, "/opt/conduit-tools/cbench agent prewarm", echo: true, timeout: TimeSpan.FromMinutes(15));
-        Status();
     }
 
     public static void Down(string? contest)
@@ -102,11 +133,12 @@ internal static class Rig
     public static void Status()
     {
         var vms = Gcp.List();
+        Ledger.Reconcile(vms.Select(v => v.Name).ToHashSet());
         if (vms.Count == 0) Console.WriteLine("no contest-bench VMs");
         foreach (var v in vms)
             Console.WriteLine($"{v.Name,-20} {v.Status,-10} {v.MachineType,-16} {v.InternalIp,-15} {v.ExternalIp,-15} {v.Role}");
         var (usd, hours, running) = Ledger.Cost();
-        Console.WriteLine($"cost so far: {usd:0.00} USD over {hours:0.0} VM-hours (VMs, disks while running; images extra)" +
+        Console.WriteLine($"cost so far: {usd:0.00} USD over {hours:0.0} VM-hours (VMs, disks while running; images extra, see README.md)" +
             (running.Count > 0 ? $"; in the ledger as running: {string.Join(", ", running)}" : ""));
     }
 
@@ -133,10 +165,10 @@ internal static class Rig
             "load" => ("cbench-img-load", new Shape("n2-standard-4", 4, 16, 20, "pd-balanced", false), LoadFamily),
             _ => throw new RigException("image multicore|twelve|load"),
         };
-        if (Gcp.List().Any(v => v.Name == name)) Gcp.Delete([name]);
-        Gcp.Create(name, "builder", shape, Ubuntu, UbuntuProject);
+        Gcp.Delete([name]);
         try
         {
+            Gcp.Create(name, "builder", shape, Ubuntu, UbuntuProject);
             var vm = Find(name);
             Gcp.WaitSsh(vm.ExternalIp, TimeSpan.FromMinutes(4));
             string ip = vm.ExternalIp;

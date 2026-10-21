@@ -17,7 +17,32 @@ internal sealed record Timings(int WarmRamp, int Warm, int ProbeRamp, int Probe,
 }
 
 /// <summary>Search options from the command line.</summary>
-internal sealed record SearchOptions(bool Quick, int? Start, int? Max, string? Label, bool NoSwitch, int? Fixed);
+internal sealed record SearchOptions(bool Quick, int? Start, int? Max, string? Label, bool NoSwitch, int? Fixed)
+{
+    /// <summary>The flags as typed, for the search log: what it takes to run the same search again.</summary>
+    public string Flags() => string.Join(' ', new[]
+    {
+        Quick ? "--quick" : null, Start is int s ? $"--start {s}" : null, Max is int m ? $"--max {m}" : null,
+        Fixed is int f ? $"--fixed {f}" : null, Label != null ? $"--label {Label}" : null, NoSwitch ? "--no-switch" : null,
+    }.Where(x => x != null));
+}
+
+/// <summary>
+/// What a deploy put on the target for an entry: its source (repository, commit and path) and its build, a hash of
+/// the archive that was built. A redeploy from another commit under the same name has another build.
+/// </summary>
+internal sealed record EntryId(string Source, string Build)
+{
+    public static string Dir(string entry) => $"/opt/challenge/entries/{entry}";
+
+    public static EntryId Read(string ip, string entry)
+    {
+        var r = Ssh.Run(ip, $"cat {Dir(entry)}/source && echo && cat {Dir(entry)}/build");
+        var l = r.Out.Split('\n', StringSplitOptions.TrimEntries);
+        if (!r.Ok || l.Length < 2 || l[1].Length == 0) throw new RigException($"{entry} has no build id on the target: deploy it again");
+        return new(l[0], l[1]);
+    }
+}
 
 internal static class Search
 {
@@ -32,6 +57,8 @@ internal static class Search
     /// </summary>
     public static void Multicore(string entry, SearchOptions o)
     {
+        Names.Check("entry", entry);
+        if (o.Label != null) Names.Check("--label", o.Label);
         var c = Contest.Multicore;
         var target = Rig.Find(c.TargetName);
         var loads = Rig.Loads(c);
@@ -60,13 +87,19 @@ internal static class Search
         Console.WriteLine($"search {label}: {loads.Count} load boxes (up to {capacity:N0} users), -start {start} -max {max}" +
             (o.Quick ? " (quick: not a score)" : ""));
         string lg0 = loads[0].ExternalIp;
+        // loadgen resumes a label's search from its outdir: one label is one build of the entry
+        var id = EntryId.Read(target.ExternalIp, entry);
+        string was = Ssh.Run(lg0, $"cat {rdir}/build 2>/dev/null").Out.Trim();
+        if (was.Length > 0 && was != id.Build) throw new RigException($"{label} scored build {was} of {entry}; the entry is now {id.Build}: use a new --label");
+        Ssh.Check(lg0, $"mkdir -p {rdir} && printf %s {Shell.Q(id.Build)} > {rdir}/build");
+        Console.WriteLine($"  {entry} build {id.Build}: {id.Source}; options [{o.Flags()}]");
         Ssh.Check(lg0, cmd);
         Follow(lg0, $"{rdir}/search.log", $"{rdir}.pid", $"{rdir}.out");
         string local = Path.Combine(Paths.Results("multicore"), label);
         Directory.CreateDirectory(Paths.Results("multicore"));
         if (Directory.Exists(local)) Directory.Delete(local, true);
         Ssh.Download(lg0, rdir, Paths.Results("multicore"), recursive: true);
-        Results.AddMulticore(entry, label, o.Quick ? "quick" : o.Fixed != null ? "fixed" : "full", local);
+        Results.AddMulticore(entry, label, o.Quick ? "quick" : o.Fixed != null ? "fixed" : "full", local, id);
     }
 
     /// <summary>Prints a remote log as it grows until the process in <paramref name="pidFile"/> exits.</summary>
@@ -94,14 +127,14 @@ internal static class Search
     // ---------------------------------------------------------------- $12
 
     /// <summary>
-    /// The $12 score as its README describes it: a warm-up at 1,000 users for 2 minutes, bench/load.js from 2,500
-    /// users doubling until a run fails, narrowing to within 250 users, then 5-minute holds stepping down 250 until
-    /// one passes. A run passes when k6's thresholds would (p95 &lt; 500 ms, p99 &lt; 1 s, under 1% failed, over the
-    /// whole run). Probes use a 2-minute load.js run (the README doesn't give their length); holds use load.js's
-    /// defaults (60 s ramp, 5 minutes). With several k6 boxes the users are split and the samples merged exactly.
+    /// The $12 score (<see cref="TwelveSearch"/>). Probes use a 2-minute load.js run (the README doesn't give their
+    /// length); holds use load.js's defaults (60 s ramp, 5 minutes). With several k6 boxes the users are split and the
+    /// samples merged exactly. A label is one build of one entry: resuming it on another build is refused.
     /// </summary>
     public static void Twelve(string entry, SearchOptions o)
     {
+        Names.Check("entry", entry);
+        if (o.Label != null) Names.Check("--label", o.Label);
         var c = Contest.Twelve;
         var target = Rig.Find(c.TargetName);
         var loads = Rig.Loads(c);
@@ -109,98 +142,88 @@ internal static class Search
         string label = o.Label ?? $"{entry}-{(o.Fixed != null ? $"fixed{o.Fixed}" : o.Quick ? "quick" : "full")}-{DateTime.UtcNow:MMdd-HHmm}";
         string dir = Path.Combine(Paths.Results("twelve"), label);
         Directory.CreateDirectory(dir);
-        var log = new StreamWriter(Path.Combine(dir, "search.log"), append: true) { AutoFlush = true };
+        using var log = new StreamWriter(Path.Combine(dir, "search.log"), append: true) { AutoFlush = true };
         void Log(string s)
         {
             string l = $"[{DateTime.UtcNow:HH:mm:ss}] {s}";
             Console.WriteLine(l);
             log.WriteLine(l);
         }
-        (int warmRamp, int warm, int probeRamp, int probe, int holdRamp, int hold, int step) = o.Quick
-            ? (20, 40, 20, 40, 20, 60, 500) : (60, 120, 60, 120, 60, 300, 250);
-        Log($"=== search {label}: {entry} on {target.InternalIp}, k6 boxes {string.Join(", ", loads.Select(l => l.Name))}" + (o.Quick ? " (quick: not a score)" : ""));
-        // a search resumed after another entry's ran on the box switches back, though its first switch is done
-        string live = Ssh.Run(target.ExternalIp, "basename $(dirname $(readlink -f /opt/challenge/current))").Out.Trim();
-        if (!o.NoSwitch && (!File.Exists(Path.Combine(dir, "switch.ok")) || live != entry))
-        {
-            var sw = Ssh.Run(target.ExternalIp, $"/opt/conduit-tools/cbench agent switch {Shell.Q(entry)} 2>&1", timeout: TimeSpan.FromMinutes(5));
-            File.WriteAllText(Path.Combine(dir, "switch.log"), sw.Out);
-            if (!sw.Ok) throw new RigException($"switch failed: {Shell.Tail(sw.Out, 1500)}");
-            File.WriteAllText(Path.Combine(dir, "switch.ok"), DateTime.UtcNow.ToString("o"));
-            Log("switch ok");
-        }
-        var phases = new List<JsonObject>();
-        bool first = true;
-        JsonObject Phase(string name, int users, int ramp, int duration)
-        {
-            var r = TwelvePhase(target, loads, dir, name, users, ramp, duration, label, waitIdle: !first, Log);
-            first = false;
-            phases.Add(r);
-            return r;
-        }
-        bool Pass(JsonObject r) => (bool)r["pass"]!;
-        bool Lg(JsonObject r) => (bool)r["lg_limited"]!;
-
-        if (o.Fixed is int fixedUsers)
-        {
-            Phase($"hold-{fixedUsers}", fixedUsers, holdRamp, hold);
-            Results.AddTwelve(entry, label, "fixed", dir, phases, fixedUsers);
-            return;
-        }
-        Phase("warmup", 1000, warmRamp, warm);
-        int lo = 0, hi = 0, lgAt = 0;
-        int u = o.Start ?? 2500;
-        int cap = o.Max ?? 400000;
-        while (true)
-        {
-            var r = Phase($"probe-{u}", u, probeRamp, probe);
-            if (Lg(r)) { lgAt = u; break; }
-            if (Pass(r))
-            {
-                lo = u;
-                if (hi != 0 || u >= cap) break;
-                u = Math.Min(u * 2, cap);
-            }
-            else
-            {
-                hi = u;
-                if (lo > 0 || u <= step) break;
-                u = Math.Max(step, u / 2 / step * step);
-            }
-        }
-        while (lgAt == 0 && lo > 0 && hi > 0 && hi - lo > step)
-        {
-            int m = (int)Math.Round((lo + hi) / 2.0 / step) * step;
-            if (m <= lo || m >= hi) break;
-            var r = Phase($"probe-{m}", m, probeRamp, probe);
-            if (Lg(r)) { lgAt = m; break; }
-            if (Pass(r)) lo = m; else hi = m;
-        }
-        int score = 0;
-        for (int h = lo; lgAt == 0 && h > 0; h -= step)
-        {
-            var r = Phase($"hold-{h}", h, holdRamp, hold);
-            if (Lg(r)) { lgAt = h; break; }
-            if (Pass(r)) { score = h; break; }
-        }
-        Log(lgAt > 0 ? $"RESULT: LG-limited at {lgAt} users (add k6 boxes); highest clean pass {lo}"
-            : score > 0 ? $"RESULT: score {score} users (5-minute hold passed)" : "RESULT: no passing hold");
-        Results.AddTwelve(entry, label, o.Quick ? "quick" : "full", dir, phases, score, lo, hi, lgAt);
+        var id = EntryId.Read(target.ExternalIp, entry);
+        string buildFile = Path.Combine(dir, "build");
+        if (File.Exists(buildFile) && File.ReadAllText(buildFile).Trim() is var was && was != id.Build)
+            throw new RigException($"{label} scored build {was} of {entry}; the entry is now {id.Build}: use a new --label");
+        File.WriteAllText(buildFile, id.Build);
+        Log($"=== search {label}: {entry} build {id.Build} on {target.InternalIp}, k6 boxes {string.Join(", ", loads.Select(l => l.Name))}, " +
+            $"options [{o.Flags()}]" + (o.Quick ? " (quick: not a score)" : ""));
+        Log($"    source {id.Source}");
+        var box = new TwelveBox(target, loads, dir, label, entry, id.Build, o.NoSwitch, Log);
+        var r = TwelveSearch.Run(TwelvePlan.For(o), box, Log);
+        Log(r.LgLimitedAt > 0 ? $"RESULT: LG-limited at {r.LgLimitedAt} users (add k6 boxes); highest clean pass {r.HighestPass}"
+            : r.Score > 0 ? $"RESULT: score {r.Score} users (5-minute hold passed)" : "RESULT: no passing hold");
+        Results.AddTwelve(entry, label, o.Fixed != null ? "fixed" : o.Quick ? "quick" : "full", dir, r.Phases.Select(p => p.Raw!).ToList(),
+            r.Score, r.HighestPass, r.LowestFail, r.LgLimitedAt, id);
     }
 
-    static JsonObject TwelvePhase(Vm target, List<Vm> loads, string dir, string name, int users, int ramp, int duration,
-        string label, bool waitIdle, Action<string> log)
+    /// <summary>The $12 box for <see cref="TwelveSearch"/>: phases cached in the label's folder, run on the k6 boxes.</summary>
+    sealed class TwelveBox(Vm target, List<Vm> loads, string dir, string label, string entry, string build, bool noSwitch, Action<string> log) : IPhases
     {
-        string pdir = Path.Combine(dir, name);
-        string mpath = Path.Combine(pdir, "merged.json");
-        if (File.Exists(mpath))
+        bool _ranAny;
+        bool _checked;
+
+        public PhaseResult? Cached(string name)
         {
+            string mpath = Path.Combine(dir, name, "merged.json");
+            if (!File.Exists(mpath)) return null;
             var cached = JsonNode.Parse(File.ReadAllText(mpath))!.AsObject();
+            if (Builds.CacheConflict(cached, build) is { } why) throw new RigException(why);
             log($"{name,-12} {OneLine(cached)} (cached)");
-            return cached;
+            return PhaseResult.From(cached);
         }
-        Directory.CreateDirectory(pdir);
-        if (waitIdle) WaitIdle(target.ExternalIp, log);
+
+        /// <summary>
+        /// Before each phase run: the entry wasn't deployed again, and the box runs it. The first check switches when
+        /// this label never switched; later ones when another entry's search ran on the box in between.
+        /// </summary>
+        public bool EnsureLive()
+        {
+            var live = Ssh.Check(target.ExternalIp, $"basename \"$(dirname \"$(readlink -f /opt/challenge/current)\")\"; cat {EntryId.Dir(entry)}/build 2>/dev/null; true")
+                .Split('\n', StringSplitOptions.TrimEntries);
+            string liveEntry = live[0], entryBuild = live.Length > 1 ? live[1] : "";
+            if (entryBuild != build) throw new RigException($"{entry} was deployed again during the search (build {entryBuild}, was {build}): use a new --label");
+            bool first = !_checked;
+            _checked = true;
+            if (noSwitch)
+            {
+                if (liveEntry != entry) throw new RigException($"--no-switch, but the box runs {liveEntry}, not {entry}");
+                return false;
+            }
+            if (liveEntry == entry && !(first && !File.Exists(Path.Combine(dir, "switch.ok")))) return false;
+            var sw = Ssh.Run(target.ExternalIp, $"/opt/conduit-tools/cbench agent switch {Shell.Q(entry)} 2>&1", timeout: TimeSpan.FromMinutes(5));
+            File.AppendAllText(Path.Combine(dir, "switch.log"), sw.Out);
+            if (!sw.Ok) throw new RigException($"switch failed: {Shell.Tail(sw.Out, 1500)}");
+            File.WriteAllText(Path.Combine(dir, "switch.ok"), DateTime.UtcNow.ToString("o"));
+            log(liveEntry == entry ? "switch ok" : $"switch ok (the box ran {liveEntry})");
+            return true;
+        }
+
+        public PhaseResult Run(string name, int users, int ramp, int duration)
+        {
+            string pdir = Path.Combine(dir, name);
+            if (Directory.Exists(pdir)) Directory.Delete(pdir, true);
+            Directory.CreateDirectory(pdir);
+            if (_ranAny) WaitIdle(target.ExternalIp, log);
+            _ranAny = true;
+            var r = TwelvePhase(target, loads, pdir, name, users, ramp, duration, label, entry, log);
+            r["build"] = build;
+            File.WriteAllText(Path.Combine(pdir, "merged.json"), r.ToJsonString(Paths.Json));
+            return PhaseResult.From(r);
+        }
+    }
+
+    static JsonObject TwelvePhase(Vm target, List<Vm> loads, string pdir, string name, int users, int ramp, int duration,
+        string label, string entry, Action<string> log)
+    {
         string run = $"{label}-{name}-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
         var shares = Enumerable.Range(0, loads.Count).Select(i => users / loads.Count + (i < users % loads.Count ? 1 : 0)).ToArray();
         log($"{name,-12} {users} users [{string.Join(' ', shares)}], ramp {ramp}s + {duration}s");
@@ -241,11 +264,14 @@ internal static class Search
         bool crashed = !Ssh.Run(target.ExternalIp, "systemctl is-active --quiet challenge").Ok;
         if (crashed)
         {
-            string why = Ssh.Run(target.ExternalIp, "systemctl show challenge -p Result -p ExecMainStatus -p ExecMainCode --value | tr '\\n' ' '; " +
-                "journalctl -u challenge --no-pager -n 60").Out;
+            // this phase's lines only (the unit's journal holds every entry that ran on the box), and the kernel's
+            // OOM killer, which a kill from outside the unit's cgroup doesn't show in the unit's result
+            string why = Ssh.Run(target.ExternalIp, "systemctl show challenge -p Result -p ExecMainStatus -p ExecMainCode --value | tr '\\n' ' '; echo; " +
+                $"journalctl -k --no-pager -q --since @{t0} | grep -iE 'out of memory|oom-kill|killed process' | tail -5; " +
+                $"journalctl -u challenge --no-pager -q --since @{t0} | tail -60").Out;
             File.WriteAllText(Path.Combine(pdir, "crash.log"), why);
-            log($"  CRASHED during {name}: {Shell.Tail(why.Split('\n')[0], 200)}");
-            string entry = Ssh.Check(target.ExternalIp, "basename $(dirname $(readlink -f /opt/challenge/current))").Trim();
+            string kernel = why.Split('\n').FirstOrDefault(l => l.Contains("Killed process", StringComparison.OrdinalIgnoreCase) || l.Contains("out of memory", StringComparison.OrdinalIgnoreCase)) ?? "";
+            log($"  CRASHED during {name}: {Shell.Tail(why.Split('\n')[0], 120)}{(kernel.Length > 0 ? $"; kernel: {Shell.Tail(kernel, 160)}" : "")}");
             var sw = Ssh.Run(target.ExternalIp, $"/opt/conduit-tools/cbench agent switch {Shell.Q(entry)} 2>&1", timeout: TimeSpan.FromMinutes(5));
             File.WriteAllText(Path.Combine(pdir, "restart.log"), sw.Out);
             log(sw.Ok ? "  restarted on a fresh database" : $"  restart failed: {Shell.Tail(sw.Out, 300)}");
@@ -269,7 +295,7 @@ internal static class Search
         var r = new JsonObject
         {
             ["crashed"] = crashed,
-            ["phase"] = name, ["users"] = users, ["pass"] = reasons.Count == 0, ["lg_limited"] = lgReasons.Count > 0 && name != "warmup",
+            ["phase"] = name, ["users"] = users, ["pass"] = reasons.Count == 0, ["lg_limited"] = lgReasons.Count > 0 && !name.EndsWith("warmup", StringComparison.Ordinal) && !name.StartsWith("rewarm-", StringComparison.Ordinal),
             ["fail_reasons"] = new JsonArray(reasons.Select(x => (JsonNode)x).ToArray()),
             ["lg_reasons"] = new JsonArray(lgReasons.Select(x => (JsonNode)x!).ToArray()),
             ["requests"] = all.Count, ["rps"] = secs > 0 ? all.Count / secs : 0, ["p50_ms"] = all.PercentileMs(0.5), ["p95_ms"] = p95, ["p99_ms"] = p99,
@@ -278,7 +304,6 @@ internal static class Search
             ["start_s"] = t0, ["ramp_s"] = ramp, ["measure_s"] = duration,
             ["target"] = target1.ToJson(), ["lg_cpu_max_avg"] = boxCpu.Count > 0 ? boxCpu.Max(m => m.Avg("cpu%")) : 0,
         };
-        File.WriteAllText(mpath, r.ToJsonString(Paths.Json));
         log($"{name,-12} {OneLine(r)}");
         if (reasons.Count > 0) log($"  fail: {string.Join(", ", reasons)}");
         if (lgReasons.Count > 0) log($"  LG-limited: {string.Join("; ", lgReasons)}");

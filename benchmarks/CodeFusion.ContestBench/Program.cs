@@ -5,20 +5,28 @@ using System.Linq;
 using CodeFusion.ContestBench;
 
 // The contest rig. On the Mac:
-//   image multicore|twelve|load                    build an image on a fresh VM (the VM is deleted afterwards)
-//   rig up multicore|twelve [--load N]             create the target and N load boxes from the images, ready them
+//   image multicore|twelve|load [--hours N]        build an image on a fresh VM (the VM is deleted afterwards)
+//   rig up multicore|twelve [--load N] [--hours N] create the target and N load boxes from the images, ready them;
+//                                                  Google deletes every VM after N hours (default 8) whatever happens
 //   rig down [multicore|twelve]                    delete the rig's VMs (all of them without an argument)
 //   rig status                                     the VMs, and the cost so far
 //   deploy multicore|twelve <entry> <source> [--front nginx|direct] [--env K=V]...
-//                                                  <source> is repo:rev:path or a folder; built on the target
+//                                                  <source> is repo:rev:path, or a folder in a git checkout with
+//                                                  nothing uncommitted (its HEAD); built on the target
 //   search multicore|twelve <entry> [--quick] [--start N] [--max N] [--fixed N] [--label L] [--no-switch]
 //   results                                        the results table (Markdown)
 //   ssh <vm> <command>                             a command as root on a rig VM
 //   push-agent                                     publish this tool for linux-x64 and copy it to every rig VM
 // On a rig VM (called by loadgen's search and by this tool):
 //   agent switch <entry> | agent monitor <s> <csv> | agent prewarm | agent k6sum <csv.gz> | agent pgstat on|off|reset|dump
+Console.CancelKeyPress += Cleanup.OnCancel;
 try
 {
+    if (Int(args, "--hours") is int hours)
+    {
+        if (hours is < 1 or > 48) throw new RigException("--hours: 1 to 48");
+        Gcp.MaxRunHours = hours;
+    }
     switch (args)
     {
         case ["agent", .. var rest]:
@@ -70,6 +78,11 @@ catch (RigException ex)
     Console.Error.WriteLine($"error: {ex.Message}");
     return 1;
 }
+catch (AggregateException ex) when (ex.Flatten().InnerExceptions.All(e => e is RigException))
+{
+    foreach (var e in ex.Flatten().InnerExceptions) Console.Error.WriteLine($"error: {e.Message}");
+    return 1;
+}
 
 static string? Str(string[] a, string flag)
 {
@@ -77,7 +90,8 @@ static string? Str(string[] a, string flag)
     return i >= 0 && i + 1 < a.Length ? a[i + 1] : null;
 }
 
-static int? Int(string[] a, string flag) => Str(a, flag) is { } s ? int.Parse(s, CultureInfo.InvariantCulture) : null;
+static int? Int(string[] a, string flag) => Str(a, flag) is not { } s ? null
+    : int.TryParse(s, NumberStyles.None, CultureInfo.InvariantCulture, out int n) ? n : throw new RigException($"{flag} {s}: a whole number");
 
 static List<string> All(string[] a, string flag) =>
     a.Select((x, i) => (x, i)).Where(p => p.x == flag && p.i + 1 < a.Length).Select(p => a[p.i + 1]).ToList();

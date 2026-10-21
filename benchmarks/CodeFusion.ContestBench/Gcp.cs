@@ -73,7 +73,14 @@ internal static class Gcp
         return vms;
     }
 
-    /// <summary>Creates a VM from an image family (ours, or Ubuntu's when <paramref name="imageProject"/> is given).</summary>
+    /// <summary>Hours after which Google deletes a VM whatever happens here (`--max-run-duration`); `--hours N` raises it.</summary>
+    public static int MaxRunHours { get; set; } = 8;
+
+    /// <summary>
+    /// Creates a VM from an image family (ours, or Ubuntu's when <paramref name="imageProject"/> is given). Google
+    /// deletes it after <see cref="MaxRunHours"/>; Ctrl-C deletes it (see <see cref="Cleanup"/>); a create that fails
+    /// after the VM exists deletes it.
+    /// </summary>
     public static void Create(string name, string role, Shape shape, string imageFamily, string? imageProject = null)
     {
         string pub = File.ReadAllText(Key + ".pub").Trim();
@@ -90,31 +97,75 @@ internal static class Gcp
         File.WriteAllText(tmp, startup);
         var args = new List<string> { "compute", "instances", "create", name, $"--zone={Zone}",
             $"--labels={Labels},role={role}", $"--boot-disk-size={shape.DiskGb}GB", $"--boot-disk-type={shape.DiskType}",
-            $"--metadata-from-file=startup-script={tmp}", "--quiet" };
+            $"--metadata-from-file=startup-script={tmp}", $"--max-run-duration={MaxRunHours}h", "--instance-termination-action=DELETE", "--quiet" };
         args.AddRange(shape.MachineArgs());
         if (imageProject != null) { args.Add($"--image-family={imageFamily}"); args.Add($"--image-project={imageProject}"); }
         else args.Add($"--image-family={imageFamily}");
         if (shape.MachineType.StartsWith("c4", StringComparison.Ordinal)) args.Add("--network-interface=nic-type=GVNIC");
-        if (shape.Spot) { args.Add("--provisioning-model=SPOT"); args.Add("--instance-termination-action=DELETE"); }
+        if (shape.Spot) args.Add("--provisioning-model=SPOT");
+        Cleanup.Track(name);
         try
         {
             Shell.Check(Gcloud, args);
+        }
+        catch (RigException)
+        {
+            // gcloud can fail after the VM exists (a client timeout, a partial error): delete what it made
+            if (List().Any(v => v.Name == name))
+            {
+                Ledger.Created(name, role, shape);
+                Delete([name]);
+            }
+            Cleanup.Untrack(name);
+            throw;
         }
         finally
         {
             File.Delete(tmp);
         }
         Ledger.Created(name, role, shape);
-        Console.WriteLine($"created {name} ({shape.MachineType}{(shape.Spot ? ", spot" : "")}, {shape.PricePerHour():0.000} USD/h)");
+        // a new VM may get an address an old one had: its host key is new
+        if (List().FirstOrDefault(v => v.Name == name) is { ExternalIp.Length: > 0 } vm) Ssh.Forget(vm.ExternalIp);
+        Console.WriteLine($"created {name} ({shape.MachineType}{(shape.Spot ? ", spot" : "")}, {shape.PricePerHour():0.000} USD/h, deleted by Google after {MaxRunHours} h)");
     }
 
+    /// <summary>Deletes the VMs of these names that exist; one already gone doesn't stop the others.</summary>
     public static void Delete(IEnumerable<string> names)
     {
-        var list = names.ToList();
+        var want = names.Distinct().ToList();
+        if (want.Count == 0) return;
+        var live = List().Select(v => v.Name).ToHashSet();
+        foreach (string n in want.Where(n => !live.Contains(n))) Cleanup.Untrack(n);
+        var list = want.Where(live.Contains).ToList();
         if (list.Count == 0) return;
-        Shell.Check(Gcloud, ["compute", "instances", "delete", .. list, $"--zone={Zone}", "--quiet"], echo: false);
-        foreach (string n in list) Ledger.Deleted(n);
-        Console.WriteLine($"deleted {string.Join(", ", list)}");
+        var r = Shell.Run(Gcloud, ["compute", "instances", "delete", .. list, $"--zone={Zone}", "--quiet"]);
+        var left = r.Ok ? [] : List().Select(v => v.Name).Where(list.Contains).ToHashSet();
+        var done = list.Where(n => !left.Contains(n)).ToList();
+        foreach (string n in done)
+        {
+            Ledger.Deleted(n);
+            Cleanup.Untrack(n);
+        }
+        if (done.Count > 0) Console.WriteLine($"deleted {string.Join(", ", done)}");
+        if (left.Count > 0) throw new RigException($"could not delete {string.Join(", ", left)}: {Shell.Tail(r.Err, 800)}");
+    }
+
+    /// <summary>
+    /// When a VM the rig no longer sees went, and why, from the zone's operations: preempted, deleted at its
+    /// max run duration or deleted elsewhere. The first such operation after <paramref name="since"/>; null when none is listed.
+    /// </summary>
+    public static (DateTime At, string Why)? GoneAt(string name, DateTime since)
+    {
+        var r = Shell.Run(Gcloud, ["compute", "operations", "list", $"--zones={Zone}", $"--filter=targetLink~/instances/{name}$",
+            "--format=json(operationType,insertTime,endTime)"]);
+        if (!r.Ok) return null;
+        return JsonNode.Parse(r.Out)!.AsArray()
+            .Select(o => ((string)o!["operationType"]!, (string?)o["endTime"] ?? (string)o["insertTime"]!))
+            .Where(o => o.Item1 != "insert" && o.Item1 != "start" && !o.Item1.Contains("setMetadata", StringComparison.Ordinal))
+            .Select(o => (At: DateTimeOffset.Parse(o.Item2, CultureInfo.InvariantCulture).UtcDateTime, Why: o.Item1))
+            .Where(o => o.At >= since && (o.Why == "delete" || o.Why.Contains("preempt", StringComparison.OrdinalIgnoreCase) ||
+                o.Why.Contains("terminat", StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(o => o.At).Select(o => ((DateTime, string)?)o).FirstOrDefault();
     }
 
     public static void Stop(string name) =>
@@ -150,12 +201,26 @@ internal static class Gcp
     }
 }
 
-/// <summary>ssh and scp to the rig's VMs as root with the rig key. Host keys change with every VM, so none are kept.</summary>
+/// <summary>
+/// ssh and scp to the rig's VMs as root with the rig key. Host keys go in the rig's own known_hosts, taken on first
+/// contact (accept-new) and dropped when a new VM gets the address.
+/// </summary>
 internal static class Ssh
 {
-    static readonly string[] Opts = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
+    static readonly string KnownHosts = Path.Combine(Paths.State, "known_hosts");
+    static readonly Lock KnownHostsGate = new();
+    static readonly string[] Opts = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", $"UserKnownHostsFile={KnownHosts}",
         "-o", "LogLevel=ERROR", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=8"];
     static readonly string[] Recursive = ["-r"];
+
+    static Ssh() => Directory.CreateDirectory(Paths.State);
+
+    /// <summary>Drops an address's host key: a new VM has it now.</summary>
+    public static void Forget(string ip)
+    {
+        lock (KnownHostsGate)
+            if (File.Exists(KnownHosts)) Shell.Run("ssh-keygen", ["-q", "-R", ip, "-f", KnownHosts]);
+    }
 
     public static ProcessResult Run(string ip, string command, bool echo = false, TimeSpan? timeout = null, string? stdin = null) =>
         Shell.Run("ssh", [.. Opts, "-i", Gcp.Key, $"root@{ip}", command], echo: echo, timeout: timeout, stdin: stdin);
@@ -179,40 +244,102 @@ internal static class Ssh
         Shell.Retry("scp", 3, () => Shell.Check("scp", [.. Opts, "-i", Gcp.Key, "-q", .. (recursive ? Recursive : []), $"root@{ip}:{remote}", local]));
 }
 
-/// <summary>Every VM created or deleted, with its price, so the rig's cost can be added up.</summary>
+/// <summary>
+/// Every VM created, deleted, or gone without the rig (preempted, or deleted at its max run duration), with its
+/// price, so the rig's cost can be added up. Appends are whole lines under a lock, so parallel creates keep every row.
+/// </summary>
 internal static class Ledger
 {
-    static string Path => System.IO.Path.Combine(Paths.State, "ledger.jsonl");
+    static string File_ => System.IO.Path.Combine(Paths.State, "ledger.jsonl");
+    static readonly Lock Gate = new();
 
-    public static void Created(string name, string role, Shape s) => Append(new JsonObject
+    public static void Created(string name, string role, Shape s) => Append(File_, new JsonObject
     {
         ["t"] = DateTime.UtcNow.ToString("o"), ["ev"] = "create", ["name"] = name, ["role"] = role,
         ["type"] = s.MachineType, ["spot"] = s.Spot, ["usd_h"] = s.PricePerHour(),
     });
 
-    public static void Deleted(string name) => Append(new JsonObject
+    public static void Deleted(string name) => Append(File_, new JsonObject
     {
         ["t"] = DateTime.UtcNow.ToString("o"), ["ev"] = "delete", ["name"] = name,
     });
 
-    static void Append(JsonObject o)
+    /// <summary>Adds a "gone" row for each VM the ledger has running that gcloud no longer lists, at the time it went.</summary>
+    public static void Reconcile(ISet<string> listed)
     {
-        Directory.CreateDirectory(Paths.State);
-        File.AppendAllText(Path, o.ToJsonString() + "\n");
+        if (!File.Exists(File_)) return;
+        var open = Open(File.ReadLines(File_).ToList());
+        foreach (var (name, created) in open.Where(o => !listed.Contains(o.Name)))
+        {
+            var gone = Gcp.GoneAt(name, created);
+            Append(File_, new JsonObject
+            {
+                ["t"] = (gone?.At ?? DateTime.UtcNow).ToString("o"), ["ev"] = "gone", ["name"] = name,
+                ["why"] = gone?.Why ?? "not listed by gcloud; when it went is unknown, so it counts to now",
+            });
+            Console.WriteLine($"ledger: {name} went without the rig ({gone?.Why ?? "unknown"}, {gone?.At:HH:mm}Z)");
+        }
     }
 
-    /// <summary>VM hours and cost so far; VMs still running count up to now.</summary>
-    public static (double Usd, double Hours, List<string> Running) Cost()
+    internal static void Append(string path, JsonObject o)
     {
-        if (!File.Exists(Path)) return (0, 0, []);
+        byte[] line = System.Text.Encoding.UTF8.GetBytes(o.ToJsonString() + "\n");
+        lock (Gate)
+        {
+            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+            // another cbench process may hold the file for a moment
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    using var f = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read);
+                    f.Write(line);
+                    return;
+                }
+                catch (IOException) when (attempt < 50)
+                {
+                    Thread.Sleep(100);
+                }
+            }
+        }
+    }
+
+    /// <summary>The VMs the ledger has running: created, and neither deleted nor gone since.</summary>
+    internal static List<(string Name, DateTime Created)> Open(IEnumerable<string> lines)
+    {
+        var open = new Dictionary<string, DateTime>();
+        foreach (var (ev, name, t, _) in Rows(lines))
+            if (ev == "create") open[name] = t;
+            else open.Remove(name);
+        return open.Select(kv => (kv.Key, kv.Value)).ToList();
+    }
+
+    internal static List<string> Missing(IEnumerable<string> lines, ISet<string> listed) =>
+        Open(lines).Where(o => !listed.Contains(o.Name)).Select(o => o.Name).ToList();
+
+    static IEnumerable<(string Ev, string Name, DateTime T, double UsdH)> Rows(IEnumerable<string> lines)
+    {
+        foreach (string line in lines)
+        {
+            if (line.Length == 0) continue;
+            var o = JsonNode.Parse(line)!;
+            yield return ((string)o["ev"]!, (string)o["name"]!,
+                DateTime.Parse((string)o["t"]!, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal),
+                (double?)o["usd_h"] ?? 0);
+        }
+    }
+
+    public static (double Usd, double Hours, List<string> Running) Cost() =>
+        File.Exists(File_) ? Cost(File.ReadLines(File_).ToList(), DateTime.UtcNow) : (0, 0, []);
+
+    /// <summary>VM hours and cost; VMs still running count up to <paramref name="now"/>.</summary>
+    internal static (double Usd, double Hours, List<string> Running) Cost(IEnumerable<string> lines, DateTime now)
+    {
         var open = new Dictionary<string, (DateTime T, double Usd)>();
         double usd = 0, hours = 0;
-        foreach (string line in File.ReadLines(Path))
+        foreach (var (ev, name, t, price) in Rows(lines))
         {
-            var o = JsonNode.Parse(line)!;
-            var t = DateTime.Parse((string)o["t"]!, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
-            string name = (string)o["name"]!;
-            if ((string)o["ev"]! == "create") open[name] = (t, (double)o["usd_h"]!);
+            if (ev == "create") open[name] = (t, price);
             else if (open.Remove(name, out var c))
             {
                 double h = (t - c.T).TotalHours;
@@ -222,11 +349,44 @@ internal static class Ledger
         }
         foreach (var (_, c) in open)
         {
-            double h = (DateTime.UtcNow - c.T).TotalHours;
+            double h = (now - c.T).TotalHours;
             hours += h;
             usd += h * c.Usd;
         }
         return (usd, hours, open.Keys.ToList());
+    }
+}
+
+/// <summary>
+/// The VMs this process made and still owns. Ctrl-C deletes them before the process ends; a `rig up` that finished
+/// hands its VMs over (they are meant to stay up), and a builder is deleted when its image is made or fails.
+/// </summary>
+internal static class Cleanup
+{
+    static readonly HashSet<string> Made = [];
+    static int _stopping;
+
+    public static void Track(string name) { lock (Made) Made.Add(name); }
+
+    public static void Untrack(string name) { lock (Made) Made.Remove(name); }
+
+    public static void Keep(IEnumerable<string> names) { lock (Made) foreach (string n in names) Made.Remove(n); }
+
+    public static List<string> Tracked() { lock (Made) return Made.ToList(); }
+
+    /// <summary>On Ctrl-C: deletes what this process made, then exits. A second Ctrl-C ends it at once.</summary>
+    public static void OnCancel(object? sender, ConsoleCancelEventArgs e)
+    {
+        if (Interlocked.Exchange(ref _stopping, 1) != 0) return;
+        e.Cancel = true;
+        var made = Tracked();
+        if (made.Count > 0)
+        {
+            Console.Error.WriteLine($"interrupted: deleting what this run made: {string.Join(", ", made)}");
+            try { Gcp.Delete(made); }
+            catch (RigException ex) { Console.Error.WriteLine($"error: {ex.Message}; `rig status` lists what is left"); }
+        }
+        Environment.Exit(130);
     }
 }
 
