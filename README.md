@@ -44,8 +44,15 @@ What the numbers rest on:
 
 Read these with care:
 - **This is a reduced rig.** TechEmpower's own rounds run on larger hardware.
+- **How the other entries were run:** each was built from TechEmpower's repository (57d92fbec6f8) with its own
+  Dockerfile and settings, and scored with TechEmpower's sequence. Each was run once, one after another. CodeFusion's
+  numbers come from a later run, not in alternating order with them, so differences of a few percent are noise.
+- **wrk was the limit for the fastest servers:** it ran 92 to 100% busy for xitca-web and libreactor on plaintext and
+  JSON. Their numbers are lower bounds, so the real gaps there are probably larger than the table shows.
+- **Postgres limits the database tests:** its 8 vCPUs ran 93 to 100% busy for the leaders, and 32% for CodeFusion on
+  the single query. CodeFusion's lead there comes from asking Postgres for less work per query, and the 8-vCPU
+  database caps the others.
 - **The overall leader on plaintext and JSON is libreactor, written in C:** 9,461,172 and 1,483,605 on this rig.
-- **Postgres limits the database tests:** its 8 vCPUs ran 93 to 100% busy for the leaders there.
 - **Some of the CodeFusion build isn't on main yet:** these numbers come from every performance branch merged
   together, and Postgres pipelining and the merged updates are still in review.
 
