@@ -284,7 +284,7 @@ sealed partial class Translator
     public void StartStatement()
     {
         Params = new ParamList(D);
-        Aliases = new Aliases();
+        Aliases = new Aliases(D.Keywords);
     }
 
     // ---------- the model ----------

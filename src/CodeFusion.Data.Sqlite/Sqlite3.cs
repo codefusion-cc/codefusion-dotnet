@@ -187,6 +187,12 @@ internal static unsafe partial class Sqlite3
     [LibraryImport(Lib, EntryPoint = "sqlite3_result_error_nomem"), SuppressGCTransition]
     public static partial void ResultErrorNoMem(nint context);
 
+    [LibraryImport(Lib, EntryPoint = "sqlite3_keyword_count")]
+    public static partial int KeywordCount();
+
+    [LibraryImport(Lib, EntryPoint = "sqlite3_keyword_name")]
+    public static partial int KeywordName(int index, out byte* name, out int bytes);
+
     /// <summary>The message of a failed call on <paramref name="db"/>, for an exception (cold).</summary>
     public static string Message(nint db) => db == 0 ? "no connection" : Marshal.PtrToStringUTF8((nint)ErrMsg(db)) ?? "";
 

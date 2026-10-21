@@ -39,6 +39,10 @@ public sealed class SqlDialectAttribute : Attribute
     /// <summary>A parameter's marker; {0} is its number from 1: <c>${0}</c> (Postgres), <c>?{0}</c> (SQLite), <c>@p{0}</c> (SQL Server).</summary>
     public string Parameter { get; init; } = "${0}";
 
+    /// <summary>Words this dialect keeps for itself beyond Postgres's reserved ones, space-separated: a table, column or
+    /// alias that is one of them is quoted. SQLite lists its own keywords here.</summary>
+    public string Keywords { get; init; } = "";
+
     /// <summary>The characters a quoted identifier starts and ends with: <c>""</c>, or <c>[]</c> for SQL Server.
     /// Identifiers are quoted only where they need it (reserved words, capitals).</summary>
     public string Quotes { get; init; } = "\"\"";

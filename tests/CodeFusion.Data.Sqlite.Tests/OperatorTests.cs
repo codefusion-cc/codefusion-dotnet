@@ -25,7 +25,8 @@ public sealed class OpsFixture : IAsyncLifetime
         CREATE TABLE person_labels (person_id INTEGER NOT NULL REFERENCES people (id) ON DELETE CASCADE, label_id INTEGER NOT NULL REFERENCES labels (id),
           PRIMARY KEY (person_id, label_id)) WITHOUT ROWID;
         CREATE TABLE "Gadgets" (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL);
-        CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL)
+        CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+        CREATE TABLE shelves (id INTEGER PRIMARY KEY, "index" INTEGER NOT NULL)
         """;
 
     /// <summary>CodeFusion.Data.Tests' seed, row for row.</summary>
@@ -488,6 +489,16 @@ public sealed class OperatorTests(OpsFixture fixture)
     }
 
     // ---------- SQL ----------
+
+    [Fact]
+    public async Task AColumnNamedAfterAKeywordIsQuotedAndItsQueryRuns()
+    {
+        // index is a keyword of SQLite's, not a reserved word of Postgres's
+        Assert.Equal("SELECT s.id FROM shelves s WHERE s.\"index\" = ?1 LIMIT 1", Q.ShelfAt);
+        await Json(Db(write: true).AddShelf(5, 3));
+        Assert.Equal(204, _response.Status);
+        Assert.Equal(5, (await Db(write: true).ShelfAt(3)).Value);
+    }
 
     [Fact]
     public async Task SqlHolesAreParametersAndConstantsAreSql()

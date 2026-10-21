@@ -32,6 +32,10 @@ sealed class Dialect
             {
                 case "Parameter": d.Parameter = (string)v!; break;
                 case "Quotes": d.Quotes = (string)v!; break;
+                case "Keywords":
+                    d.Keywords = new HashSet<string>(Reserved, StringComparer.OrdinalIgnoreCase);
+                    d.Keywords.UnionWith(((string)v!).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+                    break;
                 case "Paging": d.Paging = (string)v!; break;
                 case "Limit": d.Limit = (string)v!; break;
                 case "Offset": d.Offset = (string)v!; break;
@@ -104,11 +108,15 @@ sealed class Dialect
         "key", "value", "values",
     };
 
+    /// <summary>The words an identifier is quoted for in this dialect: Postgres's reserved ones, and the dialect's own
+    /// keywords (<c>SqlDialectAttribute.Keywords</c>).</summary>
+    public HashSet<string> Keywords = Reserved;
+
     /// <summary>An identifier, quoted only where it needs it: a reserved word, or anything but lower case, digits and _.</summary>
     public string Quote(string name)
     {
         bool plain = name.Length > 0 && !char.IsDigit(name[0]) && name.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_');
-        if (plain && !Reserved.Contains(name)) return name;
+        if (plain && !Keywords.Contains(name)) return name;
         char open = Quotes[0], close = Quotes.Length > 1 ? Quotes[1] : Quotes[0];
         return open + name.Replace(close.ToString(), new string(close, 2)) + close;
     }
@@ -326,7 +334,7 @@ static class Sql
 }
 
 /// <summary>Gives each table reference in a statement its own alias, preferring the lambda's parameter name.</summary>
-sealed class Aliases
+sealed class Aliases(HashSet<string> keywords)
 {
     readonly HashSet<string> _used = new(StringComparer.Ordinal);
 
@@ -354,5 +362,5 @@ sealed class Aliases
     /// <summary>Keeps <paramref name="name"/> from the aliases taken after it: a name a statement refers to its target by.</summary>
     public void Reserve(string name) => _used.Add(name);
 
-    static bool Reserved(string a) => Dialect.Reserved.Contains(a);
+    bool Reserved(string a) => keywords.Contains(a);
 }
