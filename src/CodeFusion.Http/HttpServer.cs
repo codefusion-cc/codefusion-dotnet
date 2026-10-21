@@ -28,6 +28,14 @@ public sealed class HttpServer : IAsyncDisposable
     /// stack of its own in them too. Set before Start.</summary>
     internal BufferPool[] LoopPools = [];
 
+    /// <summary>On loop <paramref name="loop"/>'s thread as it ends: its buffer stacks go back to the shards.</summary>
+    internal void DrainLoopPools(int loop)
+    {
+        RequestBuffers.DrainLoop(loop);
+        ResponseBuffers.DrainLoop(loop);
+        foreach (BufferPool pool in LoopPools) pool.DrainLoop(loop);
+    }
+
     /// <summary>Called on each exchange once its handler has completed (or failed), before the response is finished:
     /// the app flushes its JSON writer and resets the request's arena there.</summary>
     internal Action<HttpExchange>? HandlerDone;

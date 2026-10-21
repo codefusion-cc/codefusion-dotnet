@@ -32,7 +32,8 @@
   - The allocation tests are at zero for both.
 - **Conclusion:**
   - **Keep the per-loop stacks:** both orders favour B, and the lock is gone from the profile.
-  - **One listener per core stays the default:** one listener is within ±2.5%, either way, so per-loop listeners stay
-    the default, and 6 loops on 8 cores lose 10 to 16%.
+  - **A listener per loop stays the default:** one listener is within -2.6% to +2.5% of it (json on B 1.180M against
+    1.211M, plaintext on A 7.34M against 7.16M), either way. And 6 loops on 8 cores lose 10 to 16%, so one loop per
+    core stays too.
   - **Still behind xitca-web:** plaintext 7.45M against 8.91M, json 1.18M against 1.26M.
   - **Next:** the managed side of plaintext (parse, response head, date header), at 0.13 system calls per request.

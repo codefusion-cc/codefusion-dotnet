@@ -69,7 +69,9 @@ public sealed class HttpServerOptions
     public int ResponseBufferSize { get; set; } = 16 * 1024;
 
     /// <summary>Request and response buffers kept for reuse, of each size. Only connections with a request in
-    /// flight hold one.</summary>
+    /// flight hold one. On <see cref="HttpTransport.EventLoop"/> half of them are shared out among the loops, each
+    /// keeping its share for its own connections without a lock (at least one each, while there are as many buffers
+    /// as loops; with fewer, every rent takes the shared pool's lock).</summary>
     public int MaxPooledBuffers { get; set; } = 4096;
 
     /// <summary>Connection objects (with their socket event args and the handler's per-connection state) kept for

@@ -16,14 +16,15 @@ namespace CodeFusion.Http;
 /// </summary>
 internal sealed class BufferPool
 {
-    readonly Shard[] _shards;
+    Shard[] _shards;
     readonly int _capacity;
     public readonly int Size;
     int _created, _dropped;
     int _sharedOut; // Debug builds count the larger arrays out here; Release ones don't
-    // The event loops': one stack per loop of the server they belong to, at most capacity / (2 x loops) arrays each, so
-    // together half the capacity again however many loops there are. Only the loop's own thread touches its stack; a
-    // rent or return on any other thread goes to the shards, as does what a full stack can't take.
+    // The event loops': one stack per loop of the server they belong to, capacity / (2 x loops) arrays each (at least
+    // one, while the capacity has one per loop), taken out of the shards' share, so the capacity stays the whole bound.
+    // Only the loop's own thread touches its stack; a rent or return on any other thread goes to the shards, as does
+    // what a full stack can't take.
     HttpServer? _server;
     LoopStack[] _loops = [];
     int _loopRents, _loopReturns, _sharedReturns; // Debug builds count here; Release ones don't
@@ -32,9 +33,15 @@ internal sealed class BufferPool
     {
         Size = size;
         _capacity = capacity;
+        _shards = Shards(capacity);
+    }
+
+    static Shard[] Shards(int capacity)
+    {
         int n = Math.Max(1, Math.Min(Environment.ProcessorCount, 64));
-        _shards = new Shard[n];
-        for (int i = 0; i < n; i++) _shards[i] = new Shard((capacity + n - 1) / n);
+        var shards = new Shard[n];
+        for (int i = 0; i < n; i++) shards[i] = new Shard((capacity + n - 1) / n);
+        return shards;
     }
 
     /// <summary>Gives each of <paramref name="server"/>'s <paramref name="loops"/> event loops a stack of its own. Before
@@ -42,11 +49,27 @@ internal sealed class BufferPool
     public void AttachLoops(HttpServer server, int loops)
     {
         int each = _capacity / (2 * loops);
-        if (each == 0) return;
+        if (each == 0 && _capacity >= loops) each = 1;
+        if (each == 0) return; // fewer arrays than loops: every rent takes the shards' lock
         var stacks = new LoopStack[loops];
         for (int i = 0; i < loops; i++) stacks[i] = new LoopStack(each);
+        _shards = Shards(_capacity - each * loops); // nothing is rented yet: the loops haven't started
         _loops = stacks;
         _server = server;
+    }
+
+    /// <summary>On loop <paramref name="loop"/>'s thread as it ends: what its stack holds goes to the shards, where
+    /// other threads can rent it.</summary>
+    public void DrainLoop(int loop)
+    {
+        if (loop >= _loops.Length) return;
+        while (_loops[loop].TryPop() is { } a)
+        {
+            bool kept = false;
+            foreach (Shard s in _shards)
+                if (kept = s.TryPush(a)) break;
+            if (!kept) Interlocked.Increment(ref _dropped);
+        }
     }
 
     /// <summary>The stack of the loop whose thread this is, if it is one of this pool's server.</summary>

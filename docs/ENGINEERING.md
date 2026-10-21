@@ -1089,11 +1089,15 @@ shards, rented and returned around every request.
   loop, touched only by that loop's thread, so no lock.
 - A rent or return on a loop's thread goes there first. Any other thread (a continuation off the loop, Sockets) uses
   the shards, as does what a full stack can't take. A loop's stack never sees another thread.
-- Each stack holds at most capacity / (2 x loops) arrays, so together half the capacity again, however many loops.
+- Each stack holds capacity / (2 x loops) arrays (at least one, while the capacity has one per loop), taken out of the
+  shards' share: `MaxPooledBuffers` stays the whole bound. With fewer arrays than loops there are no stacks.
+- A loop that ends (its wait failed, or the stop) gives its stacks back to the shards on its own thread.
 - Tests (`LoopPoolTests`), each red with its part broken:
   - rents and returns go through the loop's stack;
   - a buffer given back off its loop goes to the shards;
-  - each loop keeps at most its share;
+  - each loop keeps exactly its share (red with the stacks off);
+  - the pools keep no more than `MaxPooledBuffers` in all (red with the shards at the full capacity);
+  - a failed loop's stacks go back to the shards (red without the drain);
   - the arena's chunks use it too.
 - `ServerChecks`' pool balance counts the loop stacks; the allocation tests are unchanged.
 

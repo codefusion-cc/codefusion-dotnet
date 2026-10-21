@@ -252,6 +252,7 @@ internal abstract unsafe class EventLoop
         {
             NativeMemory.Free(events);
             if (held) Queue.DangerousRelease();
+            _server.DrainLoopPools(_index); // nothing else can pop this loop's stacks
             Closed();
             Queue.Dispose();
             // connections posted as it ended start on the pool: their run finds the loop closed, and closes
