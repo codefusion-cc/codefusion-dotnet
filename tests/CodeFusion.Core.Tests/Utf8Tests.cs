@@ -115,4 +115,84 @@ public class Utf8Tests
         for (int i = 0; i < 1000; i++) Run();
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
     }
+
+    // ---- Slice and Trim: views of the same buffer ----
+
+    [Theory]
+    [InlineData("hello", 0, 5, "hello")]
+    [InlineData("hello", 0, 0, "")]
+    [InlineData("hello", 5, 0, "")]
+    [InlineData("hello", 1, 3, "ell")]
+    [InlineData("hello", 4, 1, "o")]
+    [InlineData("héllo", 1, 2, "é")]
+    public void ASliceIsAViewOfThoseBytes(string s, int start, int length, string expected)
+    {
+        Utf8 text = Of(s, 3, 2);
+        Utf8 slice = text.Slice(start, length);
+        Assert.Equal(expected, slice.ToString());
+        Assert.Equal(Encoding.UTF8.GetByteCount(expected), slice.Length);
+        if (slice.Length > 0) Assert.True(slice.Span.Overlaps(text.Span)); // the same bytes, not a copy
+    }
+
+    // the buffer's padding around the text must stay out of reach
+    [Theory]
+    [InlineData(-1, 0)]
+    [InlineData(0, -1)]
+    [InlineData(0, 6)]
+    [InlineData(1, 5)]
+    [InlineData(6, 0)]
+    [InlineData(5, 1)]
+    [InlineData(int.MaxValue, 1)]
+    [InlineData(1, int.MaxValue)]
+    [InlineData(int.MinValue, 0)]
+    public void ASliceOutsideTheTextIsRefused(int start, int length)
+    {
+        Utf8 text = Of("hello", 4, 4);
+        Assert.Throws<ArgumentOutOfRangeException>(() => text.Slice(start, length));
+    }
+
+    [Fact]
+    public void TheEmptyTextSlicesOnlyToItself()
+    {
+        Assert.True(Utf8.Empty.Slice(0, 0).IsEmpty);
+        Assert.Throws<ArgumentOutOfRangeException>(() => Utf8.Empty.Slice(0, 1));
+        Assert.True(Utf8.Empty.Trim().IsEmpty);
+    }
+
+    [Theory]
+    [InlineData("hi", "hi")]
+    [InlineData("  hi there \n", "hi there")]
+    [InlineData("\t\r\n hi\r\n\t ", "hi")]
+    [InlineData(" a b ", "a b")]
+    [InlineData("   ", "")]
+    [InlineData("", "")]
+    [InlineData(" hi ", " hi ")]   // JSON's whitespace only: a no-break space is text
+    [InlineData(" hi", " hi")]
+    [InlineData("\fhi\v", "\fhi\v")]
+    [InlineData(" é ", "é")]
+    public void TrimDropsJsonWhitespaceAtBothEnds(string s, string expected)
+    {
+        Utf8 text = Of(s, 2, 2);
+        Utf8 trimmed = text.Trim();
+        Assert.Equal(expected, trimmed.ToString());
+        if (trimmed.Length > 0) Assert.True(trimmed.Span.Overlaps(text.Span));
+    }
+
+    [Property(MaxTest = 1000)]
+    public bool TrimIsTheSpansTrimAsAView(NonNull<string> s, byte before, byte after)
+    {
+        Utf8 text = Of(s.Get, before % 5, after % 5);
+        return text.Trim().Span.SequenceEqual(text.Span.Trim(" \t\r\n"u8)) && text.Trim().Trim() == text.Trim();
+    }
+
+    [Fact]
+    public void SlicingAndTrimmingAllocateNothing()
+    {
+        Utf8 a = Of("  how-to-train-your-dragon \n", 3, 3);
+        int Run() => a.Trim().Length + a.Slice(2, 3).Length + a.Trim().Slice(1, 2).Length;
+        for (int i = 0; i < 100; i++) Run();
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 1000; i++) Run();
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
 }
