@@ -1,0 +1,19 @@
+# Weekly version updates. Security updates are on in the repository's settings and come whenever an advisory does.
+# Updates are grouped per ecosystem, so each week is one PR to review, and nothing auto-merges.
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      nuget:
+        patterns: ['*']
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
