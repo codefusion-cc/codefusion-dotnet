@@ -378,11 +378,13 @@ sealed class PgConnection : IDisposable
     /// that batch's replies are read.</summary>
     internal bool BindsPendingParse(PgJob?[] group, int from, int to)
     {
+        // a keyed update may go merged, binding its batch statement instead
+        bool Pending(PgStatement s) => s.Id < _prepared.Length && _prepared[s.Id] == 1;
         for (int j = from; j < to; j++)
         {
             var job = group[j]!;
             for (int i = 0; i < job.Count; i++)
-                if (job.Statements[i].Id < _prepared.Length && _prepared[job.Statements[i].Id] == 1) return true;
+                if (Pending(job.Statements[i]) || job.Statements[i].Batch is { } batch && Pending(batch)) return true;
         }
         return false;
     }
@@ -516,11 +518,15 @@ sealed class PgConnection : IDisposable
     /// <summary>Ends the batch with a Sync and sends it.</summary>
     internal void Flush()
     {
+        Seal();
+        SendSealed();
+    }
+
+    /// <summary>Ends the batch with a Sync, in line to be sent with the ones sealed after it (<see cref="SendSealed"/>):
+    /// each its own implicit transaction, answered on its own.</summary>
+    internal void Seal()
+    {
         Append([(byte)'S', 0, 0, 0, 4]);
-        // A batch that may not fit the socket buffers, or one sent while another is still answered (its replies can
-        // fill ours while Postgres waits for us to read them), takes replies in whenever the socket is full
-        _t.Send(_send.AsSpan(0, _sendLen), _sendLen > SendPiece || _sentCount > 0 ? _takeIn : null);
-        if (_send.Length > 1 << 20) _send = new byte[16 << 10];
         // in line behind the batches before it: its steps take a free slot's place, that slot's array is the next build's
         if (_sentCount == _sent.Length)
         {
@@ -541,6 +547,16 @@ sealed class PgConnection : IDisposable
         _sentCounts[tail] = _buildCount;
         _sentCount++;
         _buildCount = 0;
+    }
+
+    /// <summary>Sends the batches sealed since <see cref="Begin"/>.</summary>
+    internal void SendSealed()
+    {
+        // A send that may not fit the socket buffers, or one with batches answered before it ends (an earlier batch
+        // in flight, or more than one in it: their replies can fill ours while Postgres waits for us to read them),
+        // takes replies in whenever the socket is full
+        _t.Send(_send.AsSpan(0, _sendLen), _sendLen > SendPiece || _sentCount > 1 ? _takeIn : null);
+        if (_send.Length > 1 << 20) _send = new byte[16 << 10];
     }
 
     void Append(ReadOnlySpan<byte> b)

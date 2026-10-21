@@ -38,9 +38,9 @@ public sealed class PgWriter : PgLoops
     /// before it wrote the second time needn't be what they wrote in the attempt that rolled back (a sequence keeps
     /// its step, now() moves). Only a write that failed first in its batch gets its error at once: it saw nothing of
     /// the group. So a write runs at most twice before it commits (three times when the writes before the failing
-    /// one then fail together, and each runs alone), and of two writes that conflict the one queued first wins. A
-    /// run of keyed updates merged into one statement that fails is tried once more unmerged first, and that is where
-    /// the failing write is found, so a merged write runs once more than that.
+    /// one then fail together, and each runs alone), and of two writes that conflict the one queued first wins.
+    /// When a run of keyed updates merged into one statement fails, the group's writes from there go once more one
+    /// by one (<see cref="OneByOne"/>), each with its own outcome: a merged write too runs at most twice.
     /// </summary>
     private protected override void Run(PgConnection conn, PgJob?[] group, int n)
     {
@@ -51,13 +51,12 @@ public sealed class PgWriter : PgLoops
             if (failed < 0) return;
             if (conn.FailedInBatch)
             {
-                // A merged statement failed: which write is at fault, and what the writes before it would see, the
-                // same writes one by one say. If it was the table that refused merging (its own check, or Postgres:
-                // a rule on it can't take an update in a WITH), its statement never merges again
+                // If it was the table that refused merging (its own check, or Postgres: a rule on it can't take an
+                // update in a WITH), its statement never merges again
                 if (error is not null && (error.SqlState == "0A000" || error.Message.Contains(Postgres.NotMergedMarker, StringComparison.Ordinal)))
                     group[failed]!.Statements[0].Batch = null;
-                failed = TryCommit(conn, group, from, n, out error, merge: false);
-                if (failed < 0) return;
+                OneByOne(conn, group, from, n);
+                return;
             }
             if (failed == n)
             {
@@ -71,6 +70,48 @@ public sealed class PgWriter : PgLoops
             Alone(conn, group, failed, failed == from ? error : null);
             from = failed + 1;
         }
+    }
+
+    /// <summary>
+    /// Runs writes <paramref name="from"/> to <paramref name="to"/> (exclusive) in one round trip, each in a
+    /// transaction of its own (its own Sync, so an error skips nothing of the others): in order, each with its own
+    /// outcome, as running them one by one. A row locked elsewhere costs its write one lock timeout and no other write
+    /// any. A write that fails on a deadlock or serialization failure (another loop's locks, not its own error) runs
+    /// again alone afterwards.
+    /// </summary>
+    void OneByOne(PgConnection conn, PgJob?[] group, int from, int to)
+    {
+        Interlocked.Increment(ref Counters.Reruns);
+        conn.Begin();
+        for (int j = from; j < to; j++)
+        {
+            group[j]!.Restart();
+            conn.Add(group[j]!, j);
+            conn.Seal();
+        }
+        conn.SendSealed();
+        bool again = false;
+        for (int j = from; j < to; j++)
+        {
+            // -1: committed; else its statement or its commit (a deferred constraint) failed, its own error either way
+            bool ok = conn.ReadReplies(group, keep: true, out var error) == -1;
+            var job = group[j]!;
+            if (!ok && error is not null && Transient(error))
+            {
+                again = true; // stays in the group for its run alone below
+                continue;
+            }
+            group[j] = null;
+            if (ok)
+            {
+                HandRows(conn, job);
+                job.Complete(job.Answer());
+            }
+            else job.Complete(new PgResult(PgStatus.ServerError, runs: job.Runs, exception: error));
+        }
+        if (again)
+            for (int j = from; j < to; j++)
+                if (group[j] is not null) Alone(conn, group, j);
     }
 
     /// <summary>
@@ -93,9 +134,9 @@ public sealed class PgWriter : PgLoops
     /// Runs writes <paramref name="from"/> to <paramref name="to"/> (exclusive) as one batch and, once committed,
     /// hands each its rows and completes it. On an error from Postgres returns the slot of the write whose statement
     /// failed (<paramref name="to"/> if the commit failed) with the error; nothing committed. -1 when all committed.
-    /// Runs of keyed updates go merged unless <paramref name="merge"/> is false.
+    /// Runs of keyed updates go merged.
     /// </summary>
-    int TryCommit(PgConnection conn, PgJob?[] group, int from, int to, out PgException? error, bool rerun = true, bool merge = true)
+    int TryCommit(PgConnection conn, PgJob?[] group, int from, int to, out PgException? error, bool rerun = true)
     {
         if (rerun) Interlocked.Increment(ref Counters.Reruns);
         conn.Begin();
@@ -105,7 +146,7 @@ public sealed class PgWriter : PgLoops
             job.Restart();
             // a run of one keyed update goes as one statement
             int end = j + 1;
-            if (merge && job.Count == 1 && job.Statements[0].Batch is { } batch && PgConnection.TryKey(job, batch, out long key))
+            if (job.Count == 1 && job.Statements[0].Batch is { } batch && PgConnection.TryKey(job, batch, out long key))
             {
                 // the run ends where a key comes again: each write updates its row once, and every one is checked
                 var keys = conn.RunKeys;

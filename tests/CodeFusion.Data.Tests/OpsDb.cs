@@ -370,6 +370,9 @@ public sealed partial class OpsDb : DataContext<Postgres>
 
     public Write SetName(long id, Utf8 name) => People.Where(p => p.Id == id).Update(p => new Person { Name = name });
 
+    [RunsAlone]
+    public Write SetAgeAlone(long id, int age) => People.Where(p => p.Id == id).Update(p => new Person { Age = age });
+
     public Write SetCard(long id, Utf8? nick, double? score, bool active, Timestamp born) =>
         People.Where(p => p.Id == id).Update(p => new Person { Nick = nick, Score = score, Active = active, Born = born });
 

@@ -227,6 +227,47 @@ public sealed class KeyedUpdateTests(OpsFixture fixture) : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ALockedKeyInAMergedRunCostsOneMoreLockTimeoutNotOnePerWrite()
+    {
+        TestDb.Require();
+        var settings = PgSettings.Parse(TestDb.ConnectionString!).Set("search_path", "cfdata_ops_w");
+        var source = new PostgresDatabase(settings) { WriterLockTimeout = TimeSpan.FromMilliseconds(300) }.Open(1, 1);
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            await using var admin = TestDb.Admin("cfdata_ops_w");
+            await using var conn = await admin.OpenConnectionAsync();
+            await using var tx = await conn.BeginTransactionAsync();
+            await using (var lockRow = new Npgsql.NpgsqlCommand("SELECT 1 FROM people WHERE id = 560 FOR UPDATE", conn, tx))
+                await lockRow.ExecuteScalarAsync();
+            var counters = source.Writer.Counters;
+            long merged = counters.Merged, reruns = counters.Reruns;
+            var pause = Run(db.Pause());
+            await Task.Delay(30);
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            var writes = Enumerable.Range(551, 10).Select(id => Run(db.SetAge(id, 40))).ToArray();
+            Assert.True((await pause).IsOk);
+            var results = await Task.WhenAll(writes);
+            var took = System.Diagnostics.Stopwatch.GetElapsedTime(started);
+            Assert.Equal(10, counters.Merged - merged);
+            Assert.All(results.Take(9), r => Assert.Equal(DataStatus.Ok, r.Status));
+            Assert.Equal(DataStatus.LockTimeout, results[9].Status);
+            // the merged attempt waits out the lock once, the writes one by one once more: not again for the write
+            // alone, nor once per write before it
+            Assert.Equal(1, counters.Reruns - reruns);
+            Assert.True(took < TimeSpan.FromMilliseconds(150 + 2 * 300 + 250), $"{took.TotalMilliseconds:F0} ms");
+            for (long id = 551; id < 560; id++) Assert.Equal(40, await Age(id));
+            await tx.RollbackAsync();
+            Assert.Equal(1, await Age(560));
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
+    }
+
+    [Fact]
     public async Task AnUpdateOfItsOwnKeyIsNeverMergedAndLaterWritesFindTheMovedRow()
     {
         long before = Merged;
