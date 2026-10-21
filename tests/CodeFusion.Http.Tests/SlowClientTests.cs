@@ -233,8 +233,7 @@ public sealed class SlowClientTests
     public async Task AfterItsFirstRequestAConnectionWaitsTheKeepAliveTimeout()
     {
         await using var t = TestServer.Start(TestServer.Echo, o => o.RequestTimeout = TimeSpan.FromMilliseconds(300));
-        using Client c = await t.ConnectAsync();
-        await c.SendAsync("GET /a HTTP/1.1\r\nHost: x\r\n\r\n");
+        using Client c = t.ConnectAndSend("GET /a HTTP/1.1\r\nHost: x\r\n\r\n");
         Assert.Equal(200, (await c.ReadAsync()).Status);
         await Task.Delay(800);
         await c.SendAsync("GET /b HTTP/1.1\r\nHost: x\r\n\r\n");

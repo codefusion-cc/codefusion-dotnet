@@ -41,6 +41,9 @@ internal sealed class TestServer : IAsyncDisposable
 
     public Task<Client> ConnectAsync() => Client.ConnectAsync(EndPoint);
 
+    /// <summary><see cref="Client.ConnectAndSend"/>: for a first request that must beat a short request timeout.</summary>
+    public Client ConnectAndSend(string request) => Client.ConnectAndSend(EndPoint, request);
+
     /// <summary>Waits until the server's open connections reach <paramref name="n"/>.</summary>
     public async Task ConnectionsReach(int n, int timeoutMs = 5000)
     {
@@ -102,6 +105,26 @@ internal sealed class Client : IDisposable
     {
         var s = new Socket(ep.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
         await s.ConnectAsync(ep);
+        return new Client(s);
+    }
+
+    /// <summary>Connects and sends <paramref name="request"/> on this thread, with no wait between. The server's
+    /// deadline for a first request starts as it takes the connection; a send after an await waits for the thread pool,
+    /// which a loaded runner can keep busy past a short request timeout (CI, 300 ms).</summary>
+    public static Client ConnectAndSend(IPEndPoint ep, string request)
+    {
+        var s = new Socket(ep.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+        try
+        {
+            s.Connect(ep);
+            byte[] b = Encoding.Latin1.GetBytes(request);
+            for (int sent = 0; sent < b.Length;) sent += s.Send(b.AsSpan(sent));
+        }
+        catch
+        {
+            s.Dispose();
+            throw;
+        }
         return new Client(s);
     }
 
