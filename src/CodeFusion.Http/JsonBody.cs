@@ -268,7 +268,7 @@ public ref struct JsonBody
             bytes += _r.ValueSpan.Length;
             count++;
         }
-        if (!ok) return BodyValue.Invalid;
+        if (!ok || _r.Malformed) return BodyValue.Invalid; // cut short: its count and its end would be the cut's
         int end = _r.TokenStart + 1;
         return new BodyValue(BodyKind.Array, _bom + start, end - start, count: count, number: bytes);
     }

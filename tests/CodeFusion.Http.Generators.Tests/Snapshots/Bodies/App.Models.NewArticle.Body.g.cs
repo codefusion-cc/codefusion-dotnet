@@ -48,7 +48,11 @@ partial struct NewArticle
             f7 = default;
             f8 = default;
             f9 = default;
+            n9 = default;
+            e9 = null;
             f10 = default;
+            n10 = default;
+            e10 = null;
             found = b.ReadObject();
             if (!found) continue;
             while (b.NextProperty())

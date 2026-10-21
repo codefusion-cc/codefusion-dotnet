@@ -463,7 +463,13 @@ internal static class Emitter
             w.Line("continue;");
             w.Close();
             w.Line("// a later wrapper replaces an earlier one, fields and all");
-            for (int i = 0; i < b.Fields.Count; i++) w.Line($"f{i} = default;");
+            for (int i = 0; i < b.Fields.Count; i++)
+            {
+                w.Line($"f{i} = default;");
+                if (b.Fields[i].Kind != BodyFieldKind.Nested) continue;
+                w.Line($"n{i} = default;");
+                w.Line($"e{i} = null;");
+            }
             w.Line("found = b.ReadObject();");
             w.Line("if (!found) continue;");
             ReadFields(w, b);

@@ -942,6 +942,9 @@ except where the row says the test is a guard.
 | 12 | The claim ranges started at 0, "present at 0, length 0" | they start at -1 | the claim tests, as a guard | (hardening) |
 | 2 | `Issue` held only the payload to the token's limit before asking the arena: a 2,950 to 4,010-byte value took 4 to 5 KB, then was refused | the exact token, numbers at their real length, is checked before anything is written or allocated | `ATokenPastItsLimitIsRefusedBeforeTheArenaIsAsked` (a 3,200-byte value at `MaxBytes` 4096), `ATokenIsRefusedExactlyWhenItWouldPassTheLimit` (2,900 to 3,100 bytes against the formula, a guard) | 1 allocation |
 | 9 | `Issue` wrote `"sub":"0"` and `"sub":"-5"`, which every request then refused | a user ≤ 0 throws `ArgumentOutOfRangeException`, before the arena | `AUserTheVerifierWouldRefuseIsntIssued` (0, -5, `long.MinValue`) | issued |
+| 3 | A later envelope reset each field but not a nested field's value and error, so the first wrapper's reason answered for the last (older than the spec options) | the reset clears `n{i}` and `e{i}` too | `ALaterWrapperReplacesAnEarlierOnesNestedErrorsToo` (three orders) | 1 of 3: `bad age` for a last wrapper with no author |
+| 4 | On a body cut short in an array, `ReadTextArray` returned an array whose count ran past its texts; no handler saw it, since `ReadToEnd` decides first | `Invalid` when the cursor is malformed | `AnArrayInAMalformedBodyIsInvalid` (four cuts) | 4 of 4 |
+
 ## Fuzzing (tests/CodeFusion.Fuzz)
 
 Coverage-guided fuzzing of everything that reads network bytes: 13 SharpFuzz targets (the table is in

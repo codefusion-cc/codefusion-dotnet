@@ -387,6 +387,7 @@ public class SpecOptionsTests
         HttpApp app = b.Build();
         app.MapPost("/posts", static (NewPost p) => Reply.Created(new PostEcho(p.Body)));
         app.MapPost("/wrapped", static (WrappedPost p) => Reply.Created(new PostEcho(p.Body)));
+        app.MapPost("/authored", static (AuthoredPost p) => Reply.Created(new PostEcho(p.Body)));
         app.Start();
         return app;
     }
@@ -502,6 +503,42 @@ public class SpecOptionsTests
         string expected = outcome == "ok" ? "bound" : $"{status} {text}";
         Assert.Equal(expected, reply is null ? "bound" : $"{reply.Status} {Encoding.UTF8.GetString(reply.Body)}");
         Assert.NotNull(name);
+    }
+
+    static ErrorReply? Bind<T>(string body, BindBody<T> bind)
+    {
+        byte[] b = Encoding.UTF8.GetBytes(body);
+        return bind(new BodySource(b, 0, b.Length, new RequestArena(new BufferPool(4096, 4)), new ErrorReply(422, """{"error":"invalid body"}"""u8)), out _);
+    }
+
+    delegate ErrorReply? BindBody<T>(in BodySource source, out T value);
+
+    // Found in the second review (and older than the spec options): a later wrapper reset each field but not a nested
+    // field's error, so the first wrapper's reason answered for the last one.
+    [Theory]
+    [InlineData("""{"post":{"body":"x","author":{"name":"n","age":"bad"}},"post":{"body":"x"}}""", """{"error":"not a post"}""")]
+    [InlineData("""{"post":{"body":"x"},"post":{"body":"x","author":{"name":"n","age":"bad"}}}""", """{"error":"bad age"}""")]
+    [InlineData("""{"post":{"body":"x","author":{"name":"n","age":"bad"}},"post":{"body":"x","author":{"name":"m","age":3}}}""", null)]
+    public void ALaterWrapperReplacesAnEarlierOnesNestedErrorsToo(string body, string? error)
+    {
+        ErrorReply? reply = Bind<AuthoredPost>(body, AuthoredPost.__BindBody);
+        Assert.Equal(error, reply is null ? null : Encoding.UTF8.GetString(reply.Body));
+    }
+
+    // Found in the second review: on a body cut short inside an array, the array read as whole, its count past its texts.
+    [Theory]
+    [InlineData("""{"a":["x","y""")]
+    [InlineData("""{"a":["x",""")]
+    [InlineData("{\"a\":[\"x\"")]
+    [InlineData("""{"a":[""")]
+    public void AnArrayInAMalformedBodyIsInvalid(string json)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(json);
+        var b = new JsonBody(new BodySource(bytes, 0, bytes.Length, new RequestArena(new BufferPool(4096, 4)), SpecErrors.NoBody));
+        Assert.True(b.ReadRootObject());
+        Assert.True(b.NextProperty());
+        Assert.True(b.ReadTextArray().IsInvalid);
+        Assert.False(b.ReadToEnd());
     }
 
     [Fact]
@@ -728,6 +765,7 @@ internal static class SpecErrors
     public static readonly ErrorReply NoBody = new(400, """{"error":"no body"}"""u8);
     public static readonly ErrorReply BodyRequired = new(400, """{"error":"body is required"}"""u8);
     public static readonly ErrorReply NotAPost = new(422, """{"error":"not a post"}"""u8);
+    public static readonly ErrorReply BadAge = new(422, """{"error":"bad age"}"""u8);
 }
 
 internal partial struct NewPost
@@ -735,6 +773,23 @@ internal partial struct NewPost
     [BodyError(nameof(Required))] public Utf8 Body;
 
     static ErrorReply Required => SpecErrors.BodyRequired;
+}
+
+[JsonEnvelope("post")]
+internal partial struct AuthoredPost
+{
+    public Utf8 Body;
+    public PostAuthor Author;
+
+    static ErrorReply Invalid => SpecErrors.NotAPost;
+}
+
+internal partial struct PostAuthor
+{
+    public Utf8 Name;
+    [BodyError(nameof(BadAge))] public long Age;
+
+    static ErrorReply BadAge => SpecErrors.BadAge;
 }
 
 [JsonEnvelope("post")]
