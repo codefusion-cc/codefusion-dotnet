@@ -32,7 +32,7 @@ strings too, and one where a parameter can't stand, as a table after FROM or a w
 error); a hole calling a `[SqlTemplate]` method is its SQL, the way to share a fragment.
 
 Text is changed by the functions of `Utf8Operators`, each SQL in a query and the same C# anywhere else:
-`ToLowerAscii` and `ToUpperAscii` (A to Z only, `lower(x COLLATE "C")`, alike in every collation), `Trim`,
+`ToLowerAscii` and `ToUpperAscii` (A to Z only, `translate(x, 'A…Z', 'a…z')`, alike in every collation), `Trim`,
 `TrimStart` and `TrimEnd` by a constant character, `Replace`, `Concat` of text or a number, and `ReplaceMatches`
 (`regexp_replace`) with a constant pattern of the kind .NET and SQL read alike: literals and ASCII `[...]` classes,
 each once or with `+`, and one `[^...]` class with `+`. The spec's slug rule:

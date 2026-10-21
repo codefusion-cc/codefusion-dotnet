@@ -45,10 +45,10 @@ public sealed class ShapeGeneratorTests
             """);
         var r = Run(source);
         Clean(r);
-        Assert.Equal("SELECT p.id, (trim(both '-' from lower(regexp_replace(p.name, '[^A-Za-z0-9]+', '-', 'g') COLLATE \"C\")) || '-' || p.id) FROM people p", r.Sql("Slugs"));
-        Assert.Equal("SELECT p.id, replace(trim(trailing '''' from trim(leading 'é' from upper(p.name COLLATE \"C\"))), $1, 'x') FROM people p", r.Sql("Others"));
+        Assert.Equal("SELECT p.id, (trim(both '-' from translate(regexp_replace(p.name, '[^A-Za-z0-9]+', '-', 'g'), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')) || '-' || CAST(p.id AS text)) FROM people p", r.Sql("Slugs"));
+        Assert.Equal("SELECT p.id, replace(trim(trailing '''' from trim(leading 'é' from translate(p.name, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'))), $1, 'x') FROM people p", r.Sql("Others"));
         // over parameters it is still SQL: the call never runs, so nothing is allocated
-        Assert.Equal("SELECT p.id, (lower($1 COLLATE \"C\") || $2) FROM people p", r.Sql("OfParameters"));
+        Assert.Equal("SELECT p.id, (translate($1, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') || CAST($2 AS text)) FROM people p", r.Sql("OfParameters"));
         Assert.DoesNotContain("Utf8Operators.ToLowerAscii(title)", r.Generated);
         // a concatenation on the right keeps its parentheses
         Assert.Equal("SELECT p.id, (p.name || (p.name || '-')) FROM people p", r.Sql("Nested"));
@@ -73,6 +73,8 @@ public sealed class ShapeGeneratorTests
     [InlineData("""p.Name.ReplaceMatches(pattern, "-")""", "pattern", "pattern that isn't a constant string")]
     [InlineData("""p.Name.Trim(c)""", "c", "character that isn't a constant")]
     [InlineData("""p.Name.Trim('\uD83D')""", "'\\uD83D'", "half a character")]
+    [InlineData("""p.Name.Trim('\0')""", "'\\0'", "a NUL, which SQL text can't hold")]
+    [InlineData("""p.Name.ReplaceMatches("a", "x\0")""", "\"x\\0\"", "a NUL, which SQL text can't hold")]
     public void ATextFunctionSqlWouldReadOtherwiseIsRefused(string call, string at, string why)
     {
         string source = Context($$"""
@@ -101,7 +103,7 @@ public sealed class ShapeGeneratorTests
         var r = Run(source);
         Clean(r);
         Assert.Equal("INSERT INTO people (name) SELECT DISTINCT n.v FROM unnest($1) n(v) ORDER BY n.v ON CONFLICT DO NOTHING", r.Sql("AddNames"));
-        Assert.Equal("INSERT INTO people (name, nick, age) SELECT n.v, lower(n.v COLLATE \"C\"), $2 FROM unnest($1) n(v) WHERE n.v <> '' ORDER BY upper(n.v COLLATE \"C\") DESC", r.Sql("AddOthers"));
+        Assert.Equal("INSERT INTO people (name, nick, age) SELECT n.v, translate(n.v, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), $2 FROM unnest($1) n(v) WHERE n.v <> '' ORDER BY translate(n.v, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') DESC", r.Sql("AddOthers"));
         Assert.Equal("INSERT INTO pets (name, owner_id) SELECT DISTINCT x.v, currval(pg_get_serial_sequence('people', 'id')) FROM unnest($1) x(v)", r.Sql("InAUnit_2"));
         Assert.Contains("AddNamesParameters => [global::CodeFusion.Data.DataType.TextArray]", r.Generated);
     }

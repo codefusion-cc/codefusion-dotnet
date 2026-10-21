@@ -738,7 +738,8 @@ query was refused, or its SQL or rows differed), or, for the properties, with th
 **Text functions** (`Utf8Operators`, `TextFunctionTests`, `ShapeGeneratorTests.TextFunctions*`). A C# method that SQL
 can't match exactly isn't mapped: no SQL `lower` lowers as `ToLowerInvariant` does (a collation lowers by its locale:
 ICU gives `ς` for a final Σ and `i̇` for İ, the C collation lowers A to Z only), so the function is `ToLowerAscii`,
-`lower(x COLLATE "C")`, alike in every collation and in SQLite. Each function also runs as C#, so the property tests
+`translate(x, 'A…Z', 'a…z')`, alike in every collation and in SQLite, and keeping the text's collation for an order by it.
+Each function also runs as C#, so the property tests
 compare the database's result with the method's for random text of ASCII, letters only a locale lowers, ß, ǅ, astral
 characters and combining marks.
 
@@ -752,7 +753,7 @@ characters and combining marks.
 
 What it decided:
 
-- A function over values known when called is still SQL (`lower($1 COLLATE "C")`): the call never runs, so it
+- A function over values known when called is still SQL (`translate($1, ...)`): the call never runs, so it
   allocates nothing. Where C# decides (a ThenIf's condition) the method itself runs, a nullable's `.Value` as written.
 - `ReplaceMatches` takes the patterns .NET and Postgres's AREs read alike: literals, escaped punctuation, `[...]`
   classes of ASCII characters and ranges, once or with `+`, and at most one `[^...]` class, with `+` (.NET reads a

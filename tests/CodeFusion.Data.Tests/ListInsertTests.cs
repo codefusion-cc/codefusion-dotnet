@@ -94,8 +94,8 @@ public sealed class ListInsertTests(ListFixture fixture) : IClassFixture<ListFix
     [Fact]
     public async Task WithoutDistinctATextTwiceIsAConflictAndNothingIsWritten()
     {
-        Assert.Equal("INSERT INTO people (name, nick, age, active, born) SELECT n.v, lower(n.v COLLATE \"C\"), 62, false, now() FROM unnest($1) n(v) " +
-            "WHERE n.v <> '' ORDER BY upper(n.v COLLATE \"C\") DESC", Q.AddPeopleNamedOnce);
+        Assert.Equal("INSERT INTO people (name, nick, age, active, born) SELECT n.v, translate(n.v, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 62, false, now() FROM unnest($1) n(v) " +
+            "WHERE n.v <> '' ORDER BY translate(n.v, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') DESC", Q.AddPeopleNamedOnce);
         string p = Unique("o");
         var db = Db();
         Assert.Equal(204, await Status(db.AddPeopleNamedOnce(Texts.List(p + "-A", p + "-b", ""))));
@@ -106,6 +106,20 @@ public sealed class ListInsertTests(ListFixture fixture) : IClassFixture<ListFix
         Assert.Empty(await People(p + "-c"));
     }
 
+
+    [Fact]
+    public async Task AnOrderByARaisedTextIsInTheTextsOwnCollation()
+    {
+        // '_' sorts after the capitals bytewise, before the letters in an ICU collation: the order is the database's
+        string p = Unique("q");
+        string[] names = [p + "_x", p + "ab", p + "B", p + "-c"];
+        await using var admin = TestDb.Admin(ListFixture.SchemaName);
+        await using var cmd = admin.CreateCommand("SELECT string_agg(v, ',' ORDER BY upper(v) DESC) FROM unnest($1::text[]) v");
+        cmd.Parameters.AddWithValue(names);
+        string expected = (string)(await cmd.ExecuteScalarAsync())!;
+        Assert.Equal(204, await Status(Db().AddPeopleNamedOnce(Texts.List(names))));
+        Assert.Equal(expected, string.Join(",", (await People(p + "%")).Select(x => x.Name)));
+    }
     [Fact]
     public async Task InAUnitTheTextsUseTheInsertedRow()
     {

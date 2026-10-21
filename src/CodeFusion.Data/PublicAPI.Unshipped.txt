@@ -247,6 +247,8 @@ CodeFusion.Data.SqlDialectAttribute.InArray.get -> string!
 CodeFusion.Data.SqlDialectAttribute.InArray.init -> void
 CodeFusion.Data.SqlDialectAttribute.InsertOrIgnore.get -> CodeFusion.Data.SqlInsertOrIgnore
 CodeFusion.Data.SqlDialectAttribute.InsertOrIgnore.init -> void
+CodeFusion.Data.SqlDialectAttribute.IntegerText.get -> string!
+CodeFusion.Data.SqlDialectAttribute.IntegerText.init -> void
 CodeFusion.Data.SqlDialectAttribute.JsonAggregate.get -> string!
 CodeFusion.Data.SqlDialectAttribute.JsonAggregate.init -> void
 CodeFusion.Data.SqlDialectAttribute.JsonArray.get -> string!

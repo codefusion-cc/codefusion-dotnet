@@ -146,6 +146,7 @@ sealed partial class Translator
                 if (values[1] is not Constant { Constant_: char c })
                     throw new Refused(Arg(1), $"{m.Name}'s character that isn't a constant");
                 if (char.IsSurrogate(c)) throw new Refused(Arg(1), $"{m.Name} by half a character (a surrogate)");
+                if (c == '\0') throw new Refused(Arg(1), $"{m.Name} by a NUL, which SQL text can't hold");
                 literals.Add(Sql.String(c.ToString()));
                 break;
             }
@@ -159,6 +160,7 @@ sealed partial class Translator
                 string pattern = Literal(1, "pattern"), replacement = Literal(2, "replacement");
                 if (Patterns.Problem(pattern) is { } problem)
                     throw new Refused(Arg(1), $"ReplaceMatches with {problem}, which .NET and SQL may read differently, so the pattern");
+                if (replacement.IndexOf('\0') >= 0) throw new Refused(Arg(2), "ReplaceMatches with a NUL, which SQL text can't hold, in the replacement");
                 if (Patterns.ReplacementProblem(replacement) is { } bad)
                     throw new Refused(Arg(2), $"ReplaceMatches with {bad}, which .NET and SQL read differently, so the replacement");
                 literals.Add(Sql.String(pattern));
@@ -176,7 +178,9 @@ sealed partial class Translator
         string Render()
         {
             var sql = operands.Select(i => Operand(values[i], Arg(i))).ToList();
-            if (m.Name == "Concat") return Dialect.Format(template, Chained(sql[0]), Sql.Group(sql[1]));
+            // a number as text by the dialect's own cast: + would add it where + is the concatenation
+            if (m.Name == "Concat")
+                return Dialect.Format(template, Chained(sql[0]), m.Parameters[1].Type.SpecialType == SpecialType.System_Int64 ? Dialect.Format(D.IntegerText, sql[1]) : Sql.Group(sql[1]));
             return Dialect.Format(template, sql.Concat(literals).ToArray());
         }
         if (values[0] is Host && operands.All(i => values[i] is Host or Constant))

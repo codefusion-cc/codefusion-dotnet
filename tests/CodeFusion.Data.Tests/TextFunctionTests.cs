@@ -18,7 +18,7 @@ namespace CodeFusion.Data.Tests;
 /// <summary>
 /// The text functions of <see cref="Utf8Operators"/>: each query's SQL, and, for any text, the SQL's result the
 /// database gives is the C# method's. Run against a database of the C collation and one of ICU's (CI's): a
-/// collation's own lower() differs there, lower(x COLLATE "C") doesn't.
+/// collation's own lower() differs there, translate() of A to Z doesn't.
 /// </summary>
 [Collection(nameof(OpsTests))]
 public sealed class TextFunctionTests(OpsFixture fixture)
@@ -60,11 +60,11 @@ public sealed class TextFunctionTests(OpsFixture fixture)
     [Fact]
     public async Task EachFunctionIsItsSqlOverParameters()
     {
-        Assert.Equal("SELECT lower($1 COLLATE \"C\") FROM people p WHERE p.id = 1 LIMIT 1", Q.LowerOf);
-        Assert.Equal("SELECT upper($1 COLLATE \"C\") FROM people p WHERE p.id = 1 LIMIT 1", Q.UpperOf);
+        Assert.Equal("SELECT translate($1, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') FROM people p WHERE p.id = 1 LIMIT 1", Q.LowerOf);
+        Assert.Equal("SELECT translate($1, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') FROM people p WHERE p.id = 1 LIMIT 1", Q.UpperOf);
         Assert.Equal("SELECT trim(both '-' from $1), trim(leading 'é' from $1), trim(trailing '''' from $1) FROM people p WHERE p.id = 1 LIMIT 1", Q.TrimmedOf);
         Assert.Equal("SELECT replace($1, $2, $3) FROM people p WHERE p.id = 1 LIMIT 1", Q.ReplacedOf);
-        Assert.Equal("SELECT (trim(both '-' from lower(regexp_replace($1, '[^A-Za-z0-9]+', '-', 'g') COLLATE \"C\")) || '-' || $2) FROM people p WHERE p.id = 1 LIMIT 1", Q.SlugOf);
+        Assert.Equal("SELECT (trim(both '-' from translate(regexp_replace($1, '[^A-Za-z0-9]+', '-', 'g'), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')) || '-' || CAST($2 AS text)) FROM people p WHERE p.id = 1 LIMIT 1", Q.SlugOf);
         Assert.Equal("ÄBC-éZ", await Text(Db().UpperOf(U("Äbc-éz"))));
         Assert.Equal("Äbc-éz", await Text(Db().LowerOf(U("ÄBC-éZ"))));
         Assert.Equal(("a-b", "--a-b--", "--a-b--"), await Trims("--a-b--"));
@@ -95,9 +95,9 @@ public sealed class TextFunctionTests(OpsFixture fixture)
     [Fact]
     public async Task FunctionsOverColumnsAndANewKey()
     {
-        Assert.Equal("SELECT p.id, (replace(upper(p.name COLLATE \"C\") || ':' || p.age, 'N', 'n') || COALESCE(p.nick, $1)) FROM people p ORDER BY p.id", Q.NameTags);
+        Assert.Equal("SELECT p.id, (replace(translate(p.name, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') || ':' || CAST(p.age AS text), 'N', 'n') || COALESCE(p.nick, $1)) FROM people p ORDER BY p.id", Q.NameTags);
         Assert.Equal("""[{"id":1,"text":"Ann:30A"},{"id":2,"text":"BEn:25Benny"},{"id":3,"text":"CID:40c"},{"id":4,"text":"DEE:30"}]""", await Json(Db().NameTags()));
-        Assert.Equal("INSERT INTO people (id, name, age, active, born) SELECT n.id, trim(both '-' from lower(regexp_replace($1, '[^A-Za-z0-9]+', '-', 'g') COLLATE \"C\")) || '-' || n.id, 2, true, now() " +
+        Assert.Equal("INSERT INTO people (id, name, age, active, born) SELECT n.id, trim(both '-' from translate(regexp_replace($1, '[^A-Za-z0-9]+', '-', 'g'), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')) || '-' || CAST(n.id AS text), 2, true, now() " +
             "FROM (SELECT nextval(pg_get_serial_sequence('people', 'id')) AS id) n", Q.AddSlugged);
         _response.Next();
         var row = await Db(write: true).AddSlugged(U("Hello, World"));
@@ -121,7 +121,7 @@ public sealed class TextFunctionTests(OpsFixture fixture)
 
     /// <summary>Pieces of text where C# and SQL could part: ASCII letters next to the letters only a locale lowers,
     /// the final sigma, the Turkish i's, ß, a character outside the BMP and one combining mark.</summary>
-    static readonly string[] Pieces = ["a", "Z", "0", "-", "--", "'", " ", "é", "É", "Ä", "Σ", "ς", "İ", "ı", "ß", "ǅ", "😀", "𐐀", "́", "x", "N", "aa"];
+    static readonly string[] Pieces = ["a", "Z", "0", "-", "--", "'", " ", ".", "$", "(", ")", "*", "+", "?", "{", "}", "|", "\\", "\"", "[", "]", "#", "/", "~", "_", "é", "É", "Ä", "Σ", "ς", "İ", "ı", "ß", "ǅ", "😀", "𐐀", "́", "x", "N", "aa"];
 
     static Gen<string> TextGen => Gen.ArrayOf(Gen.Elements(Pieces)).Select(string.Concat);
 
@@ -150,12 +150,22 @@ public sealed class TextFunctionTests(OpsFixture fixture)
         Assert.Equal(Slugs.WithId(t, id).ToString(), await Text(db.SlugOf(t, id)));
     }
 
+    [Fact]
+    public void AsCSharpAPatternRunsInLinearTimeOnALongText()
+    {
+        // overlapping + atoms that never match: a backtracking engine tries each split at each start (2.8 s here)
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var text = U(string.Concat(Enumerable.Repeat("a-", 12000)));
+        Assert.Equal(text.ToString(), text.ReplaceMatches("[a-z]+-[a-z-]+x", "_").ToString());
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1), $"{watch.Elapsed}");
+    }
+
     // ---------- the patterns ReplaceMatches takes ----------
 
     /// <summary>Pieces of patterns, those .NET and SQL read alike (most) and those they may not.</summary>
-    static readonly string[] Atoms = ["a", "b", "Z", "0", "-", " ", "\\.", "\\-", "[a-z]", "[^a-z]", "[A-Za-z0-9]", "[^0-9]", "[ab-]", "[^ ]"];
+    static readonly string[] Atoms = ["a", "b", "Z", "0", "-", " ", "\\.", "\\-", "[a-z]", "[^a-z]", "[A-Za-z0-9]", "[^0-9]", "[ab-]", "[^ ]", "[.$()*+?{}|]", "[ _,:;!?@#%&=~'\"/<>`]", "[^.$(]", "\\\\", "\\'", "\\[", "\\$", "\\\"", "\\(", "\\*", "\\?", "\\{", "\\|", "'", "\"", "#", "/", "~"];
 
-    static readonly string[] Others = [".", "\\d", "\\w", "é", "(a)", "a|b", "$", "^"];
+    static readonly string[] Others = [".", "\\d", "\\w", "é", "(a)", "a|b", "$", "^", "\\_", "\\0"];
 
     static Gen<string> AtomGen => Gen.Frequency((8, Gen.Elements(Atoms)), (1, Gen.Elements(Others)));
 
@@ -188,6 +198,10 @@ public sealed class TextFunctionTests(OpsFixture fixture)
                 cmd.Parameters.AddWithValue(c.Pattern);
                 cmd.Parameters.AddWithValue(c.Replacement);
                 string inSql = (string)cmd.ExecuteScalar()!;
+                // and as the generator writes it: the pattern and the replacement as SQL literals
+                using var literal = new NpgsqlCommand("SELECT " + Dialect.Format(new Dialect().RegexReplace, "$1", Sql.String(c.Pattern), Sql.String(c.Replacement)), conn);
+                literal.Parameters.AddWithValue(text);
+                Assert.Equal(inSql, (string)literal.ExecuteScalar()!);
                 Assert.True(inSql == U(text).ReplaceMatches(c.Pattern, c.Replacement).ToString(), $"/{c.Pattern}/ on \"{text}\": SQL \"{inSql}\", .NET \"{Regex.Replace(text, c.Pattern, c.Replacement)}\"");
             }
         }).Check(Config.QuickThrowOnFailure.WithMaxTest(400));

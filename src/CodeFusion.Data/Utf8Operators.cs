@@ -8,18 +8,20 @@ namespace CodeFusion.Data;
 
 /// <summary>
 /// Text functions of <see cref="Utf8"/>. In a query definition each is the SQL function its summary names, run by the
-/// database; anywhere else it runs as C# with the same result as that SQL (a new <see cref="Utf8"/>, which allocates).
+/// database; anywhere else it runs as C# with the same result as that SQL (a new <see cref="Utf8"/>, which allocates),
+/// for text SQL can hold (no NUL: a definition refuses one) and of a deterministic collation (on a nondeterministic one
+/// Postgres refuses <c>regexp_replace</c>, and <c>replace</c> before Postgres 18).
 /// The spec's slug rule, for one:
 /// <code>title.ReplaceMatches("[^A-Za-z0-9]+", "-").ToLowerAscii().Trim('-').Concat("-"u8).Concat(id)</code>
 /// </summary>
 public static class Utf8Operators
 {
-    /// <summary>The text with A to Z lowered and every other character as it is: <c>lower(x COLLATE "C")</c>. A
-    /// collation's own <c>lower</c> also lowers the letters its locale knows (Ä, and Σ as ς at a word's end), which no
-    /// C# method does alike.</summary>
+    /// <summary>The text with A to Z lowered and every other character as it is: <c>translate(x, 'A…Z', 'a…z')</c>,
+    /// which keeps the text's collation for an order by it. A collation's own <c>lower</c> also lowers the letters its
+    /// locale knows (Ä, and Σ as ς at a word's end), which no C# method does alike.</summary>
     public static Utf8 ToLowerAscii(this Utf8 text) => Ascii(text, (byte)'A', (byte)'Z');
 
-    /// <summary>The text with a to z raised and every other character as it is: <c>upper(x COLLATE "C")</c>.</summary>
+    /// <summary>The text with a to z raised and every other character as it is: <c>translate(x, 'a…z', 'A…Z')</c>.</summary>
     public static Utf8 ToUpperAscii(this Utf8 text) => Ascii(text, (byte)'a', (byte)'z');
 
     /// <summary>The text without <paramref name="trimChar"/> at either end, however often it is there:
@@ -65,10 +67,12 @@ public static class Utf8Operators
     /// <see cref="Regex.Replace(string, string, string)"/> does: <c>regexp_replace(x, pattern, replacement, 'g')</c>.
     /// In a definition both are constants, and the pattern is what .NET and SQL read alike: literals, escaped
     /// punctuation and <c>[...]</c> classes of ASCII characters and ranges, each once or with <c>+</c>, and at most one
-    /// <c>[^...]</c> class, which takes <c>+</c>. The replacement has no <c>$</c> or <c>\</c>.
+    /// <c>[^...]</c> class, which takes <c>+</c>. The replacement has no <c>$</c>, <c>\</c> or NUL. As C# it runs with
+    /// <see cref="RegexOptions.NonBacktracking"/>, in time linear in the text (as SQL's engine does), so a pattern
+    /// needs no construct that option lacks (back references, lookarounds).
     /// </summary>
     public static Utf8 ReplaceMatches(this Utf8 text, [StringSyntax(StringSyntaxAttribute.Regex)] string pattern, string replacement) =>
-        Encode(Regex.Replace(text.ToString(), pattern, replacement));
+        Encode(Regex.Replace(text.ToString(), pattern, replacement, RegexOptions.NonBacktracking));
 
     /// <summary>The text followed by <paramref name="other"/>: <c>x || y</c>.</summary>
     public static Utf8 Concat(this Utf8 text, ReadOnlySpan<byte> other)

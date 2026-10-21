@@ -89,11 +89,17 @@ public sealed class SqlDialectAttribute : Attribute
     public string Concat { get; init; } = "{0} || {1}";
 
     /// <summary>Text with A to Z lowered and nothing else (<see cref="Utf8Operators.ToLowerAscii"/>); {0} is the text:
-    /// <c>lower({0} COLLATE "C")</c>, whatever the database's collation; SQLite's <c>lower({0})</c> is that already.</summary>
-    public string LowerAscii { get; init; } = "lower({0} COLLATE \"C\")";
+    /// <c>translate({0}, 'A…Z', 'a…z')</c>, alike in every collation, and the result keeps the text's own collation, so
+    /// an order by it is the column's (<c>lower({0} COLLATE "C")</c> would order bytewise). SQLite's <c>lower({0})</c>
+    /// lowers A to Z only already.</summary>
+    public string LowerAscii { get; init; } = "translate({0}, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')";
 
-    /// <summary>Text with a to z raised and nothing else (<see cref="Utf8Operators.ToUpperAscii"/>): <c>upper({0} COLLATE "C")</c>.</summary>
-    public string UpperAscii { get; init; } = "upper({0} COLLATE \"C\")";
+    /// <summary>Text with a to z raised and nothing else (<see cref="Utf8Operators.ToUpperAscii"/>): <c>translate({0}, 'a…z', 'A…Z')</c>.</summary>
+    public string UpperAscii { get; init; } = "translate({0}, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')";
+
+    /// <summary>An integer as text, for <see cref="Utf8Operators.Concat(Utf8, long)"/>; {0} is the number:
+    /// <c>CAST({0} AS text)</c>, or <c>CAST({0} AS varchar(20))</c> where <see cref="Concat"/> is <c>+</c>.</summary>
+    public string IntegerText { get; init; } = "CAST({0} AS text)";
 
     /// <summary>Text without a character at either end; {0} is the text, {1} the character as a string literal:
     /// <c>trim(both {1} from {0})</c>; SQLite <c>trim({0}, {1})</c>.</summary>
@@ -105,11 +111,13 @@ public sealed class SqlDialectAttribute : Attribute
     /// <summary>Text without a character at its end: <c>trim(trailing {1} from {0})</c>; SQLite <c>rtrim({0}, {1})</c>.</summary>
     public string TrimEnd { get; init; } = "trim(trailing {1} from {0})";
 
-    /// <summary>Each occurrence of {1} in {0} replaced by {2}, an empty {1} replacing nothing: <c>replace({0}, {1}, {2})</c>.</summary>
+    /// <summary>Each occurrence of {1} in {0} replaced by {2}, an empty {1} replacing nothing: <c>replace({0}, {1}, {2})</c>.
+    /// Before Postgres 18 it fails on text of a nondeterministic collation.</summary>
     public string Replace { get; init; } = "replace({0}, {1}, {2})";
 
     /// <summary>Each match of the pattern {1} in {0} replaced by {2}, both string literals:
-    /// <c>regexp_replace({0}, {1}, {2}, 'g')</c>. Empty: the dialect has none, and ReplaceMatches is refused.</summary>
+    /// <c>regexp_replace({0}, {1}, {2}, 'g')</c>, which fails on text of a nondeterministic collation. Empty: the
+    /// dialect has none, and ReplaceMatches is refused.</summary>
     public string RegexReplace { get; init; } = "regexp_replace({0}, {1}, {2}, 'g')";
 
     /// <summary>The literals for true and false: <c>true false</c>, or <c>1 0</c> where there is no bool type.</summary>
