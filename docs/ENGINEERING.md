@@ -880,7 +880,7 @@ SQL.
 | Batches: a failed write not rolled back to its savepoint | `AFailingWriteFailsAloneAndAUnitIsUndoneWhole` |
 | Batches: the end commits one batch, not those its completions open | `AWriteMadeByACompletionIsCommittedBeforeTheBatchEnds` |
 | Batches: the batch doesn't take the connection from other threads | `AnotherThreadsReadWaitsForTheBatchAndThenSeesAllOfIt`, `AWriteOffTheLoopGoesToTheWriterAndWaitsForTheBatch` |
-| Batches: a read on the loop waits for the connection its own batch holds | `AReadOnTheLoopSeesItsBatchsWrites` (its 30 s timeout) |
+| Batches: a read on the loop waits for the connection its own batch holds | `AReadOnTheLoopSeesItsBatchsWritesAndAnswersAfterTheirCommit` (its 30 s timeout) |
 | Batches: AddDatabase doesn't register the batch's end | `AddDatabaseHandsTheServerTheBatchsEnd` |
 | Batches: allowed without Exclusive | `BatchesNeedExclusiveMode` |
 | Batches: a write answered before the COMMIT | `AKilledEventLoopLosesNoAnsweredWriteAndLeavesNoWakeUpHalfDone` (an answered write missing after the kill, 6 of 6 cases) |
@@ -899,13 +899,13 @@ finding was refuted by breaking the code that already handled it.
 
 | # | Finding | Fix | Tests |
 |---|---|---|---|
-| 1 | A rollback SQLite does outside a write went unnoticed in a batch, and its writes were answered Ok | After any error the transaction's real state is read (`sqlite3_get_autocommit`); a read on the loop commits the batch first | `AReadOnTheLoopThatRollsBackLosesNoAnsweredWrite` |
+| 1 | A rollback SQLite does outside a write went unnoticed in a batch, and its writes were answered Ok | After any error the transaction's real state is read (`sqlite3_get_autocommit`); a read on the loop runs in the batch and completes with it (second review, 2) | `AReadOnTheLoopThatRollsBackLosesNoAnsweredWrite` |
 | 2 | A second rollback in `Rerun` left rerun writes Ok and the batch in autocommit | One `Run(attempts)` for groups and batches; RELEASE and COMMIT always checked | `AGroupRolledBackTwiceAnswersNoneOfItsWritesOk`, `ABatchRolledBackTwiceAnswersNoneOfItsWritesOkAndGoesOn` |
 | 3 | An exception inside a transaction left it open | Rolled back in a `finally`; a statement that can't be prepared fails alone | `AStatementThatCantBePreparedFailsAloneAndTheWriterGoesOn`, `AUnitThatCantBePreparedLeavesNothing…` (2), `AReadThatCantBePreparedFailsAndGivesItsCommandBack` |
 | 4 | SQL of several statements had no savepoint on the writer thread | A savepoint per write in every mode | `SqlOfSeveralStatementsIsUndoneWholeWhenOneFails` |
 | 5 | SQLite's own keywords weren't quoted | The dialect's `Keywords`, checked against `sqlite3_keyword_name` | `TheDialectQuotesEveryKeywordOfTheLibrary`, `AColumnNamedAfterAKeywordIsQuotedAndItsQueryRuns` |
 | 6 | A batch opened after its source's end ran waited for the next wake-up, and the waiters spun | A batch asks its loop for another round (`EventLoopThread.RequestBatchEnd`); waiters park while a batch holds the connection | `AWriteMadeAfterItsSourcesEndRanEndsInTheSameWakeUp`, `NothingSpinsWhileALoopsBatchHoldsTheConnection` |
-| 7 | Reads in a batch saw uncommitted writes and were answered even when the COMMIT failed | A read on the loop commits the batch before it runs, so it never sees a write whose COMMIT could fail | `AReadOnTheLoopNeverSeesAWriteWhoseCommitFails` |
+| 7 | Reads in a batch saw uncommitted writes and were answered even when the COMMIT failed | First, a read on the loop committed the batch before it ran; that cost a COMMIT per read after a write (second review, 2). Now a read the batch's writes could affect runs in the batch's transaction and completes with it, after the one COMMIT or failed with it | `AReadOfAWakeUpWhoseCommitFailsFailsWithIt`, `AWakeUpOfReadsAndWritesCommitsOnce`, `AReadOnTheLoopSeesItsBatchsWritesAndAnswersAfterTheirCommit` |
 | 8 | Stop could close the connection under a batch, or hang | Stop waits 2 s for a batch, then the batch's end closes it | `StopEndsInTimeWhileALoopHoldsABatch`, `StopDuringBatchesEndsCleanlyAndAnswersEveryWrite` |
 | 9 | A negative Take or Skip meant no limit | Refuted: the generated binder clamps it at 0 | `ANegativeTakeOrSkipIsNoneOrAll` red without the clamp |
 | 10 | Conditional writes gave a written row back twice when the SET broke the condition | The refused rows are read before the write; the reader takes the first written row | 5 shared `ConditionalWriteTests` on both providers, `AConditionalWritesStatementsGiveEachRowFoundOnce` |

@@ -391,7 +391,7 @@ public sealed unsafe class SqliteWriter
             else if (failed is { } f) job.Complete(f, inline);
             else
             {
-                Interlocked.Increment(ref Counters.Writes);
+                if (!job.BatchedRead) Interlocked.Increment(ref Counters.Writes);
                 job.Complete(job.HandRows(), inline);
             }
         }
@@ -451,6 +451,27 @@ public sealed unsafe class SqliteWriter
     int _batchCommitted;
     /// <summary>The batch's transaction is open (BEGIN ran and nothing ended it).</summary>
     bool _batchOpen;
+
+    /// <summary>This thread's event-loop batch holds the connection with its transaction open: writes in it are not
+    /// committed yet, so a read here must run inside it and wait for its COMMIT (<see cref="ReadInBatch"/>).</summary>
+    internal bool HoldsOpenBatch => _options.EventLoopBatches && Volatile.Read(ref _batchThread) == Environment.CurrentManagedThreadId && _batchOpen;
+
+    /// <summary>
+    /// A read on the loop whose batch holds writes not committed yet: it runs now, in the batch's transaction, so it sees
+    /// them, and its rows are kept like a write's. It completes when the batch does: after the COMMIT, or failed with it,
+    /// so no answer goes out with a write the COMMIT then loses. The wake-up still commits once.
+    /// </summary>
+    internal ValueTask<DataResult> ReadInBatch<TReader>(SqliteJob job, object? state, CancellationToken aborted) where TReader : IRowReader
+    {
+        job.Reader = &Rows<TReader>.Read;
+        job.Writer = this;
+        job.State = state;
+        job.Aborted = aborted;
+        job.BatchedRead = true;
+        var task = job.Task;
+        _ = Batch(job); // this thread holds the batch: it takes the read
+        return task;
+    }
 
     /// <summary>
     /// A write made on an event loop's thread: runs it now, in the transaction this wake-up opened (opening it if this
@@ -523,12 +544,11 @@ public sealed unsafe class SqliteWriter
         _batchCommitted = _batchCount;
     }
 
-    /// <summary>Commits the batch's open transaction now: before a read on its loop, so the read never sees a write that
-    /// isn't committed, and at the batch's end. The writes stay waiting to complete.</summary>
-    internal void CommitBatch()
+    /// <summary>Commits the batch's open transaction, at the batch's end. Its writes and reads stay waiting to complete.
+    /// Every statement in it ran through <see cref="Run"/>, which sees a rollback; one SQLite did unseen fails the COMMIT
+    /// (<see cref="Commit"/>).</summary>
+    void CommitBatch()
     {
-        if (!_batchOpen) return;
-        if (Sqlite3.GetAutocommit(_conn.Db) != 0) Rerun(); // gone, and not by a write of its own: run them again
         if (!_batchOpen) return;
         _batchOpen = false;
         if (Commit() is { } failed)

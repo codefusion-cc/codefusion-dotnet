@@ -45,6 +45,8 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
     internal int SavedLen, SavedRows;
     internal DataResult Failure;
     internal bool Failed;
+    /// <summary>A read run in an event-loop batch (it saw writes not committed yet): completed with them, counted apart.</summary>
+    internal bool BatchedRead;
 
     SqliteJob()
     {
@@ -78,6 +80,7 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
         Writer = null;
         _pending = default;
         Failed = false;
+        BatchedRead = false;
         if (Buf.Length > JobPool.MaxPooledBytes) Buf = new byte[256];
         if (Saved.Length > JobPool.MaxPooledBytes) Saved = new byte[256];
         _core.Reset();

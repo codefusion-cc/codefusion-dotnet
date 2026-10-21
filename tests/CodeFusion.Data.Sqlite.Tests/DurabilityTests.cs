@@ -70,14 +70,13 @@ public sealed class DurabilityTests : IDisposable
         var s = _db.Open(_db.Database(exclusive: true, batches: true));
         Failing.Register(s.Writer.Connection.Db);
         using var loop = new TestLoop(s);
-        ValueTask<DataResult> a = default;
-        DataResult read = default;
+        ValueTask<DataResult> a = default, read = default;
         await loop.WakeUp(() =>
         {
             a = Kv.Write(s, "a", 1);
-            read = Kv.Done(Sqlite.Run<Value>(s.Read(Statement("SELECT cf_nomem()")).Hold(), null, default));
+            read = Sqlite.Run<Value>(s.Read(Statement("SELECT cf_nomem()")).Hold(), null, default);
         });
-        Assert.False(read.IsOk);
+        Assert.False((await read).IsOk);
         await AnsweredAsStored(s, ("a", a));
     }
 
@@ -208,7 +207,7 @@ public sealed class DurabilityTests : IDisposable
     // ---------- 7: a read never sees a write that isn't committed ----------
 
     [Fact(Timeout = 30_000)]
-    public async Task AReadOnTheLoopNeverSeesAWriteWhoseCommitFails()
+    public async Task AReadOfAWakeUpWhoseCommitFailsFailsWithIt()
     {
         var path = _db.File("deferred.db");
         var s = _db.Open(new SqliteDatabase(path)
@@ -223,15 +222,14 @@ public sealed class DurabilityTests : IDisposable
             ],
         });
         using var loop = new TestLoop(s);
-        ValueTask<DataResult> orphan = default;
-        long seen = -1;
+        ValueTask<DataResult> orphan = default, seen = default;
         await loop.WakeUp(() =>
         {
             orphan = Kv.Write(s, "orphan", 42); // no parent 42: only the COMMIT finds out
-            seen = Kv.Count(s);                 // another request's read in the same wake-up
+            seen = Kv.CountLater(s);            // another request's read in the same wake-up: it sees the orphan
         });
         Assert.Equal(DataStatus.Failed, (await orphan).Status);
-        Assert.Equal(0, seen);
+        Assert.Equal(DataStatus.Failed, (await seen).Status);
         Assert.Equal(0, Kv.Count(s));
     }
 

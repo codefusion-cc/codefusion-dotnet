@@ -148,19 +148,50 @@ public sealed class EventLoopBatchTests : IDisposable
     }
 
     [Fact(Timeout = 30_000)]
-    public async Task AReadOnTheLoopSeesItsBatchsWrites()
+    public async Task AReadOnTheLoopSeesItsBatchsWritesAndAnswersAfterTheirCommit()
     {
         var s = Open();
         using var loop = new TestLoop(s);
-        long seen = -1;
-        ValueTask<DataResult> mine = default;
+        long commits = s.Writer.Counters.Commits;
+        ValueTask<DataResult> mine = default, read = default, before = default;
+        bool doneInside = true;
         await loop.WakeUp(() =>
         {
+            before = Kv.ReadLater(s, "mine"); // nothing written yet in this wake-up: answered at once
             mine = Kv.Write(s, "mine", 7);
-            seen = Kv.Read(s, "mine").Value;
+            read = Kv.ReadLater(s, "mine");
+            doneInside = read.IsCompleted;
         });
-        Assert.Equal(7, seen);
+        Assert.True(before.IsCompleted);
+        Assert.Equal(0, (await before).Rows);
+        Assert.False(doneInside, "the read answered before the COMMIT of the write it saw");
+        var r = await read;
+        Assert.True(r.IsOk, r.ToString());
+        Assert.Equal(7, r.Value);
         Assert.True((await mine).IsOk);
+        Assert.Equal(commits + 1, s.Writer.Counters.Commits);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task AWakeUpOfReadsAndWritesCommitsOnce()
+    {
+        var s = Open();
+        Assert.True((await Kv.Write(s, "k", 1)).IsOk);
+        using var loop = new TestLoop(s);
+        long commits = s.Writer.Counters.Commits;
+        var all = new ValueTask<DataResult>[16];
+        await loop.WakeUp(() =>
+        {
+            // eight requests, each a read then a write, as another request's handler would make them
+            for (int i = 0; i < 8; i++)
+            {
+                all[2 * i] = Kv.ReadLater(s, "k");
+                all[2 * i + 1] = Kv.Write(s, "w" + i, i);
+            }
+        });
+        foreach (var t in all) Assert.True((await t).IsOk);
+        Assert.Equal(commits + 1, s.Writer.Counters.Commits);
+        Assert.Equal(9, Kv.Count(s));
     }
 
     [Fact(Timeout = 30_000)]

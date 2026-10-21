@@ -94,6 +94,18 @@ public static class Kv
         return Done(Sqlite.Run<Value>(c.Hold(), null, default));
     }
 
+    /// <summary>A read whose task may still be running: one on an event loop whose batch holds writes not committed yet
+    /// completes at the batch's end.</summary>
+    public static ValueTask<DataResult> ReadLater(SqliteDataSource s, string key)
+    {
+        var c = s.Read(Get);
+        c.Text(key);
+        return Sqlite.Run<Value>(c.Hold(), null, default);
+    }
+
+    /// <summary>As <see cref="ReadLater"/>, the count of every row.</summary>
+    public static ValueTask<DataResult> CountLater(SqliteDataSource s) => Sqlite.Run<Value>(s.Read(CountAll).Hold(), null, default);
+
     public static long Count(SqliteDataSource s, string? like = null)
     {
         var c = s.Read(like is null ? CountAll : CountLike);

@@ -166,6 +166,51 @@ public sealed class ProviderAllocationTests : IDisposable
     // ---------- event-loop batches ----------
 
     [Fact(Timeout = 30_000)]
+    public async Task BatchedReadsAndWritesAllocateNothingOnceWarm()
+    {
+        Assert.SkipWhen(Debug(), "Debug builds make every async state machine an object: run in Release");
+        var s = _db.Open(_db.Database(exclusive: true, batches: true));
+        Assert.True((await Kv.WriteMany(s, "k", 100)).IsOk);
+        using var loop = new TestLoop(s);
+        var tasks = new ValueTask<DataResult>[64];
+        int perWakeUp = 16;
+        Action wakeUp = () =>
+        {
+            // a write, then a read that sees it and so waits for the batch's COMMIT
+            for (int i = 0; i < perWakeUp; i++)
+            {
+                var c = s.Write(Set);
+                c.Text(Key);
+                c.Int64(i);
+                tasks[2 * i] = Sqlite.Run<Value>(c.Hold(), null, default);
+                var r = s.Read(Kv.Get);
+                r.Text(Key);
+                tasks[2 * i + 1] = Sqlite.Run<Value>(r.Hold(), null, default);
+            }
+        };
+        async Task<long> Measure(int wakeUps, int each)
+        {
+            perWakeUp = each;
+            long before = GC.GetTotalAllocatedBytes(precise: true);
+            for (int n = 0; n < wakeUps; n++)
+            {
+                await loop.WakeUp(wakeUp);
+                for (int i = 0; i < 2 * each; i++)
+                    if (!tasks[i].Result.IsOk) throw new InvalidOperationException("a batched read or write failed");
+            }
+            return GC.GetTotalAllocatedBytes(precise: true) - before;
+        }
+        await Measure(200, 32); // warm
+        long once = long.MaxValue, twice = long.MaxValue;
+        for (int k = 0; k < 3; k++)
+        {
+            once = Math.Min(once, await Measure(500, 16));
+            twice = Math.Min(twice, await Measure(500, 32));
+        }
+        Assert.True(twice - once < 16_000 / 40, $"{once} B for 500 wake-ups of 16 writes and reads, {twice} B of 32");
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task BatchedWritesAllocateNothingOnceWarm()
     {
         Assert.SkipWhen(Debug(), "Debug builds make every async state machine an object: run in Release");

@@ -49,14 +49,16 @@ public readonly struct Sqlite : IDataProvider<Sqlite, SqliteStatement, SqliteCom
 
     /// <summary>
     /// Runs a held command, handing each row its statements return to <typeparamref name="TReader"/>. A read runs here,
-    /// on the caller's thread: the task is complete when this returns. A write completes on the writer's thread once its
-    /// group committed. Await the task exactly once.
+    /// on the caller's thread: the task is complete when this returns, except on an event loop whose batch holds writes
+    /// not committed yet, where the read runs in the batch's transaction and completes with it. A write completes on the
+    /// writer's thread once its group committed, or with its loop's batch. Await the task exactly once.
     /// </summary>
     public static ValueTask<DataResult> Run<TReader>(in PendingCommand command, object? state, CancellationToken aborted) where TReader : IRowReader
     {
         var job = Claim(command);
         if (command.Owner is SqliteReaders readers)
         {
+            if (readers.Writer is { } batches && batches.HoldsOpenBatch) return batches.ReadInBatch<TReader>(job, state, aborted);
             try
             {
                 return new ValueTask<DataResult>(readers.Run<TReader>(job, state, aborted));
