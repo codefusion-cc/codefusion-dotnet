@@ -223,25 +223,62 @@ internal sealed unsafe class SqliteConn : IDisposable
     // What SQLite reports as it prepares a statement (sqlite3_set_authorizer): every table it reads, a count(*) included,
     // and every table it writes, those its triggers and foreign-key actions write included, and views as their tables.
     // Kept per statement as a mask over this connection's tables (bit i: the i-th table it met; the 64th and after share
-    // the last bit), so an event-loop batch can tell, without a lookup, whether a read sees a table it wrote.
+    // the last bit), so an event-loop batch can tell, without a lookup, whether a read sees a table it wrote. Where SQLite
+    // reports nothing, a statement counts as reading or writing every table: AUTOINCREMENT's sqlite_sequence, the
+    // connection's own state (last_insert_rowid(), changes()), pragmas, virtual tables (a module's own SQL), and every
+    // statement once the schema changed at run time (SQLite prepares older ones again, unreported).
+    //
+    // The authorizer is set once (WatchTables), on the one connection whose sets are read: setting it expires every
+    // prepared statement, and while it is set SQLite asks it only as it compiles, so it costs nothing as statements run.
 
     ulong[] _reads = new ulong[64], _writes = new ulong[64];
     readonly Dictionary<string, int> _tableBits = new(StringComparer.OrdinalIgnoreCase);
-    ulong _preparingReads, _preparingWrites;
+    readonly List<string> _newTables = [];
+    ulong _preparingReads, _preparingWrites, _virtualTables;
+    bool _watching, _collecting, _quiet, _schemaChanged;
     GCHandle _self;
 
-    /// <summary>The tables <paramref name="s"/> reads, prepared now if it wasn't.</summary>
+    /// <summary>From now on, every statement this connection prepares records the tables it reads and writes. Once,
+    /// after the migrations.</summary>
+    internal void WatchTables()
+    {
+        if (_watching) return;
+        // setting it expires the statements prepared so far, which SQLite would prepare again unwatched (as after a
+        // schema change): they go, and each is prepared afresh, watched, the next time it is used
+        FinalizeAll();
+        _self = GCHandle.Alloc(this);
+        _watching = true;
+        _ = Sqlite3.SetAuthorizer(_db, &Authorize, GCHandle.ToIntPtr(_self));
+    }
+
+    void FinalizeAll()
+    {
+        for (int i = 0; i < _statements.Length; i++)
+            if (_statements[i] != 0)
+            {
+                _ = Sqlite3.Finalize(_statements[i]);
+                _statements[i] = 0;
+            }
+        for (int i = 0; i < _more.Length; i++)
+            if (_more[i] is { } more)
+            {
+                foreach (var s in more) _ = Sqlite3.Finalize(s);
+                _more[i] = null;
+            }
+    }
+
+    /// <summary>The tables <paramref name="s"/> reads, prepared now if it wasn't; every table when it can't be known.</summary>
     public ulong ReadsOf(SqliteStatement s)
     {
         _ = Statement(s);
-        return _reads[s.Id];
+        return _schemaChanged ? ulong.MaxValue : _reads[s.Id];
     }
 
-    /// <summary>The tables <paramref name="s"/> writes, prepared now if it wasn't.</summary>
+    /// <summary>The tables <paramref name="s"/> writes, prepared now if it wasn't; every table when it can't be known.</summary>
     public ulong WritesOf(SqliteStatement s)
     {
         _ = Statement(s);
-        return _writes[s.Id];
+        return _schemaChanged ? ulong.MaxValue : _writes[s.Id];
     }
 
     ulong Bit(byte* name)
@@ -251,24 +288,91 @@ internal sealed unsafe class SqliteConn : IDisposable
         {
             bit = Math.Min(_tableBits.Count, 63);
             _tableBits[table] = bit;
+            _newTables.Add(table);
         }
         return 1UL << bit;
     }
 
-    [UnmanagedCallersOnly]
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static int Authorize(nint self, int action, byte* first, byte* second, byte* database, byte* trigger)
     {
         var conn = (SqliteConn)GCHandle.FromIntPtr(self).Target!;
+        if (conn._quiet) return Sqlite3.Ok;
+        if (!conn._collecting)
+        {
+            // SQLite compiles outside Prepare: a statement prepared again after the schema changed, or DDL run directly
+            conn._schemaChanged = true;
+            return Sqlite3.Ok;
+        }
         switch (action)
         {
-            case Sqlite3.AuthRead:
-                if (first is not null) conn._preparingReads |= conn.Bit(first);
+            case Sqlite3.AuthRead when first is not null:
+                conn._preparingReads |= IsSequence(first) ? ulong.MaxValue : conn.Bit(first);
                 break;
-            case Sqlite3.AuthInsert or Sqlite3.AuthUpdate or Sqlite3.AuthDelete:
-                if (first is not null) conn._preparingWrites |= conn.Bit(first);
+            case Sqlite3.AuthInsert or Sqlite3.AuthUpdate or Sqlite3.AuthDelete when first is not null:
+                conn._preparingWrites |= conn.Bit(first);
+                break;
+            case Sqlite3.AuthFunction when second is not null && IsConnectionState(second):
+                conn._preparingReads = ulong.MaxValue;
+                break;
+            case Sqlite3.AuthPragma:
+                conn._preparingReads = conn._preparingWrites = ulong.MaxValue;
+                break;
+            case >= Sqlite3.AuthCreateIndex and <= Sqlite3.AuthCreateView or >= Sqlite3.AuthDropIndex and <= Sqlite3.AuthDropView
+                or >= Sqlite3.AuthAttach and <= Sqlite3.AuthDropVtable:
+                // DDL: once it runs, statements prepared before it may read and write more than they said
+                conn._schemaChanged = true;
+                conn._preparingWrites = ulong.MaxValue;
                 break;
         }
         return Sqlite3.Ok;
+    }
+
+    /// <summary>sqlite_sequence: AUTOINCREMENT writes it without telling the authorizer.</summary>
+    static bool IsSequence(byte* table) => new ReadOnlySpan<byte>(table, "sqlite_sequence"u8.Length + 1).SequenceEqual("sqlite_sequence\0"u8);
+
+    /// <summary>A function that reads the connection's own state, which no table holds.</summary>
+    static bool IsConnectionState(byte* function)
+    {
+        var name = System.Runtime.InteropServices.MemoryMarshal.CreateReadOnlySpanFromNullTerminated(function);
+        return name.SequenceEqual("last_insert_rowid"u8) || name.SequenceEqual("changes"u8) || name.SequenceEqual("total_changes"u8)
+            || name.SequenceEqual("changes64"u8) || name.SequenceEqual("total_changes64"u8);
+    }
+
+    /// <summary>Marks the tables first met while preparing that are virtual: their module reads and writes with SQL of
+    /// its own, which the authorizer never sees, so a statement that touches one touches everything.</summary>
+    void ClassifyNewTables()
+    {
+        if (_newTables.Count == 0) return;
+        ReadOnlySpan<byte> sql = "SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1 AND sql LIKE 'CREATE VIRTUAL TABLE%'\0"u8;
+        _quiet = true;
+        try
+        {
+            foreach (string table in _newTables)
+            {
+                nint stmt;
+                fixed (byte* p = sql)
+                    if (Sqlite3.Prepare(_db, p, -1, 0, out stmt, out _) != Sqlite3.Ok) continue;
+                try
+                {
+                    byte[] name = System.Text.Encoding.UTF8.GetBytes(table);
+                    fixed (byte* n = name)
+                    {
+                        _ = Sqlite3.BindText(stmt, 1, n, name.Length, -1); // SQLITE_TRANSIENT: copied
+                        if (Sqlite3.Step(stmt) == Sqlite3.Row) _virtualTables |= 1UL << _tableBits[table];
+                    }
+                }
+                finally
+                {
+                    _ = Sqlite3.Finalize(stmt);
+                }
+            }
+        }
+        finally
+        {
+            _quiet = false;
+            _newTables.Clear();
+        }
     }
 
     nint Prepare(SqliteStatement s)
@@ -281,9 +385,8 @@ internal sealed unsafe class SqliteConn : IDisposable
             Array.Resize(ref _writes, _statements.Length);
         }
         var pieces = new List<nint>(1);
-        if (!_self.IsAllocated) _self = GCHandle.Alloc(this);
         _preparingReads = _preparingWrites = 0;
-        _ = Sqlite3.SetAuthorizer(_db, &Authorize, GCHandle.ToIntPtr(_self));
+        _collecting = _watching;
         try
         {
             fixed (byte* sql = s.Utf8)
@@ -311,10 +414,15 @@ internal sealed unsafe class SqliteConn : IDisposable
         }
         finally
         {
-            _ = Sqlite3.SetAuthorizer(_db, null, 0); // only while preparing: nothing else pays for it
+            _collecting = false;
         }
-        _reads[s.Id] = _preparingReads;
-        _writes[s.Id] = _preparingWrites;
+        if (_watching)
+        {
+            ClassifyNewTables();
+            bool touchesVirtual = ((_preparingReads | _preparingWrites) & _virtualTables) != 0;
+            _reads[s.Id] = touchesVirtual ? ulong.MaxValue : _preparingReads;
+            _writes[s.Id] = touchesVirtual ? ulong.MaxValue : _preparingWrites;
+        }
         _statements[s.Id] = pieces[0];
         if (pieces.Count > 1) _more[s.Id] = pieces.GetRange(1, pieces.Count - 1).ToArray();
         return pieces[0];

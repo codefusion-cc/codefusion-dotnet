@@ -91,10 +91,19 @@ internal static unsafe partial class Sqlite3
 
     /// <summary>Calls <paramref name="callback"/> for each table and column a statement uses as it is prepared; null stops it.</summary>
     [LibraryImport(Lib, EntryPoint = "sqlite3_set_authorizer")]
-    public static partial int SetAuthorizer(nint db, delegate* unmanaged<nint, int, byte*, byte*, byte*, byte*, int> callback, nint userData);
+    public static partial int SetAuthorizer(nint db, delegate* unmanaged[Cdecl]<nint, int, byte*, byte*, byte*, byte*, int> callback, nint userData);
 
-    // the authorizer's actions this provider reads: a table's first argument is its name
-    public const int AuthDelete = 9, AuthInsert = 18, AuthRead = 20, AuthUpdate = 23;
+    // the authorizer's actions this provider reads: a table's first argument is its name, a function's second its name;
+    // the DDL actions run from CREATE INDEX (1) to CREATE VIEW (8), DROP INDEX (10) to DROP VIEW (17), ATTACH (24) to DROP
+    // VTABLE (30)
+    public const int AuthCreateIndex = 1, AuthCreateView = 8, AuthDelete = 9, AuthDropIndex = 10, AuthDropView = 17, AuthInsert = 18,
+        AuthPragma = 19, AuthRead = 20, AuthUpdate = 23, AuthAttach = 24, AuthDropVtable = 30, AuthFunction = 31;
+
+    /// <summary>A prepared statement's counter (<see cref="StmtStatusReprepare"/>: the times SQLite prepared it again).</summary>
+    [LibraryImport(Lib, EntryPoint = "sqlite3_stmt_status"), SuppressGCTransition]
+    public static partial int StmtStatus(nint stmt, int op, int reset);
+
+    public const int StmtStatusReprepare = 5;
 
     /// <summary>The connection's transaction: none, read or write (<see cref="TxnWrite"/>).</summary>
     [LibraryImport(Lib, EntryPoint = "sqlite3_txn_state"), SuppressGCTransition]

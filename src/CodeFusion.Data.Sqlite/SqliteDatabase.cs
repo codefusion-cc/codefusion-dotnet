@@ -134,6 +134,7 @@ public sealed class SqliteDatabase
         try
         {
             Migrate(writerConn);
+            if (EventLoopBatches) writerConn.WatchTables(); // what each statement reads and writes, for a loop's reads
             var writer = new SqliteWriter(writerConn, this, System.IO.Path.GetFileName(Path));
             readers = Exclusive ? new SqliteReaders(writerConn, writer.Clock) : new SqliteReaders(Path, this, writer.Clock);
             writer.Readers = readers;

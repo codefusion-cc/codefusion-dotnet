@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using CodeFusion.Data.Tests;
 using Xunit;
@@ -162,6 +163,103 @@ public sealed class BatchReadTests : IDisposable
         Assert.True(p.IsOk, p.ToString()); // it read only committed rows
         Assert.Equal(1, p.Value);
         Assert.Equal(DataStatus.Failed, (await kv).Status);
+    }
+
+    static int _writes;
+
+    /// <summary>Whether a read made in one wake-up after a write to kv answered before the batch's COMMIT.</summary>
+    static async Task<bool> AnsweredAtOnce(SqliteDataSource s, SqliteStatement read, SqliteStatement? write = null)
+    {
+        using var loop = new TestLoop(s);
+        ValueTask<DataResult> w = default, r = default;
+        bool atOnce = false;
+        await loop.WakeUp(() =>
+        {
+            if (write is null) w = Kv.Write(s, "w" + System.Threading.Interlocked.Increment(ref _writes), 1);
+            else
+            {
+                var c = s.Write(write);
+                w = Sqlite.Run<Value>(c.Hold(), null, default);
+            }
+            r = Sqlite.Run<Value>(s.Read(read).Hold(), null, default);
+            atOnce = r.IsCompleted;
+        });
+        var written = await w;
+        Assert.True(written.IsOk, "the write: " + written);
+        var result = await r;
+        Assert.True(result.IsOk, "the read: " + result);
+        return atOnce;
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task AViewOfAWrittenTableWaits()
+    {
+        var s = Open(schema: "CREATE VIEW kv_v AS SELECT k, v FROM kv");
+        Assert.False(await AnsweredAtOnce(s, new SqliteStatement("SELECT count(*) FROM kv_v")));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task WhatSqliteDoesntReportWaits()
+    {
+        var s = Open(schema: "CREATE TABLE seq (id INTEGER PRIMARY KEY AUTOINCREMENT, v INTEGER)");
+        // AUTOINCREMENT's sequence, and the connection's own state: SQLite reports no table for them
+        var insert = new SqliteStatement("INSERT INTO seq (v) VALUES (1)");
+        Assert.False(await AnsweredAtOnce(s, new SqliteStatement("SELECT seq FROM sqlite_sequence WHERE name = 'seq'"), insert));
+        Assert.False(await AnsweredAtOnce(s, new SqliteStatement("SELECT last_insert_rowid()")));
+        Assert.False(await AnsweredAtOnce(s, new SqliteStatement("SELECT changes()")));
+        Assert.False(await AnsweredAtOnce(s, new SqliteStatement("PRAGMA user_version")));
+        // and still, a read of a table nothing wrote
+        Assert.True(await AnsweredAtOnce(s, GetOtherO));
+    }
+
+    static readonly SqliteStatement GetOtherO = new("SELECT v FROM other WHERE k = 'o'");
+
+    [Fact(Timeout = 30_000)]
+    public async Task AVirtualTablesWritesCountAsEverything()
+    {
+        var s = Open(schema: "CREATE VIRTUAL TABLE docs USING fts5(body)");
+        // the module writes its shadow tables with SQL of its own, which SQLite doesn't report
+        var write = new SqliteStatement("INSERT INTO docs (body) VALUES ('hello world')");
+        Assert.False(await AnsweredAtOnce(s, new SqliteStatement("SELECT count(*) FROM docs_data"), write));
+        Assert.False(await AnsweredAtOnce(s, GetOtherO, write));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task AfterTheSchemaChangesEveryReadWaits()
+    {
+        var s = Open();
+        Assert.True(await AnsweredAtOnce(s, GetOtherO));
+        // a trigger made at run time: statements prepared before it may now write more than they said
+        var ddl = s.Write(new SqliteStatement("CREATE TRIGGER kv_other AFTER INSERT ON kv BEGIN UPDATE other SET v = v + 1; END"));
+        Assert.True((await Sqlite.Run<Value>(ddl.Hold(), null, default)).IsOk);
+        Assert.False(await AnsweredAtOnce(s, GetOtherO));
+    }
+
+    [Fact]
+    public void PreparingAStatementLeavesTheOthersPrepared()
+    {
+        var s = Open();
+        var a = new SqliteStatement("SELECT v FROM other WHERE k = 'o'");
+        var b = new SqliteStatement("SELECT count(*) FROM other");
+        Assert.True(Kv.Done(Sqlite.Run<Value>(s.Read(a).Hold(), null, default)).IsOk);
+        Assert.True(Kv.Done(Sqlite.Run<Value>(s.Read(a).Hold(), null, default)).IsOk);
+        Assert.True(Kv.Done(Sqlite.Run<Value>(s.Read(b).Hold(), null, default)).IsOk); // b prepared for the first time
+        Assert.True(Kv.Done(Sqlite.Run<Value>(s.Read(a).Hold(), null, default)).IsOk);
+        var conn = s.Writer.Connection;
+        Assert.Equal(0, Sqlite3.StmtStatus(conn.Statement(a), Sqlite3.StmtStatusReprepare, 0));
+    }
+
+    [Fact]
+    public void EveryCallbackGivenToSqliteIsCdecl()
+    {
+        var callbacks = typeof(SqliteDataSource).Assembly.GetTypes()
+            .SelectMany(t => t.GetMethods(System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly))
+            .Select(m => (Method: m, Attribute: m.GetCustomAttributes(typeof(System.Runtime.InteropServices.UnmanagedCallersOnlyAttribute), false).OfType<System.Runtime.InteropServices.UnmanagedCallersOnlyAttribute>().SingleOrDefault()))
+            .Where(c => c.Attribute is not null)
+            .ToList();
+        Assert.NotEmpty(callbacks);
+        foreach (var (method, attribute) in callbacks)
+            Assert.True(attribute!.CallConvs?.Contains(typeof(System.Runtime.CompilerServices.CallConvCdecl)) == true, $"{method.DeclaringType!.Name}.{method.Name} has no Cdecl");
     }
 
     /// <summary>What a reader sees of a row, every way it can ask for each column.</summary>
