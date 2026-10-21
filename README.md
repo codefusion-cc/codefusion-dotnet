@@ -15,6 +15,53 @@ application can use the same code without writing it by hand.
 Handlers that read like minimal APIs are in CodeFusion.Http, and LINQ queries compiled to SQL at build time are in
 CodeFusion.Data. Each package's README explains it.
 
+## Performance
+
+The six TechEmpower tests, run with TechEmpower's own toolset (pinned at 57d92fbec6f8) on Google Cloud Intel C4:
+the app on c4-highcpu-8, Postgres on c4-highcpu-8, and wrk on n2-highcpu-16. The leaders were built and run on the
+same machines, in requests per second:
+
+| Test | CodeFusion | Best Rust | Best ASP.NET Core | Against Rust | Against ASP.NET Core |
+|---|---:|---:|---:|---:|---:|
+| Plaintext (pipelined) | 7,506,549 | 8,908,020 (xitca-web) | 7,297,751 (Platform) | -16% | +3% |
+| JSON | 1,201,705 | 1,263,920 (xitca-web) | 703,920 (Platform) | -5% | +71% |
+| Single query | 706,377 | 628,393 (may-minihttp) | 381,963 (Platform) | +12% | +85% |
+| Multiple queries (20) | 64,920 | 33,892 (may-minihttp) | 32,210 (Platform) | +92% | +102% |
+| Fortunes | 491,027 | 576,688 (xitca-web) | 307,474 (Platform) | -15% | +60% |
+| Updates (20) | 23,240 | 22,669 (may-minihttp) | 18,834 (minimal APIs) | +2.5% | +23% |
+
+During those runs CodeFusion ran no garbage collection at all. Plaintext and JSON allocated 0 B in a measured minute;
+the database tests allocated at most 0.013 B per request.
+
+What the numbers rest on:
+- **Nothing allocated per request:** pooled buffers and value-task sources, and rows read in place from the wire.
+- **An event loop per core on Linux:** one receive per request, direct `recv` and `send`, the answers of one wake-up
+  sent together, and a buffer stack per loop with no lock.
+- **Code generated at build time:** a source generator replaces each `Map` call and each LINQ query with specialised
+  code, so nothing is reflected over at run time.
+- **The server and the data layer working together:** Postgres group commit, pipelined reads, and the updates of one
+  group merged into one statement.
+
+Read these with care:
+- **This is a reduced rig.** TechEmpower's own rounds run on larger hardware.
+- **The overall leader on plaintext and JSON is libreactor, written in C:** 9,461,172 and 1,483,605 on this rig.
+- **Postgres limits the database tests:** its 8 vCPUs ran 93 to 100% busy for the leaders there.
+- **Some of the CodeFusion build isn't on main yet:** these numbers come from every performance branch merged
+  together, and Postgres pipelining and the merged updates are still in review.
+
+[docs/benchmarks](docs/benchmarks/README.md) keeps every run, with its method and the commits measured.
+
+### What ASP.NET Core has that CodeFusion doesn't
+
+CodeFusion is not a drop-in replacement for Kestrel. It's a fast stack for HTTP/1.1 JSON and database APIs behind a
+proxy. It doesn't have:
+- HTTP/2, HTTP/3 or TLS: put a proxy in front;
+- ASP.NET's middleware, its OIDC and RS256 authentication, WebSockets, or compression;
+- request or response bodies streamed past 1 MB;
+- dependency injection, configuration and logging through Microsoft.Extensions;
+- an event loop on Windows, where it uses its Sockets transport;
+- years of production traffic.
+
 ## Building and testing
 
 The SDK is pinned in `global.json` (10.0.402).
