@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using CodeFusion.Data.Postgres;
@@ -19,7 +20,7 @@ namespace CodeFusion.Data.Postgres.Tests;
 public sealed class PgPipelineTests : IAsyncDisposable
 {
     static readonly PgStatement Sleep = new("SELECT 1 FROM pg_sleep(0.3)");
-    static readonly PgStatement SleepThenFail = new("SELECT 1 / 0 FROM pg_sleep(0.3)");
+    static readonly PgStatement SleepThenFail = new("SELECT 1 / (g - 1) FROM pg_sleep(0.3), generate_series(1, 1) g"); // fails at run time, after the sleep
     static readonly PgStatement Times10 = new("SELECT $1::bigint * 10", PgType.Int8);
     static readonly PgStatement Pid = new("SELECT pg_backend_pid()");
     static readonly PgStatement PlusOne = new("SELECT $1::bigint + 1", PgType.Int8);
@@ -135,13 +136,20 @@ public sealed class PgPipelineTests : IAsyncDisposable
     [Fact(Timeout = 30_000)]
     public async Task ABrokenConnectionFailsEveryGroupInFlightAndTheNextReconnects()
     {
-        var (reader, slow) = await Busy();
+        var reader = NewReader();
+        reader.Start(1);
+        Assert.Equal(10, await Read(reader, Times10, 1));
         long pid = await Read(reader, Pid);
+        var slow = Try(reader, Sleep);
+        for (int i = 0; i < 200 && reader.Queued > 0; i++) await Task.Delay(5);
+        await Task.Delay(50);
+        // all queued behind the slow read, with no await between, so the loop takes them as two groups once it is
+        // answered whenever this thread runs
         var longer = Try(reader, new PgStatement("SELECT 1 FROM pg_sleep(5)"));
         var first = Fillers(reader, PgReader.MaxGroup - 1, 0);
         var second = Fillers(reader, 5, 1000);
-        for (int i = 0; i < 200 && reader.Queued > 0; i++) await Task.Delay(5);
-        await Task.Delay(100);
+        Assert.Equal(1, (await slow).Value);
+        for (int i = 0; i < 400 && reader.InFlightMax < 2; i++) await Task.Delay(5);
         Assert.Equal(2, reader.InFlightMax);
         await _admin!.Scalar($"SELECT pg_terminate_backend({pid})");
 
@@ -149,7 +157,6 @@ public sealed class PgPipelineTests : IAsyncDisposable
         foreach (var r in await Task.WhenAll(first.Concat(second))) Assert.Equal(PgStatus.Broken, r.Status);
         Assert.NotEqual(pid, await Read(reader, Pid));
         Assert.Equal(70, await Read(reader, Times10, 7));
-        Assert.Equal(1, (await slow).Value);
     }
 
     [Fact(Timeout = 30_000)]
@@ -159,10 +166,18 @@ public sealed class PgPipelineTests : IAsyncDisposable
         reader.Start(4);
         for (int i = 0; i < 400 && reader.Sleeping < 4; i++) await Task.Delay(5);
         Assert.Equal(4, reader.Sleeping);
+        await Task.WhenAll(Enumerable.Range(0, 4).Select(i => Try(reader, PlusOne, i))); // parsed, wherever
+        for (int i = 0; i < 400 && reader.Sleeping < 4; i++) await Task.Delay(5);
         long groups = reader.Counters.Groups;
-        var burst = Enumerable.Range(0, 32).Select(i => Try(reader, PlusOne, i)).ToArray();
+        // queued under the queue's own lock, so the first loop woken finds all 32 and the other three asleep: its
+        // share is a quarter, and each loop woken after it takes as much
+        var queue = (PgQueue)typeof(PgLoops).GetField("_queue", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(reader)!;
+        var queueLock = typeof(PgQueue).GetField("_lock", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(queue)!;
+        Task<PgResult>[] burst;
+        lock (queueLock) burst = Enumerable.Range(0, 32).Select(i => Try(reader, PlusOne, i)).ToArray();
         Assert.Equal(Enumerable.Range(1, 32).Select(i => (long)i), (await Task.WhenAll(burst)).Select(r => r.Value));
-        Assert.True(reader.Counters.Groups - groups >= 2, $"{reader.Counters.Groups - groups} groups for a burst of 32");
+        Assert.True(reader.Counters.Groups - groups >= 4, $"{reader.Counters.Groups - groups} groups for a burst of 32");
+        Assert.InRange(reader.Counters.GroupMax, 1, 32 / 4);
     }
 
     [Fact(Timeout = 60_000)]
