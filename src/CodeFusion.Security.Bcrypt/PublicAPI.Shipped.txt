@@ -1,0 +1,101 @@
+#nullable enable
+CodeFusion.Security.Bcrypt
+CodeFusion.Security.BcryptHash
+CodeFusion.Security.BcryptHash.AsSpan() -> System.ReadOnlySpan<byte>
+CodeFusion.Security.BcryptHash.BcryptHash() -> void
+CodeFusion.Security.BcryptHash.CopyTo(System.Span<byte> destination) -> void
+CodeFusion.Security.BcryptHash.Length.get -> int
+CodeFusion.Security.BcryptHash.ToString(string? format, System.IFormatProvider? formatProvider) -> string!
+CodeFusion.Security.BcryptHash.TryFormat(System.Span<byte> utf8Destination, out int bytesWritten, System.ReadOnlySpan<char> format = default(System.ReadOnlySpan<char>), System.IFormatProvider? provider = null) -> bool
+CodeFusion.Security.BcryptHash.TryFormat(System.Span<char> destination, out int charsWritten, System.ReadOnlySpan<char> format = default(System.ReadOnlySpan<char>), System.IFormatProvider? provider = null) -> bool
+CodeFusion.Security.BcryptHashInfo
+CodeFusion.Security.BcryptHashInfo.BcryptHashInfo() -> void
+CodeFusion.Security.BcryptHashInfo.BcryptHashInfo(string! Revision, int Cost, string! Salt, string! Checksum) -> void
+CodeFusion.Security.BcryptHashInfo.Checksum.get -> string!
+CodeFusion.Security.BcryptHashInfo.Checksum.init -> void
+CodeFusion.Security.BcryptHashInfo.Cost.get -> int
+CodeFusion.Security.BcryptHashInfo.Cost.init -> void
+CodeFusion.Security.BcryptHashInfo.Deconstruct(out string! Revision, out int Cost, out string! Salt, out string! Checksum) -> void
+CodeFusion.Security.BcryptHashInfo.Equals(CodeFusion.Security.BcryptHashInfo other) -> bool
+CodeFusion.Security.BcryptHashInfo.Revision.get -> string!
+CodeFusion.Security.BcryptHashInfo.Revision.init -> void
+CodeFusion.Security.BcryptHashInfo.Salt.get -> string!
+CodeFusion.Security.BcryptHashInfo.Salt.init -> void
+CodeFusion.Security.BcryptHashInfo.Settings.get -> string!
+CodeFusion.Security.BcryptHashResult
+CodeFusion.Security.BcryptHashResult.BcryptHashResult() -> void
+CodeFusion.Security.BcryptHashResult.CopyTo(System.Span<byte> destination) -> void
+CodeFusion.Security.BcryptHashResult.Hash.get -> CodeFusion.Security.BcryptHash
+CodeFusion.Security.BcryptHashResult.Status.get -> CodeFusion.Security.BcryptStatus
+CodeFusion.Security.BcryptPrehash
+CodeFusion.Security.BcryptPrehash.None = 0 -> CodeFusion.Security.BcryptPrehash
+CodeFusion.Security.BcryptPrehash.Sha256 = 1 -> CodeFusion.Security.BcryptPrehash
+CodeFusion.Security.BcryptPrehash.Sha384 = 2 -> CodeFusion.Security.BcryptPrehash
+CodeFusion.Security.BcryptPrehash.Sha512 = 3 -> CodeFusion.Security.BcryptPrehash
+CodeFusion.Security.BcryptQueue
+CodeFusion.Security.BcryptQueue.Batches.get -> long
+CodeFusion.Security.BcryptQueue.BcryptQueue(CodeFusion.Security.BcryptQueueOptions? options = null) -> void
+CodeFusion.Security.BcryptQueue.Cancelled.get -> long
+CodeFusion.Security.BcryptQueue.Dispose() -> void
+CodeFusion.Security.BcryptQueue.HashAsync(string! password, int cost = 11, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<string!>
+CodeFusion.Security.BcryptQueue.HashAsync(string! password, int cost, CodeFusion.Security.BcryptPrehash prehash, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<string!>
+CodeFusion.Security.BcryptQueue.HashAsync(System.ReadOnlySpan<byte> passwordUtf8, int cost = 11, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CodeFusion.Security.BcryptHash>
+CodeFusion.Security.BcryptQueue.HashesRun.get -> long
+CodeFusion.Security.BcryptQueue.QueueLength.get -> int
+CodeFusion.Security.BcryptQueue.Refused.get -> long
+CodeFusion.Security.BcryptQueue.TryHashAsync(System.ReadOnlySpan<byte> passwordUtf8, int cost = 11, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CodeFusion.Security.BcryptHashResult>
+CodeFusion.Security.BcryptQueue.TryVerifyAsync(System.ReadOnlySpan<byte> passwordUtf8, System.ReadOnlySpan<byte> hash, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CodeFusion.Security.BcryptStatus>
+CodeFusion.Security.BcryptQueue.VerifyAsync(string! password, string! hash, CodeFusion.Security.BcryptPrehash prehash, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+CodeFusion.Security.BcryptQueue.VerifyAsync(string! password, string! hash, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+CodeFusion.Security.BcryptQueue.VerifyAsync(System.ReadOnlySpan<byte> passwordUtf8, System.ReadOnlySpan<byte> hash, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
+CodeFusion.Security.BcryptQueueFullException
+CodeFusion.Security.BcryptQueueFullException.BcryptQueueFullException() -> void
+CodeFusion.Security.BcryptQueueFullException.BcryptQueueFullException(string! message) -> void
+CodeFusion.Security.BcryptQueueFullException.BcryptQueueFullException(string! message, System.Exception! innerException) -> void
+CodeFusion.Security.BcryptQueueOptions
+CodeFusion.Security.BcryptQueueOptions.BatchWindow.get -> System.TimeSpan
+CodeFusion.Security.BcryptQueueOptions.BatchWindow.init -> void
+CodeFusion.Security.BcryptQueueOptions.BcryptQueueOptions() -> void
+CodeFusion.Security.BcryptQueueOptions.Lanes.get -> int
+CodeFusion.Security.BcryptQueueOptions.Lanes.init -> void
+CodeFusion.Security.BcryptQueueOptions.MaxQueued.get -> int?
+CodeFusion.Security.BcryptQueueOptions.MaxQueued.init -> void
+CodeFusion.Security.BcryptQueueOptions.Priority.get -> System.Threading.ThreadPriority
+CodeFusion.Security.BcryptQueueOptions.Priority.init -> void
+CodeFusion.Security.BcryptQueueOptions.ThreadName.get -> string!
+CodeFusion.Security.BcryptQueueOptions.ThreadName.init -> void
+CodeFusion.Security.BcryptQueueOptions.Threads.get -> int
+CodeFusion.Security.BcryptQueueOptions.Threads.init -> void
+CodeFusion.Security.BcryptStatus
+CodeFusion.Security.BcryptStatus.Busy = 3 -> CodeFusion.Security.BcryptStatus
+CodeFusion.Security.BcryptStatus.Cancelled = 4 -> CodeFusion.Security.BcryptStatus
+CodeFusion.Security.BcryptStatus.Hashed = 2 -> CodeFusion.Security.BcryptStatus
+CodeFusion.Security.BcryptStatus.Match = 1 -> CodeFusion.Security.BcryptStatus
+CodeFusion.Security.BcryptStatus.NoMatch = 0 -> CodeFusion.Security.BcryptStatus
+const CodeFusion.Security.Bcrypt.DefaultCost = 11 -> int
+const CodeFusion.Security.Bcrypt.HashLength = 60 -> int
+const CodeFusion.Security.Bcrypt.MaxCost = 31 -> int
+const CodeFusion.Security.Bcrypt.MaxLanes = 5 -> int
+const CodeFusion.Security.Bcrypt.MaxPasswordBytes = 72 -> int
+const CodeFusion.Security.Bcrypt.MinCost = 4 -> int
+override CodeFusion.Security.BcryptHash.ToString() -> string!
+override CodeFusion.Security.BcryptHashInfo.GetHashCode() -> int
+static CodeFusion.Security.Bcrypt.EnhancedHash(string! password, int cost = 11, CodeFusion.Security.BcryptPrehash prehash = CodeFusion.Security.BcryptPrehash.Sha384) -> string!
+static CodeFusion.Security.Bcrypt.EnhancedVerify(string! password, string! hash, CodeFusion.Security.BcryptPrehash prehash = CodeFusion.Security.BcryptPrehash.Sha384) -> bool
+static CodeFusion.Security.Bcrypt.GenerateSalt(int cost = 11, char revision = 'b') -> string!
+static CodeFusion.Security.Bcrypt.Hash(string! password, int cost = 11) -> string!
+static CodeFusion.Security.Bcrypt.Hash(string! password, string! salt) -> string!
+static CodeFusion.Security.Bcrypt.Hash(System.ReadOnlySpan<byte> passwordUtf8, int cost, System.Span<byte> destination) -> int
+static CodeFusion.Security.Bcrypt.InterrogateHash(string! hash) -> CodeFusion.Security.BcryptHashInfo
+static CodeFusion.Security.Bcrypt.PasswordFits(string! password) -> bool
+static CodeFusion.Security.Bcrypt.PasswordNeedsRehash(string! hash, int minimumCost) -> bool
+static CodeFusion.Security.Bcrypt.TryInterrogateHash(string! hash, out CodeFusion.Security.BcryptHashInfo info) -> bool
+static CodeFusion.Security.Bcrypt.ValidateAndReplacePassword(string! currentPassword, string! currentHash, CodeFusion.Security.BcryptPrehash currentPrehash, string! newPassword, CodeFusion.Security.BcryptPrehash newPrehash, int cost = 11, bool forceCost = false) -> string?
+static CodeFusion.Security.Bcrypt.ValidateAndReplacePassword(string! currentPassword, string! currentHash, string! newPassword, int cost = 11, bool forceCost = false) -> string?
+static CodeFusion.Security.Bcrypt.Verify(string! password, string! hash) -> bool
+static CodeFusion.Security.Bcrypt.Verify(System.ReadOnlySpan<byte> passwordUtf8, System.ReadOnlySpan<byte> hash) -> bool
+static CodeFusion.Security.Bcrypt.Verify(System.ReadOnlySpan<string!> passwords, System.ReadOnlySpan<string!> hashes, System.Span<bool> results) -> void
+static CodeFusion.Security.BcryptHashInfo.operator !=(CodeFusion.Security.BcryptHashInfo left, CodeFusion.Security.BcryptHashInfo right) -> bool
+static CodeFusion.Security.BcryptHashInfo.operator ==(CodeFusion.Security.BcryptHashInfo left, CodeFusion.Security.BcryptHashInfo right) -> bool
+~override CodeFusion.Security.BcryptHashInfo.Equals(object obj) -> bool
+~override CodeFusion.Security.BcryptHashInfo.ToString() -> string

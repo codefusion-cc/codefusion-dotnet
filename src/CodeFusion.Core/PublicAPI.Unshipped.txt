@@ -1,0 +1,105 @@
+#nullable enable
+CodeFusion.ArenaBytes
+CodeFusion.ArenaBytes.ArenaBytes() -> void
+CodeFusion.ArenaBytes.ArenaBytes(byte[]! buffer, int start, int length) -> void
+CodeFusion.ArenaBytes.Buffer.get -> byte[]!
+CodeFusion.ArenaBytes.Length.get -> int
+CodeFusion.ArenaBytes.Span.get -> System.Span<byte>
+CodeFusion.ArenaBytes.Start.get -> int
+CodeFusion.ArenaBytes.Text(int offset, int length) -> CodeFusion.Utf8
+CodeFusion.ErrorReply
+CodeFusion.ErrorReply.Body.get -> System.ReadOnlySpan<byte>
+CodeFusion.ErrorReply.ErrorReply(int status, System.ReadOnlySpan<byte> body, int retryAfter = 0) -> void
+CodeFusion.ErrorReply.RetryAfter.get -> int
+CodeFusion.ErrorReply.Status.get -> int
+CodeFusion.ErrorReply.WriteAsync<TResponse>(TResponse response) -> System.Threading.Tasks.ValueTask
+CodeFusion.IReply
+CodeFusion.IReply.WriteAsync<TResponse>(TResponse response) -> System.Threading.Tasks.ValueTask
+CodeFusion.IRequestArena
+CodeFusion.IRequestArena.Allocate(int length) -> CodeFusion.ArenaBytes
+CodeFusion.IRequestScoped
+CodeFusion.IRequestScoped.Bind(CodeFusion.IResponse! response) -> void
+CodeFusion.IResponse
+CodeFusion.IResponse.Aborted.get -> System.Threading.CancellationToken
+CodeFusion.IResponse.Arena.get -> CodeFusion.IRequestArena!
+CodeFusion.IResponse.Body.get -> System.Buffers.IBufferWriter<byte>!
+CodeFusion.IResponse.Json.get -> System.Text.Json.Utf8JsonWriter!
+CodeFusion.IResponse.Reset() -> void
+CodeFusion.IResponse.RetryAfter.get -> int
+CodeFusion.IResponse.RetryAfter.set -> void
+CodeFusion.IResponse.Status.get -> int
+CodeFusion.IResponse.Status.set -> void
+CodeFusion.IServiceRegistry
+CodeFusion.IServiceRegistry.AddPerConnection<TService>(System.Func<TService!>! factory) -> void
+CodeFusion.IServiceRegistry.AddSingleton<TService>(TService! instance) -> void
+CodeFusion.IServiceRegistry.OnStopping(System.Action! onStopping) -> void
+CodeFusion.JsonEnvelopeAttribute
+CodeFusion.JsonEnvelopeAttribute.JsonEnvelopeAttribute(string! name) -> void
+CodeFusion.JsonEnvelopeAttribute.Name.get -> string!
+CodeFusion.RawJson
+CodeFusion.RawJson.Equals(CodeFusion.RawJson other) -> bool
+CodeFusion.RawJson.RawJson() -> void
+CodeFusion.RawJson.RawJson(CodeFusion.Utf8 text) -> void
+CodeFusion.RawJson.Span.get -> System.ReadOnlySpan<byte>
+CodeFusion.RawJson.Text.get -> CodeFusion.Utf8
+CodeFusion.Timestamp
+CodeFusion.Timestamp.CompareTo(CodeFusion.Timestamp other) -> int
+CodeFusion.Timestamp.Equals(CodeFusion.Timestamp other) -> bool
+CodeFusion.Timestamp.Timestamp() -> void
+CodeFusion.Timestamp.Timestamp(long unixMicroseconds) -> void
+CodeFusion.Timestamp.TryFormat(System.Span<byte> destination, out int bytesWritten) -> bool
+CodeFusion.Timestamp.TryToDateTime(out System.DateTime utc) -> bool
+CodeFusion.Timestamp.UnixMicroseconds.get -> long
+CodeFusion.Utf8
+CodeFusion.Utf8.Equals(CodeFusion.Utf8 other) -> bool
+CodeFusion.Utf8.Equals(System.ReadOnlySpan<byte> other) -> bool
+CodeFusion.Utf8.IsEmpty.get -> bool
+CodeFusion.Utf8.Length.get -> int
+CodeFusion.Utf8.Span.get -> System.ReadOnlySpan<byte>
+CodeFusion.Utf8.ToReadOnlySpan() -> System.ReadOnlySpan<byte>
+CodeFusion.Utf8.Utf8() -> void
+CodeFusion.Utf8.Utf8(byte[]! buffer, int start, int length) -> void
+CodeFusion.Utf8List
+CodeFusion.Utf8List.Count.get -> int
+CodeFusion.Utf8List.Enumerator
+CodeFusion.Utf8List.Enumerator.Current.get -> CodeFusion.Utf8
+CodeFusion.Utf8List.Enumerator.Enumerator() -> void
+CodeFusion.Utf8List.Enumerator.MoveNext() -> bool
+CodeFusion.Utf8List.Equals(CodeFusion.Utf8List other) -> bool
+CodeFusion.Utf8List.GetEnumerator() -> CodeFusion.Utf8List.Enumerator
+CodeFusion.Utf8List.IsEmpty.get -> bool
+CodeFusion.Utf8List.Utf8List() -> void
+CodeFusion.Utf8List.Utf8List(byte[]! buffer, int start, int length, int count) -> void
+const CodeFusion.Timestamp.FormattedLength = 24 -> int
+override CodeFusion.RawJson.Equals(object? obj) -> bool
+override CodeFusion.RawJson.GetHashCode() -> int
+override CodeFusion.RawJson.ToString() -> string!
+override CodeFusion.Timestamp.Equals(object? obj) -> bool
+override CodeFusion.Timestamp.GetHashCode() -> int
+override CodeFusion.Timestamp.ToString() -> string!
+override CodeFusion.Utf8.Equals(object? obj) -> bool
+override CodeFusion.Utf8.GetHashCode() -> int
+override CodeFusion.Utf8.ToString() -> string!
+override CodeFusion.Utf8List.Equals(object? obj) -> bool
+override CodeFusion.Utf8List.GetHashCode() -> int
+override CodeFusion.Utf8List.ToString() -> string!
+static CodeFusion.RawJson.operator !=(CodeFusion.RawJson left, CodeFusion.RawJson right) -> bool
+static CodeFusion.RawJson.operator ==(CodeFusion.RawJson left, CodeFusion.RawJson right) -> bool
+static CodeFusion.Timestamp.FromDateTime(System.DateTime utc) -> CodeFusion.Timestamp
+static CodeFusion.Timestamp.operator !=(CodeFusion.Timestamp left, CodeFusion.Timestamp right) -> bool
+static CodeFusion.Timestamp.operator <(CodeFusion.Timestamp left, CodeFusion.Timestamp right) -> bool
+static CodeFusion.Timestamp.operator <=(CodeFusion.Timestamp left, CodeFusion.Timestamp right) -> bool
+static CodeFusion.Timestamp.operator ==(CodeFusion.Timestamp left, CodeFusion.Timestamp right) -> bool
+static CodeFusion.Timestamp.operator >(CodeFusion.Timestamp left, CodeFusion.Timestamp right) -> bool
+static CodeFusion.Timestamp.operator >=(CodeFusion.Timestamp left, CodeFusion.Timestamp right) -> bool
+static CodeFusion.Utf8.Empty.get -> CodeFusion.Utf8
+static CodeFusion.Utf8.implicit operator System.ReadOnlySpan<byte>(CodeFusion.Utf8 text) -> System.ReadOnlySpan<byte>
+static CodeFusion.Utf8.operator !=(CodeFusion.Utf8 left, CodeFusion.Utf8 right) -> bool
+static CodeFusion.Utf8.operator !=(CodeFusion.Utf8 left, System.ReadOnlySpan<byte> right) -> bool
+static CodeFusion.Utf8.operator ==(CodeFusion.Utf8 left, CodeFusion.Utf8 right) -> bool
+static CodeFusion.Utf8.operator ==(CodeFusion.Utf8 left, System.ReadOnlySpan<byte> right) -> bool
+static CodeFusion.Utf8List.Empty.get -> CodeFusion.Utf8List
+static CodeFusion.Utf8List.operator !=(CodeFusion.Utf8List left, CodeFusion.Utf8List right) -> bool
+static CodeFusion.Utf8List.operator ==(CodeFusion.Utf8List left, CodeFusion.Utf8List right) -> bool
+static CodeFusion.Utf8List.RecordBytes(int textBytes, int count) -> int
+static CodeFusion.Utf8List.Write(System.ReadOnlySpan<byte> text, System.Span<byte> destination) -> int

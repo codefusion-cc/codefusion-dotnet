@@ -1,0 +1,6 @@
+<Project>
+  <!-- The endpoint generator replaces each Map call with an interceptor in this namespace. -->
+  <PropertyGroup>
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);CodeFusion.Http.Generated</InterceptorsNamespaces>
+  </PropertyGroup>
+</Project>

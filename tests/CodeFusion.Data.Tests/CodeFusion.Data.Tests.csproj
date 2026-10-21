@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The query generator and the data layer: translator tests on the SQL it writes, the generator run in memory for
+       its errors and for property tests, and execution, plan and allocation tests against a real Postgres
+       (CODEFUSION_TEST_DB; without it they skip). The allocation tests run in Release only. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CodeFusion.Data.Tests</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+    <!-- The generated interceptors live here (CodeFusion.Data's package sets this for its users). -->
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);CodeFusion.Data.Generated</InterceptorsNamespaces>
+    <!-- The generated queries, readable under obj/…/generated for review. -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <!-- Inline arrays read clearer in test data; the tests hold ValueTasks on purpose; test entities and views are
+         public without docs. -->
+    <NoWarn>$(NoWarn);CA1861;CA2012;CA1515;CA1819;CS1591;CA1001;CA1711;CA1707;xUnit1051;xUnit1069</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <!-- Fails the run on an exception that ended a thread or that no one observed. -->
+    <Compile Include="../Shared/RunGuard.cs" Link="Shared/RunGuard.cs" />
+    <!-- Fails a test whose Postgres loops caught an exception no failing connection explains. -->
+    <Compile Include="../Shared/LoopChecks.cs" Link="Shared/LoopChecks.cs" />
+    <PackageReference Include="FsCheck.Xunit.v3" />
+    <PackageReference Include="Npgsql" />
+    <!-- The generator run in memory, for its errors and the property tests. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
+    <ProjectReference Include="../../src/CodeFusion.Data.Postgres/CodeFusion.Data.Postgres.csproj" />
+    <ProjectReference Include="../../src/CodeFusion.Data.Generator/CodeFusion.Data.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="true" />
+    <Compile Include="../Shared/Conduit/*.cs" Link="Conduit/%(Filename)%(Extension)" />
+    <!-- The contest's statements, frozen, to compare plans with. -->
+    <Compile Include="../../benchmarks/CodeFusion.Benchmarks/Reference/Sql.cs" Link="Reference/Sql.cs" />
+    <None Include="../../benchmarks/CodeFusion.Benchmarks/schema.sql" Link="schema.sql" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

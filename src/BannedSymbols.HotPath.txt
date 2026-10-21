@@ -1,0 +1,12 @@
+// The projects that run per request or per query: CodeFusion.Http and CodeFusion.Data.Postgres (src/Directory.Build.props
+// lists them). The generators run in the compiler and may use LINQ.
+
+T:System.Linq.Enumerable;LINQ allocates an enumerator and a delegate per call: write the loop
+M:System.Threading.Tasks.Task.Run(System.Action);Task.Run allocates a Task and a closure per call: queue an IThreadPoolWorkItem with ThreadPool.UnsafeQueueUserWorkItem, or give a loop its own thread
+M:System.Threading.Tasks.Task.Run(System.Action,System.Threading.CancellationToken);Task.Run allocates a Task and a closure per call: queue an IThreadPoolWorkItem with ThreadPool.UnsafeQueueUserWorkItem, or give a loop its own thread
+M:System.Threading.Tasks.Task.Run(System.Func{System.Threading.Tasks.Task});Task.Run allocates a Task and a closure per call: queue an IThreadPoolWorkItem with ThreadPool.UnsafeQueueUserWorkItem, or give a loop its own thread
+M:System.Threading.Tasks.Task.Run(System.Func{System.Threading.Tasks.Task},System.Threading.CancellationToken);Task.Run allocates a Task and a closure per call: queue an IThreadPoolWorkItem with ThreadPool.UnsafeQueueUserWorkItem, or give a loop its own thread
+M:System.Threading.Tasks.Task.Run``1(System.Func{``0});Task.Run allocates a Task and a closure per call: queue an IThreadPoolWorkItem with ThreadPool.UnsafeQueueUserWorkItem, or give a loop its own thread
+M:System.Threading.Tasks.Task.Run``1(System.Func{``0},System.Threading.CancellationToken);Task.Run allocates a Task and a closure per call: queue an IThreadPoolWorkItem with ThreadPool.UnsafeQueueUserWorkItem, or give a loop its own thread
+M:System.Threading.Tasks.Task.Run``1(System.Func{System.Threading.Tasks.Task{``0}});Task.Run allocates a Task and a closure per call: queue an IThreadPoolWorkItem with ThreadPool.UnsafeQueueUserWorkItem, or give a loop its own thread
+M:System.Threading.Tasks.Task.Run``1(System.Func{System.Threading.Tasks.Task{``0}},System.Threading.CancellationToken);Task.Run allocates a Task and a closure per call: queue an IThreadPoolWorkItem with ThreadPool.UnsafeQueueUserWorkItem, or give a loop its own thread

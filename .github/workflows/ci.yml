@@ -3,15 +3,150 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    # v1.2.3 publishes the CodeFusion packages; bcrypt-v1.2.3 publishes CodeFusion.Security.Bcrypt.
+    tags: ['v*', 'bcrypt-v*']
   pull_request:
+  # Nightly: the fuzz job.
+  schedule:
+    - cron: '23 2 * * *'
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: How long each fuzz target runs, in seconds
+        default: '600'
 
 permissions:
   contents: read
 
+# The test platform's own telemetry allocates in the test process, which the whole-process allocation tests count.
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+  TESTINGPLATFORM_TELEMETRY_OPTOUT: 1
+
 jobs:
+  # Release, which ships, and Debug, whose invariant and pool checks only Debug builds run; side by side, so the wall
+  # time stays one run's.
   test:
-    name: Test (${{ matrix.arch }})
+    name: Test (${{ matrix.arch }}${{ matrix.configuration == 'Debug' && ', Debug' || '' }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x64
+            configuration: Release
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            configuration: Release
+          - os: ubuntu-24.04
+            arch: x64
+            configuration: Debug
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            configuration: Debug
+    if: github.event_name != 'schedule'
+    runs-on: ${{ matrix.os }}
+    # The client's integration and allocation tests run against it; SCRAM is the image's default for TCP logins.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: codefusion
+          POSTGRES_PASSWORD: codefusion
+          POSTGRES_DB: codefusion_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U codefusion"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      CODEFUSION_TEST_DB: Host=127.0.0.1;Port=5432;Username=codefusion;Password=codefusion;Database=codefusion_test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - run: dotnet build -c ${{ matrix.configuration }}
+      # bcrypt runs in its own job, on every framework it supports.
+      - name: Test
+        run: |
+          for t in CodeFusion.Core.Tests CodeFusion.Http.Tests CodeFusion.Http.Generators.Tests CodeFusion.Data.Postgres.Tests CodeFusion.Data.Tests CodeFusion.Fuzz; do
+            dotnet test --project tests/$t -c ${{ matrix.configuration }} --no-build -- --max-threads 2 --timeout 10m
+          done
+      - name: Pack
+        if: matrix.configuration == 'Release'
+        run: |
+          for p in CodeFusion.Core CodeFusion.Http CodeFusion.Data CodeFusion.Data.Postgres; do
+            dotnet pack src/$p -c Release --no-build -o artifacts
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: matrix.arch == 'x64' && matrix.configuration == 'Release'
+        with:
+          name: packages
+          path: artifacts/
+
+  # Every fuzz target under libFuzzer (tests/CodeFusion.Fuzz/README.md), its corpus grown from the checked-in seeds.
+  # A crash, a hang or a broken invariant fails the job; the summary lists each finding minimized, and the
+  # differential's one-sided refusals, and the findings and the grown corpus are uploaded.
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        target: [http-parser, http-kestrel, http-path, json-body, json-endpoint, pg-row, pg-error, pg-startup, pg-scram-first, pg-scram-final, pg-settings]
+    env:
+      LIBFUZZER: ${{ github.workspace }}/artifacts/libfuzzer-dotnet
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: libfuzzer-dotnet
+        # Built with the runner's clang from one source file at a pinned commit (release v2025.05.02.0904).
+        run: |
+          mkdir -p artifacts
+          curl -fsSL -o artifacts/libfuzzer-dotnet.cc \
+            https://raw.githubusercontent.com/Metalnem/libfuzzer-dotnet/bd39d4e88d715ab460a929943645be2a186cde52/libfuzzer-dotnet.cc
+          echo "90f019e2e9ad3a0b93c7ecc2c5afb2fbfc8b5aab6aac51c7e0d349ec79354f36  artifacts/libfuzzer-dotnet.cc" | sha256sum -c -
+          clang -Werror -O2 -fsanitize=fuzzer artifacts/libfuzzer-dotnet.cc -o "$LIBFUZZER"
+      - name: Build and instrument
+        run: dotnet run scripts/Fuzz.cs -- build
+      # Each night starts from the corpus the last one grew (the checked-in seeds are added to it).
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: artifacts/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - name: Fuzz
+        run: dotnet run scripts/Fuzz.cs -- libfuzzer ${{ matrix.target }} ${{ inputs.fuzz_seconds || '600' }}
+      - name: Report
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.target }}"
+            echo '```'
+            dotnet run scripts/Fuzz.cs -- report ${{ matrix.target }} artifacts/fuzz/findings/${{ matrix.target }} artifacts/fuzz/corpus/${{ matrix.target }} || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: |
+            artifacts/fuzz/findings/${{ matrix.target }}
+            artifacts/fuzz/corpus/${{ matrix.target }}
+          if-no-files-found: ignore
+
+  # CodeFusion.Security.Bcrypt on .NET 8, 9, 10 and 11, as its own repository tested it. Its SDK is the newest one
+  # installed, so the .NET 11 run happens: the repository's global.json pins 10.0.402 for everything else.
+  bcrypt:
+    name: Bcrypt (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
@@ -20,6 +155,7 @@ jobs:
             arch: x64
           - os: ubuntu-24.04-arm
             arch: arm64
+    if: github.event_name != 'schedule'
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -34,7 +170,13 @@ jobs:
         with:
           dotnet-version: 11.0.x
           dotnet-quality: preview
-      - run: dotnet build -c Release
+      - name: Newest SDK
+        run: |
+          cat > global.json <<'JSON'
+          { "sdk": { "version": "10.0.100", "rollForward": "latestMajor", "allowPrerelease": true },
+            "test": { "runner": "Microsoft.Testing.Platform" } }
+          JSON
+      - run: dotnet build tests/CodeFusion.Security.Bcrypt.Tests -c Release
       - name: Test on .NET 8, 9, 10 and 11
         run: |
           for f in net8.0 net9.0 net10.0 net11.0; do
@@ -44,15 +186,46 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: matrix.arch == 'x64'
         with:
-          name: packages
+          name: bcrypt-package
           path: artifacts/
 
-  # Publishes on a version tag (v1.2.3) through NuGet trusted publishing: no long-lived API key. Needs a trusted
-  # publishing policy on nuget.org for this repository and workflow, and the NUGET_USER secret (the nuget.org
-  # profile name) in the "nuget" environment.
+  # Publishes the four CodeFusion packages on a version tag (v1.2.3) through NuGet trusted publishing: no long-lived
+  # API key. Needs a trusted publishing policy on nuget.org for this repository and workflow, and the NUGET_USER
+  # secret (the nuget.org profile name) in the "nuget" environment.
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: test
+    runs-on: ubuntu-24.04
+    environment: nuget
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: The tag is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Pack
+        run: |
+          for p in CodeFusion.Core CodeFusion.Http CodeFusion.Data CodeFusion.Data.Postgres; do
+            dotnet pack src/$p -c Release -o artifacts -p:Version=${GITHUB_REF_NAME#v}
+          done
+      - name: NuGet login
+        id: login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
+        with:
+          user: ${{ secrets.NUGET_USER }}
+      - name: Push
+        run: dotnet nuget push "artifacts/*.nupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+  # CodeFusion.Security.Bcrypt on a bcrypt-v1.2.3 tag, the same way, with the same environment and policy.
+  publish-bcrypt:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/bcrypt-v')
+    needs: bcrypt
     runs-on: ubuntu-24.04
     environment: nuget
     permissions:
@@ -70,13 +243,11 @@ jobs:
             8.0.x
             9.0.x
             10.0.x
-      # .NET 11 is a release candidate until November 2026; drop dotnet-quality once it ships.
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
-          dotnet-version: 11.0.x
-          dotnet-quality: preview
+          global-json-file: global.json
       - name: Pack
-        run: dotnet pack src/CodeFusion.Security.Bcrypt -c Release -o artifacts -p:Version=${GITHUB_REF_NAME#v}
+        run: dotnet pack src/CodeFusion.Security.Bcrypt -c Release -o artifacts -p:Version=${GITHUB_REF_NAME#bcrypt-v}
       - name: NuGet login
         id: login
         uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1

@@ -1,0 +1,171 @@
+#nullable enable
+abstract CodeFusion.Data.Postgres.PgTransport.Dispose() -> void
+abstract CodeFusion.Data.Postgres.PgTransport.Receive(System.Span<byte> buffer) -> int
+abstract CodeFusion.Data.Postgres.PgTransport.ReceiveWaiting(System.Span<byte> buffer) -> int
+abstract CodeFusion.Data.Postgres.PgTransport.Send(System.ReadOnlySpan<byte> data, System.Action? whileBlocked = null) -> void
+CodeFusion.Data.Postgres.PgBusyException
+CodeFusion.Data.Postgres.PgBusyException.PgBusyException(string! message) -> void
+CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.BeginTextArray() -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.Bool(bool v) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.Element(System.ReadOnlySpan<byte> utf8) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.Element(System.ReadOnlySpan<char> s) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.EndTextArray() -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.Float8(double v) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.Hold() -> CodeFusion.Data.Postgres.PgHeld
+CodeFusion.Data.Postgres.PgCommand.Int4(int v) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.Int8(long v) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.Null() -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.PgCommand() -> void
+CodeFusion.Data.Postgres.PgCommand.Run(CodeFusion.Data.Postgres.PgRowHandler? handler, object? state, System.Threading.CancellationToken aborted = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CodeFusion.Data.Postgres.PgResult>
+CodeFusion.Data.Postgres.PgCommand.Text(string? s) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.Text(System.ReadOnlySpan<byte> utf8) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.Text(System.ReadOnlySpan<char> s) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.TextArray(string?[]? values) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.TextArray(System.ReadOnlySpan<string?> values) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.Then(CodeFusion.Data.Postgres.PgStatement! statement) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgCommand.Timestamptz(long unixMicroseconds) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgConnectionException
+CodeFusion.Data.Postgres.PgConnectionException.PgConnectionException(string! message, System.Exception? inner = null) -> void
+CodeFusion.Data.Postgres.PgCounters
+CodeFusion.Data.Postgres.PgCounters.Grouped -> long
+CodeFusion.Data.Postgres.PgCounters.GroupMax -> long
+CodeFusion.Data.Postgres.PgCounters.Groups -> long
+CodeFusion.Data.Postgres.PgCounters.PgCounters() -> void
+CodeFusion.Data.Postgres.PgCounters.Refused -> long
+CodeFusion.Data.Postgres.PgCounters.Reruns -> long
+CodeFusion.Data.Postgres.PgCounters.Ticks -> long
+CodeFusion.Data.Postgres.PgCounters.TicksMax -> long
+CodeFusion.Data.Postgres.PgCounters.WaitTicksMax -> long
+CodeFusion.Data.Postgres.PgDataSource
+CodeFusion.Data.Postgres.PgDataSource.PgDataSource(CodeFusion.Data.Postgres.PgReader! reader, CodeFusion.Data.Postgres.PgWriter! writer) -> void
+CodeFusion.Data.Postgres.PgDataSource.Reader.get -> CodeFusion.Data.Postgres.PgReader!
+CodeFusion.Data.Postgres.PgDataSource.Writer.get -> CodeFusion.Data.Postgres.PgWriter!
+CodeFusion.Data.Postgres.PgErrorCodes
+CodeFusion.Data.Postgres.PgException
+CodeFusion.Data.Postgres.PgException.Constraint.get -> string?
+CodeFusion.Data.Postgres.PgException.Detail.get -> string?
+CodeFusion.Data.Postgres.PgException.IsFatal.get -> bool
+CodeFusion.Data.Postgres.PgException.MessageText.get -> string!
+CodeFusion.Data.Postgres.PgException.PgException(string! severity, string! sqlState, string! messageText, string? detail, string? constraint) -> void
+CodeFusion.Data.Postgres.PgException.Severity.get -> string!
+CodeFusion.Data.Postgres.PgException.SqlState.get -> string!
+CodeFusion.Data.Postgres.PgHeld
+CodeFusion.Data.Postgres.PgHeld.Discard() -> void
+CodeFusion.Data.Postgres.PgHeld.PgHeld() -> void
+CodeFusion.Data.Postgres.PgHeld.Run(CodeFusion.Data.Postgres.PgRowHandler? handler, object? state, System.Threading.CancellationToken aborted = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CodeFusion.Data.Postgres.PgResult>
+CodeFusion.Data.Postgres.PgLoops
+CodeFusion.Data.Postgres.PgLoops.Command(CodeFusion.Data.Postgres.PgStatement! statement) -> CodeFusion.Data.Postgres.PgCommand
+CodeFusion.Data.Postgres.PgLoops.Complete() -> void
+CodeFusion.Data.Postgres.PgLoops.Queued.get -> int
+CodeFusion.Data.Postgres.PgLoops.Start(int loops) -> void
+CodeFusion.Data.Postgres.PgReader
+CodeFusion.Data.Postgres.PgReader.PgReader(CodeFusion.Data.Postgres.PgSettings! settings) -> void
+CodeFusion.Data.Postgres.PgResult
+CodeFusion.Data.Postgres.PgResult.Error.get -> CodeFusion.Data.Postgres.PgException?
+CodeFusion.Data.Postgres.PgResult.Exception.get -> System.Exception?
+CodeFusion.Data.Postgres.PgResult.IsOk.get -> bool
+CodeFusion.Data.Postgres.PgResult.PgResult() -> void
+CodeFusion.Data.Postgres.PgResult.Rows.get -> int
+CodeFusion.Data.Postgres.PgResult.Runs.get -> int
+CodeFusion.Data.Postgres.PgResult.SqlState.get -> string?
+CodeFusion.Data.Postgres.PgResult.Status.get -> CodeFusion.Data.Postgres.PgStatus
+CodeFusion.Data.Postgres.PgResult.ThrowIfFailed() -> CodeFusion.Data.Postgres.PgResult
+CodeFusion.Data.Postgres.PgResult.Value.get -> long
+CodeFusion.Data.Postgres.PgRow
+CodeFusion.Data.Postgres.PgRow.FieldCount.get -> int
+CodeFusion.Data.Postgres.PgRow.GetBoolean(int c) -> bool
+CodeFusion.Data.Postgres.PgRow.GetBytes(int c) -> System.ReadOnlySpan<byte>
+CodeFusion.Data.Postgres.PgRow.GetJson(int c) -> System.ReadOnlySpan<byte>
+CodeFusion.Data.Postgres.PgRow.GetDateTime(int c) -> System.DateTime
+CodeFusion.Data.Postgres.PgRow.GetDouble(int c) -> double
+CodeFusion.Data.Postgres.PgRow.GetInt64(int c) -> long
+CodeFusion.Data.Postgres.PgRow.GetPgMicroseconds(int c) -> long
+CodeFusion.Data.Postgres.PgRow.GetTimestamp(int c) -> CodeFusion.Timestamp
+CodeFusion.Data.Postgres.PgRow.GetUnixMicroseconds(int c) -> long
+CodeFusion.Data.Postgres.PgRow.IsNull(int c) -> bool
+CodeFusion.Data.Postgres.PgRow.PgRow() -> void
+CodeFusion.Data.Postgres.PgRowHandler
+CodeFusion.Data.Postgres.PgSettings
+CodeFusion.Data.Postgres.PgSettings.AllowWeakPasswordAuth -> bool
+CodeFusion.Data.Postgres.PgSettings.Clone() -> CodeFusion.Data.Postgres.PgSettings!
+CodeFusion.Data.Postgres.PgSettings.ConnectTimeout -> System.TimeSpan
+CodeFusion.Data.Postgres.PgSettings.Database -> string!
+CodeFusion.Data.Postgres.PgSettings.Host -> string!
+CodeFusion.Data.Postgres.PgSettings.MaxReconnectDelay -> System.TimeSpan
+CodeFusion.Data.Postgres.PgSettings.Password -> string?
+CodeFusion.Data.Postgres.PgSettings.PgSettings() -> void
+CodeFusion.Data.Postgres.PgSettings.Port -> int
+CodeFusion.Data.Postgres.PgSettings.ReceiveBufferSize -> int
+CodeFusion.Data.Postgres.PgSettings.ReconnectDelay -> System.TimeSpan
+CodeFusion.Data.Postgres.PgSettings.Set(string! name, string! value) -> CodeFusion.Data.Postgres.PgSettings!
+CodeFusion.Data.Postgres.PgSettings.Transport -> System.Func<CodeFusion.Data.Postgres.PgSettings!, CodeFusion.Data.Postgres.PgTransport!>?
+CodeFusion.Data.Postgres.PgSettings.User -> string!
+CodeFusion.Data.Postgres.PgStatement
+CodeFusion.Data.Postgres.PgStatement.ParamCount.get -> int
+CodeFusion.Data.Postgres.PgStatement.PgStatement(string! sql, params System.ReadOnlySpan<CodeFusion.Data.Postgres.PgType> parameters) -> void
+CodeFusion.Data.Postgres.PgStatement.Sql.get -> string!
+CodeFusion.Data.Postgres.PgStatus
+CodeFusion.Data.Postgres.PgStatus.Broken = 4 -> CodeFusion.Data.Postgres.PgStatus
+CodeFusion.Data.Postgres.PgStatus.Busy = 2 -> CodeFusion.Data.Postgres.PgStatus
+CodeFusion.Data.Postgres.PgStatus.Canceled = 3 -> CodeFusion.Data.Postgres.PgStatus
+CodeFusion.Data.Postgres.PgStatus.HandlerFailed = 5 -> CodeFusion.Data.Postgres.PgStatus
+CodeFusion.Data.Postgres.PgStatus.Ok = 0 -> CodeFusion.Data.Postgres.PgStatus
+CodeFusion.Data.Postgres.PgStatus.ServerError = 1 -> CodeFusion.Data.Postgres.PgStatus
+CodeFusion.Data.Postgres.PgStatus.Stopped = 6 -> CodeFusion.Data.Postgres.PgStatus
+CodeFusion.Data.Postgres.PgTransport
+CodeFusion.Data.Postgres.PgTransport.PgTransport() -> void
+CodeFusion.Data.Postgres.PgType
+CodeFusion.Data.Postgres.PgType.Bool = 16 -> CodeFusion.Data.Postgres.PgType
+CodeFusion.Data.Postgres.PgType.Float8 = 701 -> CodeFusion.Data.Postgres.PgType
+CodeFusion.Data.Postgres.PgType.Int4 = 23 -> CodeFusion.Data.Postgres.PgType
+CodeFusion.Data.Postgres.PgType.Int8 = 20 -> CodeFusion.Data.Postgres.PgType
+CodeFusion.Data.Postgres.PgType.Text = 25 -> CodeFusion.Data.Postgres.PgType
+CodeFusion.Data.Postgres.PgType.TextArray = 1009 -> CodeFusion.Data.Postgres.PgType
+CodeFusion.Data.Postgres.PgType.Timestamptz = 1184 -> CodeFusion.Data.Postgres.PgType
+CodeFusion.Data.Postgres.PgWriter
+CodeFusion.Data.Postgres.PgWriter.PgWriter(CodeFusion.Data.Postgres.PgSettings! settings) -> void
+CodeFusion.Data.Postgres.Postgres
+CodeFusion.Data.Postgres.Postgres.Postgres() -> void
+CodeFusion.Data.Postgres.PostgresDatabase
+CodeFusion.Data.Postgres.PostgresDatabase.Errors.get -> CodeFusion.Data.DataErrors!
+CodeFusion.Data.Postgres.PostgresDatabase.Errors.init -> void
+CodeFusion.Data.Postgres.PostgresDatabase.OnFailure.get -> System.Action<string!, CodeFusion.Data.DataResult>?
+CodeFusion.Data.Postgres.PostgresDatabase.OnFailure.init -> void
+CodeFusion.Data.Postgres.PostgresDatabase.Open(int readers, int writers) -> CodeFusion.Data.Postgres.PgDataSource!
+CodeFusion.Data.Postgres.PostgresDatabase.PostgresDatabase(CodeFusion.Data.Postgres.PgSettings! settings) -> void
+CodeFusion.Data.Postgres.PostgresDatabase.Settings.get -> CodeFusion.Data.Postgres.PgSettings!
+CodeFusion.Data.Postgres.PostgresDatabase.WriterLockTimeout.get -> System.TimeSpan
+CodeFusion.Data.Postgres.PostgresDatabase.WriterLockTimeout.init -> void
+CodeFusion.Data.Postgres.PostgresServices
+const CodeFusion.Data.Postgres.PgErrorCodes.AdminShutdown = "57P01" -> string!
+const CodeFusion.Data.Postgres.PgErrorCodes.DeadlockDetected = "40P01" -> string!
+const CodeFusion.Data.Postgres.PgErrorCodes.DivisionByZero = "22012" -> string!
+const CodeFusion.Data.Postgres.PgErrorCodes.InvalidAuthorization = "28000" -> string!
+const CodeFusion.Data.Postgres.PgErrorCodes.InvalidPassword = "28P01" -> string!
+const CodeFusion.Data.Postgres.PgErrorCodes.LockNotAvailable = "55P03" -> string!
+const CodeFusion.Data.Postgres.PgErrorCodes.QueryCanceled = "57014" -> string!
+const CodeFusion.Data.Postgres.PgErrorCodes.SerializationFailure = "40001" -> string!
+const CodeFusion.Data.Postgres.PgErrorCodes.UniqueViolation = "23505" -> string!
+const CodeFusion.Data.Postgres.PgReader.MaxGroup = 32 -> int
+const CodeFusion.Data.Postgres.PgReader.MaxQueued = 65536 -> int
+const CodeFusion.Data.Postgres.PgWriter.MaxGroup = 128 -> int
+const CodeFusion.Data.Postgres.PgWriter.MaxQueued = 4096 -> int
+override CodeFusion.Data.Postgres.PgDataSource.Stop() -> void
+override CodeFusion.Data.Postgres.PgResult.ToString() -> string!
+override CodeFusion.Data.Postgres.PgStatement.ToString() -> string!
+readonly CodeFusion.Data.Postgres.PgLoops.Counters -> CodeFusion.Data.Postgres.PgCounters!
+readonly CodeFusion.Data.Postgres.PgRow.Index -> int
+readonly CodeFusion.Data.Postgres.PgSettings.Parameters -> System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string!, string!>>!
+static CodeFusion.Data.Postgres.PgSettings.Parse(string! s) -> CodeFusion.Data.Postgres.PgSettings!
+static CodeFusion.Data.Postgres.Postgres.Discard(in CodeFusion.Data.PendingCommand command) -> void
+static CodeFusion.Data.Postgres.Postgres.FromSettings(CodeFusion.Data.Postgres.PgSettings! settings) -> CodeFusion.Data.Postgres.PostgresDatabase!
+static CodeFusion.Data.Postgres.Postgres.FromUrl(string! url) -> CodeFusion.Data.Postgres.PostgresDatabase!
+static CodeFusion.Data.Postgres.Postgres.Read(CodeFusion.Data.DataContext! context, CodeFusion.Data.Postgres.PgStatement! statement) -> CodeFusion.Data.Postgres.PgCommand
+static CodeFusion.Data.Postgres.Postgres.Run<TReader>(in CodeFusion.Data.PendingCommand command, object? state, System.Threading.CancellationToken aborted) -> System.Threading.Tasks.ValueTask<CodeFusion.Data.DataResult>
+static CodeFusion.Data.Postgres.Postgres.Statement(string! sql, params System.ReadOnlySpan<CodeFusion.Data.DataType> parameters) -> CodeFusion.Data.Postgres.PgStatement!
+static CodeFusion.Data.Postgres.Postgres.Write(CodeFusion.Data.DataContext! context, CodeFusion.Data.Postgres.PgStatement! statement) -> CodeFusion.Data.Postgres.PgCommand
+static CodeFusion.Data.Postgres.PostgresServices.AddDatabase<TContext>(this CodeFusion.IServiceRegistry! services, CodeFusion.Data.Postgres.PgDataSource! source) -> CodeFusion.Data.Postgres.PgDataSource!
+static CodeFusion.Data.Postgres.PostgresServices.AddDatabase<TContext>(this CodeFusion.IServiceRegistry! services, CodeFusion.Data.Postgres.PostgresDatabase! database, int readers, int writers) -> CodeFusion.Data.Postgres.PgDataSource!
+virtual CodeFusion.Data.Postgres.PgRowHandler.Invoke(in CodeFusion.Data.Postgres.PgRow row, object? state) -> long
+virtual CodeFusion.Data.Postgres.PgTransport.Started() -> void

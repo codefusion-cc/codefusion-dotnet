@@ -1,18 +1,36 @@
 <Project>
 
   <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
-    <!-- The same bytes from the same commit; CI sets ContinuousIntegrationBuild so paths are normalized too. -->
+    <!-- The same bytes from the same commit. src/Directory.Build.props also normalizes the paths of what ships. -->
     <Deterministic>true</Deterministic>
-    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
-    <!-- The frameworks every project builds for. The tests and benchmarks also run on .NET 11 when the SDK is 11 or
-         newer (the SDK's version isn't known yet here, so they add it themselves); CI always has it. -->
+    <!-- CodeFusion.Security.Bcrypt's frameworks: it supports .NET 8 and up, and keeps its own 1.x version. Its tests
+         and benchmarks also run on .NET 11 when the SDK is 11 or newer (they add it themselves); its CI job has it. -->
     <BcryptFrameworks>net8.0;net9.0;net10.0</BcryptFrameworks>
+  </PropertyGroup>
+
+  <!-- What every package shares; each project adds its PackageId, Description and tags. The CodeFusion packages are
+       released together, so they carry one version; CodeFusion.Security.Bcrypt sets its own. -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>Krystian Pawłow</Authors>
+    <Company>CodeFusion</Company>
+    <Copyright>Copyright (c) 2026 Krystian Pawłow</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/codefusion-cc/codefusion-dotnet</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/codefusion-cc/codefusion-dotnet</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
 </Project>

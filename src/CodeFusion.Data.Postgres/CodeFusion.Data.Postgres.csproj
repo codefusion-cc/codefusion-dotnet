@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>CodeFusion.Data.Postgres</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsAotCompatible>true</IsAotCompatible>
+    <!-- Public fields on settings and counters are the API (read and set without copies), and Int8 is Postgres's own type name. -->
+    <NoWarn>$(NoWarn);CA1051;CA1720</NoWarn>
+
+    <PackageId>CodeFusion.Data.Postgres</PackageId>
+    <Description>A Postgres wire-protocol client for .NET that allocates nothing per query: prepared statements with binary parameters, read groups and group commit on a few connections, and rows read in place.</Description>
+    <PackageTags>postgres;postgresql;database;zero-allocation;performance</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The SCRAM and md5 code is checked against the RFC's test vectors there. -->
+    <InternalsVisibleTo Include="CodeFusion.Data.Postgres.Tests" />
+    <!-- The fuzz targets drive the parsers directly. -->
+    <InternalsVisibleTo Include="CodeFusion.Fuzz" />
+    <!-- The data layer's tests check the loops stopped clean. -->
+    <InternalsVisibleTo Include="CodeFusion.Data.Tests" />
+    <ProjectReference Include="../CodeFusion.Data/CodeFusion.Data.csproj" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+</Project>

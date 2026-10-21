@@ -1,0 +1,6 @@
+POST /api/users/login HTTP/1.1
+Host: x
+Content-Type: application/json
+Content-Length: 46
+
+{"user":{"email":"a@b.c","password":"secret"}}

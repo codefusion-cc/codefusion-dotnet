@@ -3,6 +3,8 @@
   <PropertyGroup>
     <!-- No net11.0: a .NET 11 app gets the net10.0 build, and the hot loop is compiled by whichever runtime runs it.
          The tests also run on .NET 11. -->
+    <!-- The repository sets one TargetFramework for its .NET 10 packages; cleared, so this one builds for each of its own. -->
+    <TargetFramework></TargetFramework>
     <TargetFrameworks>$(BcryptFrameworks)</TargetFrameworks>
     <RootNamespace>CodeFusion.Security</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -13,6 +15,10 @@
 
     <PackageId>CodeFusion.Security.Bcrypt</PackageId>
     <Version>1.1.0</Version>
+    <!-- dotnet pack checks the package against the last release: no API or framework it had may go missing. -->
+    <PackageValidationBaselineVersion>1.1.0</PackageValidationBaselineVersion>
+    <!-- Optional parameters on more than one overload: the 1.x API shipped that way, and changing it would break callers. -->
+    <NoWarn>$(NoWarn);RS0026;RS0027</NoWarn>
     <Authors>Krystian Pawłow</Authors>
     <Company>CodeFusion</Company>
     <Copyright>Copyright (c) 2026 Krystian Pawłow</Copyright>
@@ -35,7 +41,7 @@
     <ProjectReference Include="../CodeFusion.Security.Bcrypt.Generators/CodeFusion.Security.Bcrypt.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" PrivateAssets="all" />
     <InternalsVisibleTo Include="CodeFusion.Security.Bcrypt.Tests" />
     <InternalsVisibleTo Include="CodeFusion.Security.Bcrypt.Benchmarks" />
-    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
     <None Include="../../LICENSE" Pack="true" PackagePath="/" />
   </ItemGroup>
 

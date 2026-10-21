@@ -21,6 +21,9 @@ public class AllocationTests
     static readonly string Hash4 = Bcrypt.Hash("password123", 4);
     const int Calls = 20;
 
+    static readonly bool Unoptimized = typeof(Bcrypt).Assembly.GetCustomAttributes(typeof(System.Diagnostics.DebuggableAttribute), false)
+        is [System.Diagnostics.DebuggableAttribute { IsJITOptimizerDisabled: true }];
+
     static long OnThisThread(Action action)
     {
         for (int i = 0; i < 3; i++) action();
@@ -38,6 +41,7 @@ public class AllocationTests
     [Fact]
     public void VerifyAllocatesNothing()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         Assert.Equal(0, OnThisThread(() => Bcrypt.Verify("password123", Hash4)));
         Assert.Equal(0, OnThisThread(() => Bcrypt.Verify("wrong", Hash4)));
         Assert.Equal(0, OnThisThread(() => Bcrypt.Verify("password123", "malformed")));
@@ -48,6 +52,7 @@ public class AllocationTests
     [Fact]
     public void BatchVerifyAllocatesNothing()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         string[] passwords = Enumerable.Repeat("password123", 11).ToArray(), hashes = Enumerable.Repeat(Hash4, 11).ToArray();
         var results = new bool[11];
         Assert.Equal(0, OnThisThread(() => Bcrypt.Verify(passwords, hashes, results)));
@@ -57,6 +62,7 @@ public class AllocationTests
     [Fact]
     public void EnhancedVerifyAllocatesNothing()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         string hash = Bcrypt.EnhancedHash("password123", 4);
         string longPassword = new('é', 500), longHash = Bcrypt.EnhancedHash(longPassword, 4);
         Assert.Equal(0, OnThisThread(() => Bcrypt.EnhancedVerify("password123", hash)));
@@ -66,6 +72,7 @@ public class AllocationTests
     [Fact]
     public void HashAllocatesOnlyItsString()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         long oneString = OnThisThread(() => GC.KeepAlive(new string('x', 60))) / Calls;
         Assert.Equal(oneString * Calls, OnThisThread(() => Bcrypt.Hash("password123", 4)));
         Assert.Equal(oneString * Calls, OnThisThread(() => Bcrypt.EnhancedHash("password123", 4)));
@@ -74,6 +81,7 @@ public class AllocationTests
     [Fact]
     public async Task QueuedVerifyAllocatesNothing()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         using var q = new BcryptQueue(new BcryptQueueOptions { Threads = 1 });
         long least = long.MaxValue;
         for (int t = 0; t < Tries; t++)
@@ -92,6 +100,7 @@ public class AllocationTests
     [Fact]
     public async Task QueuedVerifyWithACancellableTokenAllocatesNothing()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         using var q = new BcryptQueue(new BcryptQueueOptions { Threads = 1 });
         using var cts = new CancellationTokenSource();
         long least = long.MaxValue;
@@ -107,6 +116,7 @@ public class AllocationTests
     [Fact]
     public async Task QueuedHashAllocatesOnlyItsString()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         using var q = new BcryptQueue(new BcryptQueueOptions { Threads = 1 });
         long oneString = OnThisThread(() => GC.KeepAlive(new string('x', 60))) / Calls;
         long least = long.MaxValue;
@@ -124,6 +134,7 @@ public class AllocationTests
     [Fact]
     public void Utf8VerifyAllocatesNothing()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         Assert.Equal(0, OnThisThread(() => Assert.True(Bcrypt.Verify("password123"u8, Hash4Ascii))));
         Assert.Equal(0, OnThisThread(() => Assert.False(Bcrypt.Verify("wrong"u8, Hash4Ascii))));
         Assert.Equal(0, OnThisThread(() => Assert.False(Bcrypt.Verify("password123"u8, "malformed"u8))));
@@ -134,6 +145,7 @@ public class AllocationTests
     [Fact]
     public void Utf8HashAllocatesNothing()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         byte[] destination = new byte[Bcrypt.HashLength];
         Assert.Equal(0, OnThisThread(() => Assert.True(Bcrypt.Hash("password123"u8, 4, destination) == 60)));
     }
@@ -141,6 +153,7 @@ public class AllocationTests
     [Fact]
     public async Task QueuedUtf8VerifyAllocatesNothing()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         using var q = new BcryptQueue(new BcryptQueueOptions { Threads = 1 });
         long least = long.MaxValue;
         for (int t = 0; t < Tries; t++)
@@ -161,6 +174,7 @@ public class AllocationTests
     [Fact]
     public async Task QueuedUtf8HashAllocatesNothing()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         using var q = new BcryptQueue(new BcryptQueueOptions { Threads = 1 });
         byte[] destination = new byte[Bcrypt.HashLength];
         long least = long.MaxValue;
@@ -185,6 +199,7 @@ public class AllocationTests
     [Fact]
     public async Task BusyAndCancelledAllocateNothing()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         using var q = new BcryptQueue(new BcryptQueueOptions { Threads = 1, Lanes = 1, MaxQueued = 1 });
         var slow = q.VerifyAsync("slow", Bcrypt.Hash("slow", 13));
         for (int i = 0; q.QueueLength != 0; i++)
@@ -228,6 +243,7 @@ public class AllocationTests
     [Fact]
     public async Task LoginsAndSignUpsAllocateNothing()
     {
+        Assert.SkipWhen(Unoptimized, "Debug builds allocate where Release ones don't (no inlining, async state machines as classes): run in Release");
         const int Logins = 200, Windows = 6;
         using var q = new BcryptQueue(new BcryptQueueOptions { Threads = 1 });
         byte[] pw = "password123"u8.ToArray(), wrong = "password124"u8.ToArray(), destination = new byte[Bcrypt.HashLength];

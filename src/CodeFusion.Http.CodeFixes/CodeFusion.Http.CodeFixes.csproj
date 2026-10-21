@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Code fixes for the analyzers' diagnostics. They need the Workspaces layer, which the command-line compiler
+       doesn't load, so they live apart from the generator (RS1038). Packed next to it. -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>CodeFusion.Http.CodeFixes</RootNamespace>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsPackable>false</IsPackable>
+    <IncludeSymbols>false</IncludeSymbols>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeFusion.Http.Generators.Tests" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Workspaces" PrivateAssets="all" />
+    <ProjectReference Include="../CodeFusion.Http.Generators/CodeFusion.Http.Generators.csproj" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

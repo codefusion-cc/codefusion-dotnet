@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Unit, property and protocol tests against a fake server, and integration tests against a real Postgres
+       (CODEFUSION_TEST_DB; without it they skip). Run from the repository root: dotnet test. The allocation tests run
+       in Release only. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CodeFusion.Data.Postgres.Tests</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- ICU, so SASLprep normalizes a password as an app with ICU does; PgSaslPrepTests cover the invariant mode too. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+    <!-- Inline arrays read clearer in test data, the tests hold ValueTasks on purpose to queue commands together,
+         and the fake server answers Postgres's md5 login. -->
+    <NoWarn>$(NoWarn);CA1861;CA2012;CA5351</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <!-- Fails the run on an exception that ended a thread or that no one observed. -->
+    <Compile Include="../Shared/RunGuard.cs" Link="Shared/RunGuard.cs" />
+    <!-- Fails a test whose Postgres loops caught an exception no failing connection explains. -->
+    <Compile Include="../Shared/LoopChecks.cs" Link="Shared/LoopChecks.cs" />
+    <PackageReference Include="FsCheck.Xunit.v3" />
+    <!-- Setting up and checking the test database; the client itself doesn't use it. -->
+    <PackageReference Include="Npgsql" />
+    <ProjectReference Include="../../src/CodeFusion.Data.Postgres/CodeFusion.Data.Postgres.csproj" />
+  </ItemGroup>
+
+</Project>

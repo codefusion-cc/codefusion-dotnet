@@ -1,0 +1,9 @@
+# SCRAM server-first-message: r=nonce,s=salt,i=iterations
+nonce="r=rOprNGfwEbeRWgbNEkqO"
+salt=",s=W22ZaJ0SNY7soEsUEjb6gQ=="
+iter=",i=4096"
+iter1=",i=1"
+iter_max=",i=1048576"
+ext="m="
+comma=","
+eq="="

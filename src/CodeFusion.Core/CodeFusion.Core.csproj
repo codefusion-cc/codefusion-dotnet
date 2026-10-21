@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The values CodeFusion.Http and CodeFusion.Data pass to each other: text as UTF-8 bytes that stay in their
+       buffer, timestamps, and JSON a database built. Neither package depends on the other, so they meet here. -->
+  <PropertyGroup>
+    <RootNamespace>CodeFusion</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsAotCompatible>true</IsAotCompatible>
+
+    <PackageId>CodeFusion.Core</PackageId>
+    <Description>The values the CodeFusion packages share: Utf8 text that points into a request's or a row's bytes instead of becoming a string, Timestamp, and RawJson. Nothing here allocates.</Description>
+    <PackageTags>utf8;zero-allocation;performance</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeFusion.Core.Tests" />
+    <!-- The packages are released together: they share the internal ValueTask source core and Utf8List's unchecked
+         constructor. -->
+    <InternalsVisibleTo Include="CodeFusion.Http" />
+    <InternalsVisibleTo Include="CodeFusion.Data" />
+    <InternalsVisibleTo Include="CodeFusion.Data.Postgres" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <None Include="../../LICENSE" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+</Project>
