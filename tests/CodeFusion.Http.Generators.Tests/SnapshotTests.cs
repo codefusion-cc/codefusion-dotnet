@@ -226,5 +226,22 @@ public class SnapshotTests
             }
         }
         """);
-}
 
+    /// <summary>Route values bounded by [Range] in each of its forms, and the app's reply when one doesn't bind.</summary>
+    [Fact]
+    public void RouteValues() => Check(nameof(RouteValues), """
+        public readonly record struct View(long Id);
+
+        public static class Program
+        {
+            public static void Map(IEndpointRouteBuilder api)
+            {
+                api.MapGet("/posts/{id}", static ([Range(1, long.MaxValue)] long id) => Reply.Ok(new View(id)));
+                api.MapGet("/pages/{n}", static ([Range(1, 100)] int n) => Reply.Ok(new View(n)));
+                api.MapGet("/open/{n}", static ([Range(0.5, 10.0, MaximumIsExclusive = true)] int n) => Reply.Ok(new View(n)));
+                api.MapGet("/text/{n}", static ([Range(typeof(long), "-5", "9")] long n) => Reply.Ok(new View(n)));
+                api.MapGet("/any/{id}/{n}/{slug}", static (long id, int n, Utf8 slug) => Reply.Ok(new View(id + n)));
+            }
+        }
+        """);
+}
