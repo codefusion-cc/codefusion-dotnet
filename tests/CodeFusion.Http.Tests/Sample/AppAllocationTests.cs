@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using CodeFusion.Http;
 using CodeFusion.Http.Tests.Sample;
 using Xunit;
 
@@ -30,30 +31,50 @@ public class AppAllocationTests(ITestOutputHelper output)
             + "\r\n" + (body ?? "");
     }
 
-    public static TheoryData<string, int> Cases() => new()
+    public static TheoryData<string, int, HttpTransport> Cases() => new()
     {
-        { "route, query, viewer, singleton, JSON", 1 },
-        { "route, query, viewer, singleton, JSON", 8 },
-        { "body with escapes and tags, token issued into the arena", 1 },
-        { "body with escapes and tags, token issued into the arena", 8 },
-        { "async handler, wait ends on another thread", 1 },
-        { "async handler, wait ends on another thread", 8 },
-        { "async handler with a body", 1 },
-        { "reply whose write waits", 1 },
-        { "long route value, 204", 1 },
-        { "error reply", 1 },
-        { "no route: 404", 1 },
-        { "invalid token: 401", 1 },
-        { "feed: post with a Bearer token and a claim, 201", 1 },
-        { "feed: post with a Bearer token and a claim, 201", 8 },
-        { "feed: like after auth, 200", 1 },
-        { "feed: no bearer token, 401", 1 },
-        { "feed: invalid token, 401", 1 },
-        { "feed: invalid token payload, 401", 1 },
-        { "feed: malformed body, 400", 1 },
-        { "feed: no body, 400", 1 },
-        { "feed: invalid post id after auth, 400", 1 },
-        { "feed: post id out of range, 400", 1 },
+        { "route, query, viewer, singleton, JSON", 1, HttpTransport.Sockets },
+        { "route, query, viewer, singleton, JSON", 8, HttpTransport.Sockets },
+        { "body with escapes and tags, token issued into the arena", 1, HttpTransport.Sockets },
+        { "body with escapes and tags, token issued into the arena", 8, HttpTransport.Sockets },
+        { "async handler, wait ends on another thread", 1, HttpTransport.Sockets },
+        { "async handler, wait ends on another thread", 8, HttpTransport.Sockets },
+        { "async handler with a body", 1, HttpTransport.Sockets },
+        { "reply whose write waits", 1, HttpTransport.Sockets },
+        { "long route value, 204", 1, HttpTransport.Sockets },
+        { "error reply", 1, HttpTransport.Sockets },
+        { "no route: 404", 1, HttpTransport.Sockets },
+        { "invalid token: 401", 1, HttpTransport.Sockets },
+        { "route, query, viewer, singleton, JSON", 1, HttpTransport.EventLoop },
+        { "route, query, viewer, singleton, JSON", 8, HttpTransport.EventLoop },
+        { "body with escapes and tags, token issued into the arena", 8, HttpTransport.EventLoop },
+        { "async handler, wait ends on another thread", 1, HttpTransport.EventLoop },
+        { "async handler, wait ends on another thread", 8, HttpTransport.EventLoop },
+        { "reply whose write waits", 1, HttpTransport.EventLoop },
+        { "async handler with a body", 1, HttpTransport.EventLoop },
+        { "error reply", 1, HttpTransport.EventLoop },
+        { "no route: 404", 1, HttpTransport.EventLoop },
+        { "invalid token: 401", 1, HttpTransport.EventLoop },
+        { "feed: post with a Bearer token and a claim, 201", 1, HttpTransport.Sockets },
+        { "feed: post with a Bearer token and a claim, 201", 8, HttpTransport.Sockets },
+        { "feed: like after auth, 200", 1, HttpTransport.Sockets },
+        { "feed: no bearer token, 401", 1, HttpTransport.Sockets },
+        { "feed: invalid token, 401", 1, HttpTransport.Sockets },
+        { "feed: invalid token payload, 401", 1, HttpTransport.Sockets },
+        { "feed: malformed body, 400", 1, HttpTransport.Sockets },
+        { "feed: no body, 400", 1, HttpTransport.Sockets },
+        { "feed: invalid post id after auth, 400", 1, HttpTransport.Sockets },
+        { "feed: post id out of range, 400", 1, HttpTransport.Sockets },
+        { "feed: post with a Bearer token and a claim, 201", 1, HttpTransport.EventLoop },
+        { "feed: post with a Bearer token and a claim, 201", 8, HttpTransport.EventLoop },
+        { "feed: like after auth, 200", 1, HttpTransport.EventLoop },
+        { "feed: no bearer token, 401", 1, HttpTransport.EventLoop },
+        { "feed: invalid token, 401", 1, HttpTransport.EventLoop },
+        { "feed: invalid token payload, 401", 1, HttpTransport.EventLoop },
+        { "feed: malformed body, 400", 1, HttpTransport.EventLoop },
+        { "feed: no body, 400", 1, HttpTransport.EventLoop },
+        { "feed: invalid post id after auth, 400", 1, HttpTransport.EventLoop },
+        { "feed: post id out of range, 400", 1, HttpTransport.EventLoop },
     };
 
     static readonly string FeedToken = "Bearer " + FeedAppTests.Token(user: 12345);
@@ -92,10 +113,20 @@ public class AppAllocationTests(ITestOutputHelper output)
 
     [Theory(Timeout = 120_000)]
     [MemberData(nameof(Cases))]
-    public async Task KeepAliveRequestsAllocateNothing(string name, int connections)
+    public async Task KeepAliveRequestsAllocateNothing(string name, int connections, HttpTransport transport)
     {
         Assert.SkipWhen(AllocationTests.Debugger(), "Debug builds make every async method's state machine a class: run in Release");
-        await using HttpApp app = name.StartsWith("feed:", StringComparison.Ordinal) ? FeedApp.Build() : SampleApp.Build();
+        Action<HttpAppBuilder> configure = b =>
+        {
+            TestTransport.UseWithHook(b.Options, transport);
+            // an app's own batch actions are called per wake-up too: with nothing allocated
+            if (transport == HttpTransport.EventLoop)
+            {
+                b.OnEventLoopBatch(static _ => { });
+                b.OnEventLoopBatch(static _ => { });
+            }
+        };
+        await using HttpApp app = name.StartsWith("feed:", StringComparison.Ordinal) ? FeedApp.Build(configure) : SampleApp.Build(configure);
         await using var check = new AppCheck(app);
         app.Start();
         byte[] request = Encoding.UTF8.GetBytes(RequestFor(name));
@@ -126,7 +157,7 @@ public class AppAllocationTests(ITestOutputHelper output)
             long allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
             ticks.Dispose();
             double inWindow = (double)allocated / (measured * connections);
-            output.WriteLine($"{name}, {connections} connection(s), window {window + 1}: {allocated} bytes over {measured * connections} requests: {inWindow:F3} B/request");
+            output.WriteLine($"{name}, {connections} connection(s), {transport}, window {window + 1}: {allocated} bytes over {measured * connections} requests: {inWindow:F3} B/request");
             foreach (var g in ticks.Types.GroupBy(t => t).OrderByDescending(g => g.Count())) output.WriteLine($"  {g.Count(),4} samples: {g.Key}");
             perRequest = Math.Min(perRequest, inWindow);
         }

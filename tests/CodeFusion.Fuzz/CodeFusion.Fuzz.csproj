@@ -30,6 +30,7 @@
     <ProjectReference Include="../../src/CodeFusion.Data.Postgres/CodeFusion.Data.Postgres.csproj" />
     <ProjectReference Include="../../src/CodeFusion.Http.Generators/CodeFusion.Http.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <Compile Include="../CodeFusion.Http.Tests/Sample/SampleApp.cs" Link="Json/SampleApp.cs" />
+    <Compile Include="../CodeFusion.Http.Tests/TestTransport.cs" Link="Json/TestTransport.cs" />
     <None Include="Corpus/**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

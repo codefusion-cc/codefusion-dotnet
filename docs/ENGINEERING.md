@@ -1090,3 +1090,150 @@ include (`--test-project` can add them).
 
 Targeted reruns: `mutate` takes character spans, `**/File.cs{start..end}`, so a rerun of only the lines that had
 survivors takes minutes instead of the whole file's run.
+
+## The event-loop transport (HttpTransport.EventLoop)
+
+### Why
+
+On one pinned CPU with 256 keep-alive connections the Sockets transport made 2 `recvfrom` and 1 `sendto` per
+response. The first receive is the zero-byte one that waits for the next request: .NET's `ReceiveAsync` always tries
+the call at once before it registers for readiness, and right after a response the client hasn't answered yet, so
+that try finds nothing. Its readiness completion then costs no call (the runtime skips the syscall for a zero-byte
+read), and the real `Receive` reads the request. No option of `System.Net.Sockets` skips the first try: any receive
+started while its queue is ready makes the call. So one receive per request needs readiness from somewhere else.
+
+### How
+
+`HttpServerOptions.Transport = HttpTransport.EventLoop` starts `EventLoops` threads (one per core by default), each
+with its own epoll (Linux) or kqueue (macOS) set. A connection's socket is added once, for reading (and for writing
+once a send has had to wait) and edge-triggered (`EPOLLIN | EPOLLRDHUP | EPOLLET`, `EVFILT_READ` with `EV_CLEAR`), with its slot and a connection id
+as the event's data, so a late event of a closed socket can't reach the connection object's next socket. The
+connection's wait for a request becomes `Arm()`: no call, only a flag. The loop's edge completes the wait on the
+loop's thread, and the request is read, handled and answered there until the handler first waits. Everything else in
+`HttpExchange` (the parse, deadlines, the close watch, the linger, the send-rate checks) is the same code for both
+transports; a send that waits for room waits on the loop (see the review fixes, 7).
+
+Edges are not repeated, so the exchange keeps one that comes while no wait is armed (`_edge`), and whoever turns
+`_armed` from 1 to 0 completes the wait, exactly once. Three ways an edge would be lost, each with its test:
+
+- A receive that fills the buffer may leave bytes the kernel won't announce again: it sets the edge itself
+  (`ARequestLargerThanTheBufferIsReadWhole`).
+- The client's last bytes and its FIN or reset can come in one edge; the short read takes the bytes and doesn't see
+  the end. An edge with `EPOLLRDHUP`, `EPOLLHUP`, `EPOLLERR` or `EV_EOF` stays set until a receive sees the end
+  (`BytesAndTheCloseInOneEdgeStillCloseTheConnection`, which holds the loop with another connection's handler so both
+  arrive in one edge). The stress test found this one: 30 to 60 of 1,200 connections that sent half a head and reset
+  stayed open.
+- Closing a socket takes it out of the set without an event. The connection's own close takes back its armed wait
+  (`AnAsyncHandlersLastAnswerEndsTheConnection`); a timeout or the stop's abort, which close it from the heartbeat or
+  the stop, queue a made-up edge to the thread pool (`AnIdleConnectionPastItsKeepAliveTimeoutIsClosed`,
+  `AHeadThatStallsIsClosedAfterTheRequestTimeout`, `AStopClosesIdleConnectionsAtOnce`).
+
+The loops end with the server's stop, after its connections; `ServerChecks` now fails a test whose server left one
+running. Descriptors are `SafeFileHandle`s, so an `Add` racing the end gets `ObjectDisposedException` (the connection
+closes quietly) rather than a reused descriptor; a refused `epoll_ctl` is an `IOException`, reported as a failed
+connection. `struct epoll_event` is 12 bytes on x86 and x86-64 (packed) and 16 elsewhere; CI runs the suite on both.
+
+A handler that blocks its thread holds up every connection on its loop. The default became EventLoop on Linux once
+the 8-core TechEmpower run measured it (plaintext +20%, json +42%, db and fortunes +9% over Sockets); Sockets stays the
+default elsewhere, and the choice for handlers that block or apps that put the p99 under a mixed load first.
+
+### Direct calls, batches and listeners (later on the same branch)
+
+- **Direct calls:** a loop's connections call `recv` and `send` themselves (`DirectSocket`: LibraryImport with
+  SuppressGCTransition, since neither can block on a non-blocking socket). The handle is held for each call, as Socket
+  holds it, so a socket the heartbeat closed is an ObjectDisposedException, never a call on a reused descriptor number.
+  EAGAIN maps to WouldBlock and EINTR is retried. Peeks stay on Socket. One call copies at most 64 KB, so a GC never
+  waits long on a call without its transition, and a receive that took 64 KB counts as one that filled the buffer.
+- **Batches:** a loop handles every connection one wake-up found ready, runs the batch's actions
+  (`HttpServerOptions.OnEventLoopBatch`, then the app's `IServiceRegistry.OnEventLoopBatch` registrations, in order),
+  sends every held answer, then lets each connection go on. A connection that goes on into a pipelined request holds
+  its answer again, and the actions run again: up to 8 rounds per wake-up, after which the next wait doesn't block.
+  - The hold is awaited in `RunAsync`, whose box lives as long as the connection. Held inside `FlushAsync`, it
+    allocated 17 to 20 B/request with 8 connections: the runtime's pooled boxes run out when several are held at once.
+  - A handler the hook completes (a commit) runs its rest inside the hook, and its answer joins the batch.
+  - The stop's wake ends the loop only after its batch is sent.
+  - `CodeFusion.EventLoopThread.Current` (Core) is the loop's index on its thread and -1 elsewhere.
+- **Listeners:** on Linux each loop has its own listening socket (SO_REUSEPORT), level-triggered in its epoll set.
+  - It accepts up to 64 connections per wake-up with `accept4` and starts each on its own thread.
+  - Out of descriptors or memory, it stops watching the listener (one report per run of failures), and the heartbeat
+    watches it again. The pause is one state changed by compare-and-swap, set after the listener is off.
+  - The kernel spreads connections by a hash of their addresses, not in turn: a few long-lived connections may share a
+    loop. `ListenerPerLoop = false` keeps one listener and gives connections to the loops in turn.
+  - A loop that fails hands its listener to the runtime's accepts, so its queued connections aren't reset; with every
+    loop failed, connections wait on their sockets as Sockets' do.
+  - The runtime's `ReuseAddress` sets SO_REUSEPORT on Unix anyway (checked on macOS), so port sharing by a process of
+    the same user is no different from Sockets'.
+  - macOS keeps one listener and the runtime's accepts.
+
+### Review fixes (review of f00a731)
+
+Each fix had its test first, seen failing on the code before it (`EventLoopGuaranteeTests` unless named).
+
+| Finding | Fix | Test |
+|---|---|---|
+| 1 (high): a made-up "closed" edge (a timeout's Kick, a stale event) landing on the pooled object's next connection made every wait complete at once: a spin with no end | The edge word counts edges in its upper bits; a receive that finds nothing clears a hang-up seen before it began if no edge came since (after a FIN or an error recv never says EAGAIN). A Kick carries the connection id it was queued for. | `ALateClosedEdgeOnAReusedConnectionCostsOneReadNotASpin`: the late edge returns, costs at most 4 reads, and the connection and a new one still answer |
+| 2 (high): the stop joined each loop with no limit, so a handler blocking a loop held the stop | Loops signal `Exited`; the stop waits for them at most a second, as it waits for a handler that never completes, and leaves a held loop's background thread to end with the handler | `AStopEndsWithinItsHardAbortWhileAHandlerHoldsTheLoop` |
+| 3 (medium): a client keeping every read full held its loop | 16 reads per connection per wake-up on the loop's thread, then its armed wait goes to the loop's next round (after a wait that doesn't block), behind the others | `AClientThatPipelinesWithoutPauseDoesNotHoldItsLoop`: a neighbour answered within 500 ms while one client floods |
+| 4 (medium): CI never ran the Debug-only tests on epoll | Left to the coordinator, who adds a Linux Debug pass in PR #1 | |
+| 5 (medium): the cancel of `Aborted`, and what the handler runs after it, ran on the loop's thread | `Gone` is queued to the thread pool for a loop's connection, as the heartbeat's is | `ACancelCallbackThatBlocksDoesNotHoldTheLoop`: a callback sleeping 3 s, a neighbour answered within 1 s |
+| 6 (low): the id check before `Readable` leaves a window for a stale event | Harmless after 1: a stale edge costs one read | |
+| 7 (low): a send that waited registered the socket with the runtime's epoll for good | A send waits for room on its loop: EPOLLOUT added edge-triggered to the socket's registration (it fires only when a full socket gets room), or a one-shot EVFILT_WRITE. A Kick, and the slow-send cut, wake it. | `ASendThatWaitsWaitsOnTheLoop`: 8 MB answers, no runtime send waits on the loop, at least one on Sockets |
+| 8 (low): a loop whose wait failed kept getting connections, closed without a word | The failed loop closes its listener (the kernel sends new connections to the others) and its connections; new ones go to the loops still running, or to Sockets' waits with none left | `ALoopThatFailsTakesNoNewConnections`, with a Debug hook that fails one wait |
+| 9 (low): `BytesAndTheCloseInOneEdgeStillCloseTheConnection` failed if `/block` ran on a pool thread | It holds only the loop's thread and sends `/block` again until it runs there | |
+| 10 (low): the docs didn't say what the loop gives up | SECURITY.md, `Aborted`, the package README | |
+| 11 (low): copied helpers, a server without the suite's transport, allocation rows run twice in CI | `TestTransport.Use` and `UseWithHook` over `EventLoop.Supported`; `SlowClientTests` applies the transport; CI's second run leaves out the allocation classes | |
+
+### Second review fixes (review of 3a8d89d)
+
+| Finding | Fix | Test |
+|---|---|---|
+| 1 (medium): a handler started while answers were sent, after the batch's actions, could wait for a commit that never came | Everything on a loop's thread is in a batch; the actions run again while sending started handlers, up to 8 rounds, then the next wait doesn't block | `PipelinedWritesThatOnlyTheHookCompletesAreAllAnswered` (red with one round) |
+| 2 (medium): a heartbeat's resume between "paused" and "listener off" left it off | One accept state changed by compare-and-swap, published after the listener is off | `OnLinuxALoopOutOfDescriptorsPausesAndTheHeartbeatResumesIt`, with a hook that resumes mid-pause (Linux, CI only) |
+| 3 (medium): the budget counted reads, and the send phase ran a connection's backlog before its neighbours' answers went | 16 handler calls per connection per wake-up as well (past it the connection parks at a request boundary until the next round); the send phase sends every held answer before any connection goes on | `ANeighbourOfAFloodOfSlowRequestsWaitsAtMostOneShare`: 1 ms handlers flooded, a neighbour within 200 ms (1,120 ms without the budget) |
+| 4 (low): MaxConnections could be passed by loops admitting at once | The limit is checked where the count goes up, under the lock | `OnLinuxMaxConnectionsHoldsAcrossLoops` (Linux, CI only) |
+| 5 (low): the out-of-descriptors branch could throw past the loop, and reported the errno as a SocketError | The listener's branch is guarded like a connection's; the pause catches a listener the stop closed; the report is an IOException with the errno | `OnLinuxAStopStartedByTheAcceptFailureReportEndsClean`, `OnLinuxAnAcceptErrorOfOneConnectionSkipsOnlyIt` (Linux, CI only) |
+| 6 (low): sends without a GC transition had no size bound | One direct call copies at most 64 KB; a receive that took 64 KB counts as full | `ConnectionsOnTheLoopsKeepWorkingThroughCollections`; the 300 KB body row (not red on macOS: its buffers never leave 64 KB queued) |
+| 7 (low): hash spreading, resets on a failed loop, no real fallback | `ListenerPerLoop` (on by default) keeps one listener and turns when off; a failed loop hands its listener to the runtime's accepts; with every loop failed, connections fall back to Sockets' waits | `WithOneListenerConnectionsGoToTheLoopsInTurn`, `ALoopThatFailsTakesNoNewConnections(listenerPerLoop)`, `WhenEveryLoopFailsConnectionsFallBackToSockets` |
+| 8 (low): test gaps | The Linux accept tests above; the stop test's bound 4 s; EventLoop allocation rows for a body, an error, a 404 and a 401 | |
+| 9 (low): stale docs | This section, the package README, SECURITY.md (the exact bound, and port sharing for both transports) | |
+| (coordinator) a connection's first request ran on the pool thread that started it, outside any batch | A new connection starts with no edge (epoll's ADD and kqueue's EV_ADD report bytes already waiting), and one the runtime accepted is started on its loop's thread (a queue per loop, and its wake) | `AConnectionsFirstRequestIsHandledInABatch`, for both listener settings (red before) |
+
+### Tests
+
+`EventLoopTests`, `EventLoopBatchTests` and `EventLoopGuaranteeTests`, on kqueue here and epoll in CI. `AllocationTests` and `AppAllocationTests` have EventLoop rows
+(0.004 to 0.05 B/request, as Sockets). `TestTransport` makes every server the tests start use the transport that
+`CODEFUSION_HTTP_TRANSPORT` names, and CI runs `CodeFusion.Http.Tests` a second time with `EventLoop`. Debug builds count
+every receive call (`HttpServer.SocketReceives`): `EachKeepAliveRequestCostsThisManyReceives` asserts 1 per request on
+the loop and 2 on Sockets.
+
+Proven red (broken in the tree, seen failing, restored): no edge after a full read (the 64 KB body hangs); the close
+flag ignored (both close-in-one-edge cases); no made-up edge after a timeout or abort (the three timeout and stop
+tests); no disarm on close (the async handler's last answer leaves the connection open).
+
+Green on this Mac (SDK 10.0.402), 0 warnings for the whole tree in Debug and Release. `CodeFusion.Http.Tests`: Debug
+516 pass and 26 skip, Release 532 pass and 10 skip, each with Sockets and with `CODEFUSION_HTTP_TRANSPORT=EventLoop`.
+
+### Numbers
+
+The $12 challenge entry (csharp-codefusion-XeonFX) with this library, in the cf-bench VM (server pinned to one arm64
+CPU with 2 GB, load generator on three others, 256 keep-alive connections, no think time; health, post and feed for
+15 s each, the mix for 30 s). "Before" is the parent commit's library, "after" the same entry with `Transport =
+HttpTransport.EventLoop`. Syscalls from `strace -c -f` over 5 s, per `sendto` (one per response).
+
+| | before (Sockets) | after (EventLoop) | change |
+|---|---:|---:|---:|
+| GET /health | 110,272 req/s | 133,529 | +21% |
+| GET /posts/:id | 74,377 | 84,842 | +14% |
+| GET /feed | 34,272 | 37,570 | +10% |
+| mix | 33,710 | 35,370 | +5% |
+| recvfrom per response (health, mix) | 2.000, 2.000 | 1.000, 1.000 | |
+| sendto per response | 1.000 | 1.000 | |
+| epoll_pwait per response (health) | 0.001 | 0.004 | |
+
+The challenge's 42 checks pass on both. The same library with Sockets did 115 and 118k on health against 112 and 116k
+before, so that path didn't move. In the same session the epoll entry (#74) did 181k on health: per request it spends
+about 5.1 µs in the kernel, this server 6.0 µs in the kernel and 1 µs in its own code and libc, spread thin
+(`RunAsync` 1.4%, `ParseHead` 0.8%, `FlushAsync` 0.6%, the runtime's send wrapper 0.6%). Both spend about 20% in
+`__wake_up_sync_key`, the wakeup of the client, and both now make one receive and one send per request. #74 reads
+every ready connection before it sends any answer; whether batching the sends that way explains the kernel's extra
+0.9 µs is not measured.

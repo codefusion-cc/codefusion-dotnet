@@ -21,12 +21,12 @@ public class ErrorHookTests
     /// <paramref name="onError"/>.</summary>
     static HttpServer Start(Action<string, Exception?>? onError)
     {
-        var s = new HttpServer(new HttpServerOptions
+        var s = new HttpServer(TestTransport.Apply(new HttpServerOptions
         {
             EndPoint = new IPEndPoint(IPAddress.Loopback, 0),
             HeartbeatInterval = TimeSpan.FromMilliseconds(20),
             OnError = onError,
-        }, ThrowOnBoom);
+        }), ThrowOnBoom);
         s.Start();
         return s;
     }
