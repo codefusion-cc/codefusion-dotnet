@@ -52,9 +52,6 @@ internal static unsafe partial class Sqlite3
         }
     }
 
-    /// <summary>The library loaded is one the app ships in its own directory, not the package's (whose build is pinned).</summary>
-    internal static bool FromAppDirectory => s_appLibrary != 0;
-
     /// <summary>The app's own library, as the resolver loaded it; 0 when the package's is used.</summary>
     static nint s_appLibrary;
 

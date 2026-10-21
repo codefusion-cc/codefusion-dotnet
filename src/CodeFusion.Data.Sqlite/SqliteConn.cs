@@ -99,27 +99,34 @@ internal sealed unsafe class SqliteConn : IDisposable
             MemoryStatusOff = Sqlite3.DisableMemoryStatus();
             int rc = Sqlite3.Initialize();
             if (rc != Sqlite3.Ok) throw new SqliteException("sqlite3_initialize failed", rc);
-            if (Unfit(Sqlite3.LibVersionNumber(), Sqlite3.SourceId(), !Sqlite3.FromAppDirectory, Sqlite3.ThreadSafe(), Sqlite3.CompileOptions()) is { } why)
+            bool otherBuild = AppContext.TryGetSwitch(OtherBuildSwitch, out bool own) && own;
+            if (Unfit(Sqlite3.LibVersionNumber(), Sqlite3.SourceId(), otherBuild, Sqlite3.ThreadSafe(), Sqlite3.CompileOptions()) is { } why)
                 throw new InvalidOperationException(why);
             Volatile.Write(ref _initialized, 1);
         }
     }
 
-    /// <summary>The SQLite build this provider was tested with, which the package's native library must be
-    /// (SourceGear.sqlite3, pinned exactly in Directory.Packages.props, its file's hash checked at build): its
-    /// sqlite3_libversion_number and sqlite3_sourceid.</summary>
+    /// <summary>The SQLite build this provider was tested with (SourceGear.sqlite3, pinned exactly in
+    /// Directory.Packages.props, its file's hash checked at build): its sqlite3_libversion_number and sqlite3_sourceid,
+    /// as the library loaded says, wherever it was loaded from.</summary>
     internal const int TestedVersion = 3_050_004;
+
+    /// <summary>The AppContext switch an app sets (true) when it ships a SQLite build of its own: one that isn't the build
+    /// tested is then accepted if it has what the provider uses.</summary>
+    internal const string OtherBuildSwitch = "CodeFusion.Data.Sqlite.OwnSqliteBuild";
+
     internal const string TestedSourceId = "2025-07-30 19:33:53 4d8adfb30e03f9cf27f800a2c1ba3c48fb4ca1b08b0f5ed59a4d5ecbf45e20a3";
 
-    /// <summary>Why a SQLite of <paramref name="version"/> and <paramref name="sourceId"/>, from the package's library
-    /// (<paramref name="fromPackage"/>) or an app's own, <paramref name="threadSafe"/> (sqlite3_threadsafe) and the
-    /// compile options <paramref name="used"/> says it has (null: it can't say), can't serve the provider; null when it
-    /// can. The package's must be the build tested; an app's own build need only be new enough and have what's used.</summary>
-    internal static string? Unfit(int version, string sourceId, bool fromPackage, int threadSafe, Func<string, bool>? used)
+    /// <summary>Why a SQLite of <paramref name="version"/> and <paramref name="sourceId"/>, <paramref name="threadSafe"/>
+    /// (sqlite3_threadsafe) and the compile options <paramref name="used"/> says it has (null: it can't say), can't serve
+    /// the provider; null when it can. It must be the build tested, unless the app ships its own
+    /// (<paramref name="otherBuildAllowed"/>, <see cref="OtherBuildSwitch"/>); any build must have what's used.</summary>
+    internal static string? Unfit(int version, string sourceId, bool otherBuildAllowed, int threadSafe, Func<string, bool>? used)
     {
         if (version < Sqlite3.MinVersion) return $"SQLite {version} is older than {Sqlite3.MinVersion}, which the generated SQL needs";
-        if (fromPackage && (version != TestedVersion || sourceId != TestedSourceId))
-            return $"the package's SQLite is {version} from {sourceId}, not the build CodeFusion.Data.Sqlite was tested with ({TestedVersion} from {TestedSourceId})";
+        if (!otherBuildAllowed && (version != TestedVersion || sourceId != TestedSourceId))
+            return $"the SQLite loaded is {version} from {sourceId}, not the build CodeFusion.Data.Sqlite was tested with ({TestedVersion} from " +
+                $"{TestedSourceId}). An app that ships its own SQLite on purpose sets the AppContext switch {OtherBuildSwitch} to true";
         // connections move between threads (readers, the writer, an event loop's batch) and the watchdog interrupts
         // from its own: THREADSAFE=1 or 2
         if (threadSafe == 0) return "SQLite was built with SQLITE_THREADSAFE=0; the provider uses connections from several threads";
@@ -460,7 +467,9 @@ internal sealed unsafe class SqliteConn : IDisposable
     }
 
     /// <summary>The running job was the one the watchdog interrupted (an SQLITE_INTERRUPT is its timeout, not another's).</summary>
-    public bool InterruptedThis => Volatile.Read(ref _interrupted) == Volatile.Read(ref _running);
+    /// <remarks>Against the job this thread started (<see cref="_jobs"/>), not <see cref="_running"/>, which reads
+    /// <see cref="Claimed"/> while the watchdog still holds its claim after the interrupt.</remarks>
+    public bool InterruptedThis => Volatile.Read(ref _interrupted) == _jobs;
 
     /// <summary>Interrupts the running job if it started more than <paramref name="limit"/> ticks before <paramref name="now"/>,
     /// and only that job: its number is read once and claimed with a compare-exchange before the interrupt, so a job that
@@ -478,6 +487,9 @@ internal sealed unsafe class SqliteConn : IDisposable
         {
             Volatile.Write(ref _interrupted, job);
             Sqlite3.InterruptRunning(_db);
+#if DEBUG
+            AfterInterrupt?.Invoke();
+#endif
         }
         finally
         {
@@ -487,6 +499,9 @@ internal sealed unsafe class SqliteConn : IDisposable
     }
 
 #if DEBUG
+    /// <summary>Debug, tests: runs on the watchdog's thread right after its interrupt, while it still holds its claim.</summary>
+    internal static Action? AfterInterrupt;
+
     /// <summary>Debug, tests: runs on the watchdog's thread once it decided to interrupt, before it does.</summary>
     internal static Action? BeforeInterrupt;
 #endif

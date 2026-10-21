@@ -24,6 +24,7 @@ public sealed class HookedTests : IDisposable
         SqliteJob.SaveFault = null;
         SqliteConn.BeforeInterrupt = null;
         SqliteReaders.OwnReadFailed = null;
+        SqliteConn.AfterInterrupt = null;
 #endif
         _db.Dispose();
     }
@@ -193,6 +194,28 @@ public sealed class HookedTests : IDisposable
         SqliteReaders.OwnReadFailed = null;
         Assert.False((await read).IsOk);
         await DurabilityTests.AnsweredAsStored(s, ("a", a), ("b", b));
+#endif
+    }
+
+    /// <summary>A statement the watchdog interrupted answers StatementTimeout, though the watchdog hasn't yet given back
+    /// its claim on it when the statement sees the interrupt.</summary>
+    [Fact(Timeout = 30_000)]
+    public void AnInterruptedStatementIsATimeoutWhileTheWatchdogStillHoldsIt()
+    {
+#if !DEBUG
+        Assert.Skip("needs the Debug hook");
+#else
+        var s = _db.Open(_db.Database(readers: 1, timeout: TimeSpan.FromMilliseconds(100)));
+        using var interrupted = new ManualResetEventSlim();
+        SqliteConn.AfterInterrupt = () =>
+        {
+            interrupted.Set();
+            Thread.Sleep(200); // the statement sees the interrupt and answers while the claim is still on
+        };
+        var r = Spin(s, 1_000_000_000); // runs till interrupted
+        SqliteConn.AfterInterrupt = null;
+        Assert.True(interrupted.IsSet);
+        Assert.Equal(DataStatus.StatementTimeout, r.Status);
 #endif
     }
 
