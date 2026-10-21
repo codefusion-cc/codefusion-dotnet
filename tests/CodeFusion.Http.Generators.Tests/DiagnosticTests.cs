@@ -435,6 +435,37 @@ public class DiagnosticTests
         Assert.Contains(why, diagnostics[0].GetMessage(), System.StringComparison.Ordinal);
     }
 
+    // A route value is digits: a [Range] it can't read, or one that leaves no value of digits, is a mistake in the app.
+    [Theory]
+    [InlineData("[Range(1, 5)] Utf8 slug", "/a/{slug}", "is a Utf8 route value: [Range] is for long and int ones")]
+    [InlineData("[Range(-5, -1)] long id", "/a/{id}", "'id''s [Range] leaves no long of digits")]
+    [InlineData("[Range(1.2, 1.8)] long id", "/a/{id}", "'id''s [Range] leaves no long of digits")]
+    [InlineData("[Range(5, 5, MinimumIsExclusive = true)] int n", "/a/{n}", "'n''s [Range] leaves no int of digits")]
+    [InlineData("[Range(3000000000.0, 4000000000.0)] int n", "/a/{n}", "'n''s [Range] leaves no int of digits")]
+    [InlineData("[Range(typeof(long), \"1\", \"x\")] long id", "/a/{id}", "'id''s [Range] isn't one the generator can read")]
+    [InlineData("[Range(typeof(string), \"a\", \"b\")] long id", "/a/{id}", "'id''s [Range] isn't one the generator can read")]
+    public void RouteValueRangesItCantUse(string parameter, string route, string why)
+    {
+        var diagnostics = Harness.Generate(Map($$"""        api.MapGet("{{route}}", static ({{parameter}}) => Reply.NoContent());""")).Diagnostics;
+        Assert.Equal(["CFH0103"], Harness.Brief(diagnostics).Select(d => d.Split(' ')[0]).ToArray());
+        Assert.Contains(why, diagnostics[0].GetMessage(), System.StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("[Range(0, 0)] long id")]
+    [InlineData("[Range(-5, 5)] int n")]
+    [InlineData("[Range(1, long.MaxValue)] long id")]
+    [InlineData("[Range(typeof(int), \"1\", \"100\")] int n")]
+    [InlineData("[Range(typeof(ulong), \"1\", \"1000\")] long id")]
+    [InlineData("[Range(typeof(byte), \"1\", \"200\")] int n")]
+    public void RouteValueRangesItUses(string parameter)
+    {
+        string name = parameter.EndsWith(" id", System.StringComparison.Ordinal) ? "id" : "n";
+        var (_, diagnostics, output) = Harness.Generate(Map($$"""        api.MapGet("/a/{{{name}}}", static ({{parameter}}) => Reply.NoContent());"""));
+        Assert.Empty(diagnostics);
+        Assert.Empty(Harness.Problems(output));
+    }
+
     [Theory]
     [InlineData("[FromQuery] public partial struct S { public long N; }", "static ErrorReply Invalid")]
     [InlineData("[FromQuery] public partial struct S { public bool B; static ErrorReply Invalid => null!; }", "query parameters are read as")]

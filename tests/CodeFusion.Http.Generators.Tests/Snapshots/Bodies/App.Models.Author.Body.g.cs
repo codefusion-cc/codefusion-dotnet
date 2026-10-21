@@ -9,26 +9,21 @@ partial struct Author
     internal static global::CodeFusion.ErrorReply? __BindBody(in global::CodeFusion.Http.BodySource source, out global::App.Models.Author value)
     {
         value = default;
+        if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? source.InvalidBody;
         var b = new global::CodeFusion.Http.JsonBody(source);
         global::System.Span<byte> name = stackalloc byte[24];
         global::CodeFusion.Http.BodyValue f0 = default;
         global::CodeFusion.Http.BodyValue f1 = default;
-        try
+        // one pass reads and checks the body: a syntax error stops the reads, and ReadToEnd reports it, never a throw
+        if (!b.ReadRootObject()) return b.ReadToEnd() ? source.InvalidBody : source.MalformedBody ?? source.InvalidBody;
+        while (b.NextProperty())
         {
-            if (!b.ReadRootObject()) return source.InvalidBody;
-            while (b.NextProperty())
-            {
-                global::System.ReadOnlySpan<byte> n = b.PropertyName(name);
-                if (global::System.MemoryExtensions.SequenceEqual(n, "name"u8)) f0 = b.ReadText();
-                else if (global::System.MemoryExtensions.SequenceEqual(n, "age"u8)) f1 = b.ReadInt32();
-                else b.SkipValue();
-            }
-            b.ReadToEnd();
+            global::System.ReadOnlySpan<byte> n = b.PropertyName(name);
+            if (global::System.MemoryExtensions.SequenceEqual(n, "name"u8)) f0 = b.ReadText();
+            else if (global::System.MemoryExtensions.SequenceEqual(n, "age"u8)) f1 = b.ReadInt32();
+            else b.SkipValue();
         }
-        catch (global::System.Text.Json.JsonException)
-        {
-            return source.InvalidBody;
-        }
+        if (!b.ReadToEnd()) return source.MalformedBody ?? source.InvalidBody;
         if (!f0.IsRequiredText) return source.InvalidBody;
         if (!f1.IsValue) return BadAge;
         value = new() { Name = b.Text(f0), Age = (int)f1.IntegerValue };

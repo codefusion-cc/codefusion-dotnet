@@ -69,9 +69,9 @@ public sealed class EventLoopTests
             Assert.Equal($"/{i}", r.Text);
         }
         int receives = Volatile.Read(ref t.Server.SocketReceives) - before;
-        // the wait after the warm-up and the one after the last request may each start before or after a count is
-        // read: on Sockets each is a receive call, on the loop none
-        Assert.InRange(receives, least * N, most * N + 2);
+        // the wait after the warm-up may start before the first count is read (one fewer), and the ones around the
+        // last request before the second (up to two more): on Sockets each is a receive call, on the loop none
+        Assert.InRange(receives, least * N - 1, most * N + 2);
     }
 
     // The loop reads and sends with recv and send themselves, not through Socket's wrappers; Sockets keeps those.
