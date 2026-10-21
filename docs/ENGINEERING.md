@@ -932,7 +932,7 @@ where the test came with it), then green on the C and the ICU database.
 | `Sql.Conjuncts` split a condition inside CASE ... END, giving SQL Postgres refuses | `ConditionsSplitOnlyAtTheirTopLevel` (CASE, nested CASE, quotes, `weekend` and `ends_at`), `AWriteFromTheRowsFoundIsOneStatement` (`TakeCase`) | `CASE WHEN a AND (b THEN ...)` |
 | a NUL in Trim's character or ReplaceMatches' replacement broke the generated class when its statements were made | `ATextFunctionSqlWouldReadOtherwiseIsRefused` (2 rows) | no error |
 | the group page's source navigation taken out of the join on a foreign key the database may not have | `GroupPageTests.WithoutForeignKeysARowWhoseParentIsMissingIsLeftOutAsTheJoinLeavesIt`, `ANavigationsJoinIsLeftOutOnlyWhereTheModelDeclaresItRequired` | `nemo/2`: the ghost link counted |
-| ReplaceMatches as C# backtracked: 7 s on 48,000 characters | `AsCSharpAPatternRunsInLinearTimeOnALongText` | 7 s for the bound of 1 s (2.8 s on the 24,000 characters it had first, too close to the bound on a faster machine) |
+| ReplaceMatches as C# backtracked: 2.8 s on 24,000 characters | `AsCSharpAPatternRunsInLinearTimeOnALongText` | 2.2 s for the bound of 1 s |
 | `lower(x COLLATE "C")` ordered an `OrderBy(n => n.ToUpperAscii())` bytewise | `ListInsertTests.AnOrderByARaisedTextIsInTheTextsOwnCollation` (ICU database) | `_x` before `B` |
 | a delete in Then wrote `ARRAY(SELECT ...)` into any dialect's InArray; an empty ListRows wrote `FROM ` | `ADialectWithoutAnArrayOfAQueryJoinsTheRowsFound`, `ADialectWithoutWhatAShapeNeedsRefusesIt` | the ANY form whatever the dialect; 3 errors for 4 |
 | the pattern property drew 6 classes and 2 escapes, bound as a parameter | `APatternTakenIsReadAlikeByDotNetAndSql` (every class punctuation and escape, and the pattern as the generator's SQL literal) | found `\_` (.NET refuses it) and `\'Z'` (.NET reads a back reference), both refused now |
@@ -974,6 +974,21 @@ What the fixes decided:
   now; refusing it would break both. `APageByAColumnOfAKeyOfSeveralIsAPageOfTheRowItsForeignKeyLeadsTo` pins that, and
   a key column that is no foreign key stays refused. What changed is only for an entity declaring several `[Key]`s:
   the last one used to be taken as its key, and is not any more; every use needing one key refuses such an entity.
+
+**Third review of the shapes.** Fixes only, each test red on the code before its fix (or with the fix broken on
+purpose), then green on the C and the ICU database.
+
+| Finding | Test | Red before |
+|---|---|---|
+| the guard followed a delete's cascades one table deep, and checked rules and triggers on the table written only | `CorrectedReadTests.ACascadeTwoTablesAwayFromTheDeleteFailsTheStatement` (chain_a to chain_b to chain_c, none of it in the model; a trigger and a rule on chain_b) | the count of chain_c as before the delete |
+| a corrected read of a column in a nondeterministic or other non-default collation | `ACorrectedReadOfAColumnInAnotherCollationFailsTheStatement` (ICU `ci`, and `"C"`) | the pet written |
+| a column of another type than its value is bound as passed the fixed list of types | `ACorrectedReadOfAColumnOfAnotherTypeThanTheValueBoundFailsTheStatement` (int into float8 and int8, long into int4) | the pet written |
+| a NUL in a Utf8 or string constant, in Replace or Concat, or in the text of Sql broke the generated class | `ShapeGeneratorTests.ANulInAnyTextTheStatementWritesIsRefused` (6 rows) | no error for 4 |
+| conditions split inside E'' strings, dollar quotes and comments | `ConditionsSplitOnlyAtTheirTopLevel` (5 rows more) | 4 split wrong |
+| two copies of the guard, nothing tying them | `TheThenGuardIsOneTextTheGeneratorKeeps` (the attribute holds none, the text pinned) | the attribute's copy |
+| PlanTests dropped every pg_* scan | `PlanTests.TheCheckReadsTheCatalogByItsIndexes`; the favorite comparisons with the check on both sides | pg_trigger read whole (a hashed EXISTS) |
+| with NonBacktracking taken out, the backtracking test failed by 2.2 s against 1 s only, which a faster machine passes | `AsCSharpAPatternRunsInLinearTimeOnALongText` on 48,000 characters | 7 s |
+| the found table was checked only when the guard ran for another reason | `TheRowFoundIsCheckedWhetherOrNotTheSelectReadsAnotherTable` (a cascade into the row found, a trigger on the table an insert writes) | the statement ran |
 
 All five of the Conduit context's `Sql(...)` queries are LINQ now; the context has none left. The app's own copy
 (`ConduitDb.cs` in the contest submission) needs the same entities: `[Key]` on Follow's and Favorite's two columns,
