@@ -41,6 +41,15 @@ public sealed class NativeLibraryTests : IDisposable
     }
 
     [Fact]
+    public void ALibraryInTheGivenDirectoryCanSayItsBuild()
+    {
+        // the build check looks the function up in the library the resolver loaded, not by name (which misses it)
+        File.Copy(PackageLibrary(), Path.Combine(_dir, Sqlite3.LibraryFileName));
+        Assert.NotNull(Sqlite3.CompileOptionUsedIn(Sqlite3.LoadFrom(_dir)));
+        Assert.Null(Sqlite3.CompileOptionUsedIn(0));
+    }
+
+    [Fact]
     public void ADirectoryWithoutOneLoadsNothing()
     {
         Assert.Equal(0, Sqlite3.LoadFrom(_dir));

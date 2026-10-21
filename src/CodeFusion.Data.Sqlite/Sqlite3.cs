@@ -42,7 +42,7 @@ internal static unsafe partial class Sqlite3
             {
                 if (name != Lib) return 0;
                 nint own = LoadFrom(AppContext.BaseDirectory);
-                if (own != 0) FromAppDirectory = true;
+                if (own != 0) s_appLibrary = own;
                 return own;
             });
         }
@@ -53,7 +53,10 @@ internal static unsafe partial class Sqlite3
     }
 
     /// <summary>The library loaded is one the app ships in its own directory, not the package's (whose build is pinned).</summary>
-    internal static bool FromAppDirectory { get; private set; }
+    internal static bool FromAppDirectory => s_appLibrary != 0;
+
+    /// <summary>The app's own library, as the resolver loaded it; 0 when the package's is used.</summary>
+    static nint s_appLibrary;
 
     // result codes
     public const int Ok = 0, Error = 1, Busy = 5, Locked = 6, NoMem = 7, ReadOnly = 8, Interrupt = 9, IoErr = 10, Corrupt = 11,
@@ -100,6 +103,10 @@ internal static unsafe partial class Sqlite3
 
     static delegate* unmanaged<byte*, int> s_compileOptionUsed;
 
+    /// <summary>sqlite3_compileoption_used in <paramref name="library"/>, or null when it has none.</summary>
+    internal static nint? CompileOptionUsedIn(nint library) =>
+        library != 0 && NativeLibrary.TryGetExport(library, "sqlite3_compileoption_used", out nint used) ? used : null;
+
     /// <summary>Whether SQLite was built with an option (without its SQLITE_ prefix); null when the library can't say
     /// (built with SQLITE_OMIT_COMPILEOPTION_DIAGS: no sqlite3_compileoption_used). Looked up, not imported, so such a
     /// build is refused with a reason rather than a missing entry point.</summary>
@@ -107,8 +114,11 @@ internal static unsafe partial class Sqlite3
     {
         if (s_compileOptionUsed is null)
         {
-            if (!NativeLibrary.TryLoad(Lib, typeof(Sqlite3).Assembly, null, out nint lib) || !NativeLibrary.TryGetExport(lib, "sqlite3_compileoption_used", out nint used))
-                return null;
+            // the library the calls go to: the app's own as the resolver loaded it (loading by name here would skip the
+            // resolver and miss it), else the package's
+            nint lib = s_appLibrary;
+            if (lib == 0 && !NativeLibrary.TryLoad(Lib, typeof(Sqlite3).Assembly, null, out lib)) return null;
+            if (CompileOptionUsedIn(lib) is not { } used) return null;
             s_compileOptionUsed = (delegate* unmanaged<byte*, int>)used;
         }
         return static name =>
