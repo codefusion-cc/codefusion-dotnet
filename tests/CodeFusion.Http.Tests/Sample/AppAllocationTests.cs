@@ -72,7 +72,16 @@ public class AppAllocationTests(ITestOutputHelper output)
     public async Task KeepAliveRequestsAllocateNothing(string name, int connections, HttpTransport transport)
     {
         Assert.SkipWhen(AllocationTests.Debugger(), "Debug builds make every async method's state machine a class: run in Release");
-        await using HttpApp app = SampleApp.Build(b => TestTransport.UseWithHook(b.Options, transport));
+        await using HttpApp app = SampleApp.Build(b =>
+        {
+            TestTransport.UseWithHook(b.Options, transport);
+            // an app's own batch actions are called per wake-up too: with nothing allocated
+            if (transport == HttpTransport.EventLoop)
+            {
+                b.OnEventLoopBatch(static _ => { });
+                b.OnEventLoopBatch(static _ => { });
+            }
+        });
         await using var check = new AppCheck(app);
         app.Start();
         byte[] request = Encoding.UTF8.GetBytes(RequestFor(name));

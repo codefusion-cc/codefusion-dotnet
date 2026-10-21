@@ -37,9 +37,8 @@ internal abstract unsafe class EventLoop
     readonly HttpServer _server;
     readonly Thread _thread;
     readonly int _index;
-    // This thread's loop index + 1 (0 on other threads), and the loop whose wake-up it is handling, if any: answers
-    // finished then wait in _sends until the batch hook has run.
-    [ThreadStatic] static int t_index;
+    // The loop whose thread this is, and the loop whose wake-up it is handling, if any: answers finished then wait in
+    // _sends until the batch hook has run. (The thread's index is Core's EventLoopThread.Current.)
     [ThreadStatic] static EventLoop? t_batching, t_loop;
     // Connections that used their share of a wake-up's reads (HttpExchange.Arm), each with the id it had then: the
     // next round, after a wait that doesn't block, takes them up once the others had their turn.
@@ -70,9 +69,6 @@ internal abstract unsafe class EventLoop
         OperatingSystem.IsLinux() ? new Epoll(server, index) : new Kqueue(server, index);
 
     public void Start() => _thread.Start();
-
-    /// <summary>The index of the loop whose thread this is, or -1.</summary>
-    public static int CurrentIndex => t_index - 1;
 
     /// <summary>The loop whose wake-up this thread is handling now, if any.</summary>
     public static EventLoop? Batching => t_batching;
@@ -158,7 +154,7 @@ internal abstract unsafe class EventLoop
     {
         byte* events = (byte*)NativeMemory.Alloc(MaxEvents, (nuint)EventSize);
         bool held = false;
-        t_index = _index + 1;
+        EventLoopThread.Enter(_index);
         t_loop = this;
         try
         {
@@ -211,20 +207,7 @@ internal abstract unsafe class EventLoop
                     }
                 }
                 TakeLater();
-                if (_server.Options.OnEventLoopBatch is { } hook)
-                {
-                    try
-                    {
-                        hook(_index);
-                    }
-                    catch (Exception e)
-                    {
-                        Interlocked.Increment(ref _server.CallbackFailures);
-                        _server.Report("http event loop hook failed", e);
-                    }
-                }
-                t_batching = null;
-                SendAll();
+                EndBatch();
             }
         }
         finally
@@ -235,6 +218,31 @@ internal abstract unsafe class EventLoop
             Queue.Dispose();
             _exited.TrySetResult();
         }
+    }
+
+    /// <summary>One batch action; what it throws can't end the loop, nor stop the actions after it.</summary>
+    void RunBatchAction(Action<int> action, int which)
+    {
+        try
+        {
+            action(_index);
+        }
+        catch (Exception e)
+        {
+            _server.BatchActionFailed(which, e);
+        }
+    }
+
+    /// <summary>The batch's actions, then its held answers: each connection sends and goes on to its next wait with
+    /// nothing held. (Sending every 64 events instead lost throughput and didn't shorten the tail:
+    /// docs/benchmarks/2026-10-21-review-fixes-and-batch-size.md.)</summary>
+    void EndBatch()
+    {
+        if (_server.Options.OnEventLoopBatch is { } hook) RunBatchAction(hook, 0);
+        Action<int>[] actions = _server.BatchActions;
+        for (int i = 0; i < actions.Length; i++) RunBatchAction(actions[i], i + 1);
+        t_batching = null;
+        SendAll();
     }
 
     /// <summary>The connections put off in the last round, each if it is still the one it was.</summary>

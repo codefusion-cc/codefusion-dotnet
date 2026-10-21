@@ -454,4 +454,4 @@ CodeFusion.Http.HttpTransport.EventLoop = 1 -> CodeFusion.Http.HttpTransport
 CodeFusion.Http.HttpTransport.Sockets = 0 -> CodeFusion.Http.HttpTransport
 CodeFusion.Http.HttpServerOptions.OnEventLoopBatch.get -> System.Action<int>?
 CodeFusion.Http.HttpServerOptions.OnEventLoopBatch.set -> void
-static CodeFusion.Http.HttpServer.CurrentEventLoop.get -> int
+CodeFusion.Http.HttpAppBuilder.OnEventLoopBatch(System.Action<int>! onBatch) -> void

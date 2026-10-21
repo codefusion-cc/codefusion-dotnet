@@ -39,6 +39,13 @@ public sealed class HttpServer : IAsyncDisposable
     /// or <see cref="HttpServerOptions.OnError"/> itself. For tests.</summary>
     internal int CallbackFailures;
 
+    /// <summary>A batch action threw: counted every time, reported the first time for each action.</summary>
+    internal void BatchActionFailed(int action, Exception e)
+    {
+        Interlocked.Increment(ref CallbackFailures);
+        if (Interlocked.Exchange(ref _batchReported[action], 1) == 0) Report("http event loop hook failed", e);
+    }
+
     /// <summary>Hands a failure to <see cref="HttpServerOptions.OnError"/>. What the hook throws is counted in
     /// <see cref="CallbackFailures"/> and dropped, so it can't take down the loop that reports.</summary>
     internal void Report(string what, Exception? error)
@@ -61,6 +68,14 @@ public sealed class HttpServer : IAsyncDisposable
     /// <summary>Debug builds count here every receive call on a connection's socket: reads, peeks and the zero-byte
     /// receive that waits for a request. For tests.</summary>
     internal int SocketReceives;
+
+    /// <summary>The app's <see cref="IServiceRegistry.OnEventLoopBatch"/> actions, called after
+    /// <see cref="HttpServerOptions.OnEventLoopBatch"/> in their order. Set before Start.</summary>
+    internal Action<int>[] BatchActions = [];
+
+    // Which batch actions (0: the options' hook, then BatchActions) have reported a failure: once each, since one that
+    // throws on every wake-up would fill the log at the server's request rate.
+    int[] _batchReported = [0];
 
     /// <summary>Debug builds count here every recv and send an event loop's connection made itself, past Socket.
     /// For tests.</summary>
@@ -152,10 +167,6 @@ public sealed class HttpServer : IAsyncDisposable
         }
     }
 
-    /// <summary>The index of the event loop whose thread this is (<see cref="HttpServerOptions.OnEventLoopBatch"/>'s
-    /// argument), or -1 on any other thread.</summary>
-    public static int CurrentEventLoop => EventLoop.CurrentIndex;
-
     /// <summary>Open connections.</summary>
     public int Connections => Volatile.Read(ref _active);
 
@@ -170,6 +181,7 @@ public sealed class HttpServer : IAsyncDisposable
         // Linux event loops each listen on the port themselves (SO_REUSEPORT): the kernel spreads new connections
         // over them, and each loop accepts its own on its thread. Otherwise one listener and the runtime's accepts.
         bool own = Options.Transport == HttpTransport.EventLoop && OperatingSystem.IsLinux();
+        _batchReported = new int[BatchActions.Length + 1];
         var listeners = new Socket[own ? Options.EventLoops : 1];
         try
         {

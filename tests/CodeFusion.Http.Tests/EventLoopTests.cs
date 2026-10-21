@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using CodeFusion;
 using CodeFusion.Http;
 using Xunit;
 
@@ -337,7 +338,7 @@ public sealed class EventLoopTests
     {
         await using var t = Start(static x =>
         {
-            TestServer.Write(x, HttpServer.CurrentEventLoop.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            TestServer.Write(x, EventLoopThread.Current.ToString(System.Globalization.CultureInfo.InvariantCulture));
             return default;
         }, o => o.EventLoops = 3);
         Assert.Equal(OperatingSystem.IsLinux() ? 3 : 0, t.Server.LoopListeners);
