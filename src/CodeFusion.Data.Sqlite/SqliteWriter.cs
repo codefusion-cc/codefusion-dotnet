@@ -301,9 +301,10 @@ public sealed unsafe class SqliteWriter
             job.Failed = true;
             job.Failure = SqliteRun.Failed(_conn, rc, job.SavedRows);
         }
-        catch (Exception e) when (e is SqliteException or InvalidOperationException)
+        catch (Exception e) when (e is SqliteException || e is InvalidOperationException and not JobLifeException)
         {
-            // a statement that can't be prepared, or bound with the wrong parameters: this write fails, alone
+            // a statement that can't be prepared, or bound with the wrong parameters: this write fails, alone (a broken
+            // job life, a Debug check, is a bug and goes on up)
             Interlocked.Increment(ref Counters.FailedAlone);
             job.Failed = true;
             job.Failure = new DataResult(DataStatus.Failed, job.SavedRows, 0, e);
@@ -414,7 +415,10 @@ public sealed unsafe class SqliteWriter
     /// transaction or a checkpoint. Holding the connection (<see cref="Enter"/>).</summary>
     void EndRead()
     {
-        if (_options.Exclusive && Sqlite3.GetAutocommit(_conn.Db) == 0) _ = _conn.Once(_commit);
+        if (!_options.Exclusive || Sqlite3.GetAutocommit(_conn.Db) != 0) return;
+        // the reads' transaction is a read one: ended. A write one left open (a ROLLBACK that failed) is never committed
+        // by the next group: rolled back.
+        _ = _conn.Once(Sqlite3.TxnState(_conn.Db, null) == Sqlite3.TxnWrite ? _rollback : _commit);
     }
 
     /// <summary>After a group's writes have completed: idle readers let go of the snapshots this commit made old (so none
@@ -508,21 +512,48 @@ public sealed unsafe class SqliteWriter
         job.Queued();
         if (_batchCount == _batch.Length) Array.Resize(ref _batch, _batch.Length * 2);
         _batch[_batchCount++] = job;
-        if (!_batchOpen)
+        try
         {
-            int rc = Begin();
-            if (rc != Sqlite3.Ok)
+            if (!_batchOpen)
+            {
+                int rc = Begin();
+                if (rc != Sqlite3.Ok)
+                {
+                    job.Failed = true;
+                    job.Failure = FailedGroup(SqliteRun.Failed(_conn, rc));
+                    _batchCommitted = _batchCount;
+                    return true;
+                }
+                _batchOpen = true;
+            }
+            // rolled back: the writes the transaction held since the last commit run again, once, in a new one
+            if (Run(_batch, _batchCount - 1, _batchCount, attempts: 1) is not null) Rerun();
+            return true;
+        }
+        catch
+        {
+            Abandon(job);
+            throw;
+        }
+    }
+
+    /// <summary>An exception no statement expects (out of memory keeping a row, a bug) while <paramref name="thrower"/>
+    /// ran in the batch: the transaction is rolled back, savepoints and all, every write it held since the last commit
+    /// fails, and the thrower's caller gets the exception instead of a task, so its job goes back.</summary>
+    void Abandon(SqliteJob thrower)
+    {
+        RollbackOpen();
+        _batchOpen = false;
+        if (_batchCount > 0 && ReferenceEquals(_batch[_batchCount - 1], thrower)) _batch[--_batchCount] = null;
+        var lost = new DataResult(DataStatus.Failed);
+        for (int i = _batchCommitted; i < _batchCount; i++)
+            if (_batch[i] is { Failed: false } job)
             {
                 job.Failed = true;
-                job.Failure = FailedGroup(SqliteRun.Failed(_conn, rc));
-                _batchCommitted = _batchCount;
-                return true;
+                job.Failure = lost;
             }
-            _batchOpen = true;
-        }
-        // rolled back: the writes the transaction held since the last commit run again, once, in a new one
-        if (Run(_batch, _batchCount - 1, _batchCount, attempts: 1) is not null) Rerun();
-        return true;
+        _batchCommitted = _batchCount;
+        thrower.Return();
     }
 
     /// <summary>The batch's transaction is gone: its writes since the last commit run again once in a new one, or fail

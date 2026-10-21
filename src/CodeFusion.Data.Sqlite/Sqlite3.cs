@@ -86,6 +86,12 @@ internal static unsafe partial class Sqlite3
     [LibraryImport(Lib, EntryPoint = "sqlite3_threadsafe")]
     public static partial int ThreadSafe();
 
+    /// <summary>The connection's transaction: none, read or write (<see cref="TxnWrite"/>).</summary>
+    [LibraryImport(Lib, EntryPoint = "sqlite3_txn_state"), SuppressGCTransition]
+    public static partial int TxnState(nint db, byte* schema);
+
+    public const int TxnWrite = 2;
+
     [LibraryImport(Lib, EntryPoint = "sqlite3_sourceid")]
     private static partial byte* SourceIdText();
 

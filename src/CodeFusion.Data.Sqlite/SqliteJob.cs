@@ -204,6 +204,9 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
     internal unsafe void Save(nint stmt)
     {
         _life.CheckIs(JobStep.Queued);
+#if DEBUG
+        SaveFault?.Invoke();
+#endif
         int n = Sqlite3.ColumnCount(stmt);
         EnsureSaved(4);
         BinaryPrimitives.WriteInt32LittleEndian(Saved.AsSpan(SavedLen), n);
@@ -242,6 +245,11 @@ internal sealed class SqliteJob : IValueTaskSource<DataResult>, IThreadPoolWorkI
         }
         SavedRows++;
     }
+
+#if DEBUG
+    /// <summary>Debug, tests: runs as a row is kept, so a test can fail there as running out of memory would.</summary>
+    internal static Action? SaveFault;
+#endif
 
     void EnsureSaved(int n)
     {

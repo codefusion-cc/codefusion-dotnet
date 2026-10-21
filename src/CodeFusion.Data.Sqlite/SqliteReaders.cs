@@ -94,23 +94,30 @@ internal static unsafe class SqliteRun
         where TReader : IRowReader
     {
         int rc;
-        while ((rc = Sqlite3.Step(stmt)) == Sqlite3.Row)
+        try
         {
-            rows++;
-            if (save) job.Save(stmt);
-            else if (failure is null)
+            while ((rc = Sqlite3.Step(stmt)) == Sqlite3.Row)
             {
-                try
+                rows++;
+                if (save) job.Save(stmt);
+                else if (failure is null)
                 {
-                    value = TReader.Read(new SqliteRow(stmt), state);
-                }
-                catch (Exception e)
-                {
-                    failure = e;
+                    try
+                    {
+                        value = TReader.Read(new SqliteRow(stmt), state);
+                    }
+                    catch (Exception e)
+                    {
+                        failure = e;
+                    }
                 }
             }
         }
-        _ = Sqlite3.Reset(stmt);
+        finally
+        {
+            // also when keeping a row threw: a statement left running would keep its transaction from rolling back
+            _ = Sqlite3.Reset(stmt);
+        }
         if (rc == Sqlite3.Done) return Sqlite3.Ok;
         int code = Sqlite3.ExtendedErrCode(conn.Db);
         return code != Sqlite3.Ok ? code : rc;
@@ -457,7 +464,7 @@ internal sealed class SqliteReaders : IDisposable
             {
                 rc = SqliteRun.Steps<TReader>(conn, job, state, save: false, out rows, out value, out failure);
             }
-            catch (Exception e) when (e is SqliteException or InvalidOperationException)
+            catch (Exception e) when (e is SqliteException || e is InvalidOperationException and not JobLifeException)
             {
                 // a statement that can't be prepared, or bound with the wrong parameters: this read fails
                 if (!_shared && Sqlite3.GetAutocommit(conn.Db) != 0) _snapshot[i] = -1;

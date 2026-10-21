@@ -23,7 +23,7 @@ public sealed class DurabilityTests : IDisposable
     public void Dispose() => _db.Dispose();
 
     /// <summary>Every write answered Ok is there; every write answered as failed is not.</summary>
-    static async Task AnsweredAsStored(SqliteDataSource s, params (string Key, ValueTask<DataResult> Write)[] writes)
+    internal static async Task AnsweredAsStored(SqliteDataSource s, params (string Key, ValueTask<DataResult> Write)[] writes)
     {
         foreach (var (key, write) in writes)
         {
@@ -42,7 +42,7 @@ public sealed class DurabilityTests : IDisposable
 
     static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SqliteStatement> Statements = new();
 
-    static SqliteStatement Statement(string sql, params DataType[] types) => Statements.GetOrAdd(sql, _ => new SqliteStatement(sql, types));
+    internal static SqliteStatement Statement(string sql, params DataType[] types) => Statements.GetOrAdd(sql, _ => new SqliteStatement(sql, types));
 
     /// <summary>Holds the file's write lock from another connection until disposed, so writes queue into one group.</summary>
     sealed class HeldLock : IDisposable

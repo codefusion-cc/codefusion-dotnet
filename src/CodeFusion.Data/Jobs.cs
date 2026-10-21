@@ -68,7 +68,7 @@ internal struct JobLife(string kind, bool queuesUnheld)
             _ => false,
         };
         if (!allowed)
-            throw new InvalidOperationException(next == JobStep.Completed
+            throw new JobLifeException(next == JobStep.Completed
                 ? $"a {kind} job was completed while {_step} (twice, or after its return)"
                 : $"a {kind} job went from {_step} to {next}");
         if (next == JobStep.Building) _rentedGeneration = Generation;
@@ -80,14 +80,14 @@ internal struct JobLife(string kind, bool queuesUnheld)
     [Conditional("DEBUG")]
     public readonly void CheckIs(JobStep step)
     {
-        if (_step != step) throw new InvalidOperationException($"a {kind} job was used while {_step}, not {step}");
+        if (_step != step) throw new JobLifeException($"a {kind} job was used while {_step}, not {step}");
     }
 
     /// <summary>The job isn't in the pool already.</summary>
     [Conditional("DEBUG")]
     public readonly void CheckReturnable()
     {
-        if (_step == JobStep.Pooled) throw new InvalidOperationException($"a {kind} job was returned twice");
+        if (_step == JobStep.Pooled) throw new JobLifeException($"a {kind} job was returned twice");
     }
 
     /// <summary>Debug: counts the job out against <paramref name="owner"/> until it is back in the pool.</summary>
@@ -114,9 +114,13 @@ internal struct JobLife(string kind, bool queuesUnheld)
     public readonly void CheckPoisoned(byte[]? buffer)
     {
         if (buffer is not null && buffer.AsSpan().IndexOfAnyExcept(JobPool.Returned) >= 0)
-            throw new InvalidOperationException($"a pooled {kind} job's buffer was written to after its return");
+            throw new JobLifeException($"a pooled {kind} job's buffer was written to after its return");
     }
 }
+
+/// <summary>Debug: a job's life broke (a step out of order, a second return, a buffer written after it): a bug, which a
+/// provider lets go on up rather than taking it for its statement's failure.</summary>
+internal sealed class JobLifeException(string message) : InvalidOperationException(message);
 
 /// <summary>Debug: how many jobs a provider's source has out of the pool. A test that ends with commands in flight
 /// sees it above 0: a command's task not read, or read twice.</summary>

@@ -8,13 +8,11 @@ using Xunit;
 namespace CodeFusion.Data.Sqlite.Tests;
 
 /// <summary>
-/// Stop in Exclusive mode while a loop's batch holds the connection: the batch's end closes it. A read that takes the
-/// connection for a moment as the batch gives it back (it sees the stop and gives it back) must not leave it open: whoever
-/// gives it back last closes it. Debug hooks hold the read there, so the race is certain, not lucky. Process-wide hooks:
-/// the class runs alone.
+/// What only a Debug hook makes certain, not lucky: a race held open, a fault where nothing would fail on purpose. The
+/// hooks are process-wide, so the class runs alone.
 /// </summary>
 [Collection(nameof(AllocationRuns))]
-public sealed class CloseRaceTests : IDisposable
+public sealed class HookedTests : IDisposable
 {
     readonly TempDb _db = new();
 
@@ -23,10 +21,14 @@ public sealed class CloseRaceTests : IDisposable
 #if DEBUG
         SqliteReaders.AfterExit = null;
         SqliteReaders.StoppedRead = null;
+        SqliteJob.SaveFault = null;
 #endif
         _db.Dispose();
     }
 
+    /// <summary>Stop in Exclusive mode while a loop's batch holds the connection: the batch's end closes it. A read that
+    /// takes the connection for a moment as the batch gives it back (it sees the stop and gives it back) must not leave
+    /// it open: whoever gives it back last closes it.</summary>
     [Fact(Timeout = 30_000)]
     public async Task AReadAsTheBatchGivesTheConnectionBackDoesntKeepItOpen()
     {
@@ -83,6 +85,52 @@ public sealed class CloseRaceTests : IDisposable
         {
             again.Stop();
         }
+#endif
+    }
+
+    /// <summary>An exception no write expects (out of memory keeping a row) inside a loop's batch: the transaction is
+    /// rolled back, the caller gets the exception, and nothing the transaction held is answered Ok.</summary>
+    [Fact(Timeout = 30_000)]
+    public async Task AnExceptionInABatchUndoesItsTransactionAndAnswersNothingOkThatIsntThere()
+    {
+#if !DEBUG
+        Assert.Skip("needs the Debug hook");
+#else
+        var s = _db.Open(_db.Database(exclusive: true, batches: true));
+        using var loop = new TestLoop(s);
+        ValueTask<DataResult> a = default, after = default;
+        Exception? thrown = null;
+        await loop.WakeUp(() =>
+        {
+            a = Kv.Write(s, "a", 1);
+            // a unit: u1, then a statement whose row can't be kept
+            var unit = s.Write(Kv.Put);
+            unit.Text("u1");
+            unit.Int64(1);
+            unit.Then(DurabilityTests.Statement("INSERT INTO kv (k, v) VALUES ('u2', 2) RETURNING k"));
+#pragma warning disable CA2201 // standing in for the runtime's own, as Array.Resize would throw it
+            SqliteJob.SaveFault = static () => throw new OutOfMemoryException("keeping a row");
+#pragma warning restore CA2201
+            try
+            {
+                _ = Sqlite.Run<Value>(unit.Hold(), null, default);
+            }
+            catch (OutOfMemoryException e)
+            {
+                thrown = e;
+            }
+            finally
+            {
+                SqliteJob.SaveFault = null;
+            }
+            after = Kv.Write(s, "after", 3); // the wake-up goes on
+        });
+        Assert.NotNull(thrown);
+        Assert.Equal(0, Kv.Count(s, "u%"));
+        var afterResult = await after;
+        Assert.True(afterResult.IsOk, afterResult.ToString());
+        await DurabilityTests.AnsweredAsStored(s, ("a", a));
+        Assert.Equal(1, Kv.Count(s, "after"));
 #endif
     }
 }
