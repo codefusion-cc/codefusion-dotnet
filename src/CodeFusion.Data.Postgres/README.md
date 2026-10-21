@@ -13,8 +13,10 @@ A read loop keeps up to two groups in flight on its connection (`PgReader.MaxInF
 while Postgres still answers the group before, so the backend never sits a round trip without work. A burst that
 arrives while other read loops sleep is shared out among them, so its reads run on several backends at once.
 
-A statement made with `RunsAlone = true` (or a query method marked `[RunsAlone]`) runs apart: on a connection of its
-own, each command in its own transaction, so a slow sign-up or report holds up no group commit or read group.
+A statement made with `RunsAlone = true` (or a query method marked `[RunsAlone]`) runs apart: on connections of their
+own, each command in its own transaction, so a slow sign-up or report holds up no group commit or read group. A reader
+or writer opens `PgSettings.AloneConnections` of them (2 by default) at its first such command, on top of its loops'
+connections; each runs one command at a time and the next goes to a free one, so one slow report holds up no sign-up.
 
 It is also CodeFusion.Data's Postgres provider: a context deriving from `DataContext<Postgres>` has its LINQ
 compiled to Postgres's SQL at build time and run on these loops, registered with

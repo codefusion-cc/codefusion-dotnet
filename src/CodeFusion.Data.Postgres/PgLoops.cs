@@ -39,9 +39,11 @@ public abstract class PgLoops
 {
     readonly PgSettings _settings;
     readonly PgQueue _queue;
-    /// <summary>Commands whose statements run alone, and the loop that runs them one by one, started on the first.</summary>
-    readonly PgQueue _alone;
-    int _aloneStarted;
+    /// <summary>Commands whose statements run alone, and <see cref="PgSettings.AloneConnections"/> loops that run them
+    /// one each: all made at the first such command (an app with none pays nothing for them).</summary>
+    PgQueue? _alone;
+    readonly int _maxQueued;
+    bool _completed;
     readonly int _maxGroup;
     readonly string _name;
     int _started;
@@ -85,12 +87,12 @@ public abstract class PgLoops
         _settings = settings;
         _maxGroup = maxGroup;
         _queue = new PgQueue(maxQueued);
-        _alone = new PgQueue(maxQueued);
+        _maxQueued = maxQueued;
         _name = name;
     }
 
     /// <summary>Commands waiting for a loop.</summary>
-    public int Queued => _queue.Count + _alone.Count;
+    public int Queued => _queue.Count + (Volatile.Read(ref _alone)?.Count ?? 0);
 
     /// <summary>Starts building a command of <paramref name="statement"/>; its parameters follow, then Run.</summary>
     public PgCommand Command(PgStatement statement)
@@ -156,7 +158,11 @@ public abstract class PgLoops
     public void Complete()
     {
         _queue.Stop();
-        _alone.Stop();
+        lock (_threads)
+        {
+            _completed = true;
+            _alone?.Stop();
+        }
     }
 
     internal ValueTask<PgResult> Submit(PgJob job, PgRowHandler? handler, object? state, CancellationToken aborted) =>
@@ -206,13 +212,7 @@ public abstract class PgLoops
         var queue = _queue;
         if (RunsAlone(job))
         {
-            queue = _alone;
-            if (Volatile.Read(ref _aloneStarted) == 0 && Interlocked.CompareExchange(ref _aloneStarted, 1, 0) == 0)
-            {
-                var t = new Thread(() => Loop(_alone, 1)) { IsBackground = true, Name = $"{_name} alone" };
-                lock (_threads) _threads.Add(t);
-                t.Start();
-            }
+            queue = Volatile.Read(ref _alone) ?? Alone();
             Interlocked.Increment(ref Counters.Alone);
         }
         switch (queue.TryAdd(job))
@@ -226,6 +226,27 @@ public abstract class PgLoops
             default:
                 job.Discard();
                 return Queueing.Stopped;
+        }
+    }
+
+    /// <summary>The queue of commands that run alone, and its loops, made by the first such command. Each loop takes
+    /// one command at a time, and a free one is woken for the next, so a slow command holds up only its own loop.</summary>
+    PgQueue Alone()
+    {
+        lock (_threads)
+        {
+            if (_alone is { } made) return made;
+            var queue = new PgQueue(_maxQueued);
+            if (_completed) queue.Stop();
+            else
+                for (int i = 0; i < Math.Max(1, _settings.AloneConnections); i++)
+                {
+                    var t = new Thread(() => Loop(queue, 1)) { IsBackground = true, Name = $"{_name} alone {i}" };
+                    _threads.Add(t);
+                    t.Start();
+                }
+            Volatile.Write(ref _alone, queue);
+            return queue;
         }
     }
 

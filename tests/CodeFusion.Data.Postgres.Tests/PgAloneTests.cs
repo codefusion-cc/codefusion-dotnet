@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
 using CodeFusion.Data.Postgres;
@@ -22,6 +23,7 @@ public sealed class PgAloneTests : IAsyncDisposable
     static readonly PgStatement SlowRead = new("SELECT $1::bigint FROM pg_sleep(0.5)", PgType.Int8) { RunsAlone = true };
     static readonly PgStatement Pid = new("SELECT pg_backend_pid()");
     static readonly PgStatement AlonePid = new("SELECT pg_backend_pid()") { RunsAlone = true };
+    static readonly PgStatement SlowPid = new("SELECT pg_backend_pid() FROM pg_sleep(0.3)") { RunsAlone = true };
 
     PgWriter? _writer;
     PgReader? _reader;
@@ -89,6 +91,34 @@ public sealed class PgAloneTests : IAsyncDisposable
         long alone = (await Run(r, AlonePid)).ThrowIfFailed().Value;
         Assert.NotEqual(loop, alone);
         Assert.Equal(alone, (await Run(r, AlonePid)).ThrowIfFailed().Value);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task ASlowCommandThatRunsAloneHoldsUpNoOtherThatRunsAlone()
+    {
+        var r = _reader = new PgReader(PgTestDb.Settings());
+        r.Start(1);
+        Assert.True((await Run(r, AlonePid)).IsOk); // the alone loops are up and asleep
+        var slow = Run(r, SlowRead, 7);
+        await Task.Delay(50);
+        var started = Stopwatch.GetTimestamp();
+        Assert.True((await Run(r, AlonePid)).IsOk);
+        Assert.False(slow.IsCompleted, "the second command waited for the slow one");
+        Assert.InRange(Stopwatch.GetElapsedTime(started).TotalMilliseconds, 0, 200);
+        Assert.Equal(7, (await slow).ThrowIfFailed().Value);
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task TheConnectionsForCommandsThatRunAloneAreAsManyAsTheSettingsSay()
+    {
+        var settings = PgTestDb.Settings();
+        settings.AloneConnections = 3;
+        var r = _reader = new PgReader(settings);
+        r.Start(1);
+        // three slow ones at once run on three connections; a fourth waits for one of them
+        var slow = Enumerable.Range(0, 4).Select(i => Run(r, SlowPid)).ToArray();
+        var pids = (await Task.WhenAll(slow)).Select(x => x.ThrowIfFailed().Value).ToArray();
+        Assert.Equal(3, pids.Distinct().Count());
     }
 
     [Fact(Timeout = 30_000)]
