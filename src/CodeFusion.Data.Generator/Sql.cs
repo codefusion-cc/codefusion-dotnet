@@ -9,7 +9,7 @@ namespace CodeFusion.Data.Generator;
 /// <summary>A provider's SQL spelling, read from its <c>[SqlDialect]</c> (the defaults are Postgres's).</summary>
 sealed class Dialect
 {
-    public string Name = "postgres", Parameter = "${0}", Quotes = "\"\"", Paging = "LIMIT {0} OFFSET {1}", Limit = "LIMIT {0}";
+    public string Name = "postgres", Parameter = "${0}", Quotes = "\"\"", Paging = "LIMIT {0} OFFSET {1}", Limit = "LIMIT {0}", Offset = "OFFSET {0}";
     public string JsonArray = "array_to_json(ARRAY({0}))", JsonAggregate = "array_to_json(array_agg({0}{1}))";
     public string LastInsertedKey = "currval(pg_get_serial_sequence('{0}', '{1}'))", NextKey = "nextval(pg_get_serial_sequence('{0}', '{1}'))";
     public string ListRows = "unnest({0}) {1}(v)";
@@ -65,15 +65,14 @@ sealed class Dialect
 
     public string InArray = "{0} = ANY({1})", NullSafeEqual = "{0} IS NOT DISTINCT FROM {1}", Now = "now()", Concat = "{0} || {1}";
     public string True = "true", False = "false", BigIntLiteral = "{0}::bigint", LockRows = "FOR UPDATE OF {0}";
-    // C#'s conversions between integers and floating point ({1} is the SQL type), the smaller and larger of two
-    // counts; Postgres's spelling, not a dialect's setting yet
+    // C#'s conversions between integers and floating point ({1} is the SQL type), the smaller and larger of two counts
     public string ToFloat = "CAST({0} AS {1})", ToInteger = "CAST(trunc({0}) AS {1})", Least = "LEAST({0}, {1})", Greatest = "GREATEST({0}, {1})";
     // the text functions of Utf8Operators
     public string LowerAscii = "translate({0}, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')", UpperAscii = "translate({0}, 'abcdefghijklmnopqrstuvwxyz', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ')";
     public string IntegerText = "CAST({0} AS text)";
     public string Trim = "trim(both {1} from {0})", TrimStart = "trim(leading {1} from {0})", TrimEnd = "trim(trailing {1} from {0})";
     public string Replace = "replace({0}, {1}, {2})", RegexReplace = "regexp_replace({0}, {1}, {2}, 'g')";
-    public bool SelectsConditions = true, ReturningAfter = true, WritableCtes = true, Lateral = true;
+    public bool SelectsConditions = true, ReturningAfter = true, Lateral = true, WritableCtes = true, InsertSelectNeedsWhere;
     public int InsertOrIgnore; // 0 ON CONFLICT DO NOTHING, 1 INSERT OR IGNORE, 2 none
 
     public static Dialect Of(INamedTypeSymbol provider, Known k)
@@ -89,8 +88,19 @@ sealed class Dialect
             {
                 case "Parameter": d.Parameter = (string)v!; break;
                 case "Quotes": d.Quotes = (string)v!; break;
+                case "Keywords":
+                    d.Keywords = new HashSet<string>(Reserved, StringComparer.OrdinalIgnoreCase);
+                    d.Keywords.UnionWith(((string)v!).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+                    break;
                 case "Paging": d.Paging = (string)v!; break;
                 case "Limit": d.Limit = (string)v!; break;
+                case "Offset": d.Offset = (string)v!; break;
+                case "ToInteger": d.ToInteger = (string)v!; break;
+                case "Least": d.Least = (string)v!; break;
+                case "Greatest": d.Greatest = (string)v!; break;
+                case "Lateral": d.Lateral = (bool)v!; break;
+                case "WritableCtes": d.WritableCtes = (bool)v!; break;
+                case "InsertSelectNeedsWhere": d.InsertSelectNeedsWhere = (bool)v!; break;
                 case "Returning": d.ReturningAfter = (int)v! == 0; break;
                 case "InsertOrIgnore": d.InsertOrIgnore = (int)v!; break;
                 case "JsonArray": d.JsonArray = (string)v!; break;
@@ -110,8 +120,6 @@ sealed class Dialect
                     d.False = parts.Length > 1 ? parts[1] : parts[0];
                     break;
                 case "SelectsConditions": d.SelectsConditions = (bool)v!; break;
-                case "WritableCtes": d.WritableCtes = (bool)v!; break;
-                case "Lateral": d.Lateral = (bool)v!; break;
                 case "BigIntLiteral": d.BigIntLiteral = (string)v!; break;
                 case "LockRows": d.LockRows = (string)v!; break;
                 case "LowerAscii": d.LowerAscii = (string)v!; break;
@@ -167,11 +175,15 @@ sealed class Dialect
         "key", "value", "values",
     };
 
+    /// <summary>The words an identifier is quoted for in this dialect: Postgres's reserved ones, and the dialect's own
+    /// keywords (<c>SqlDialectAttribute.Keywords</c>).</summary>
+    public HashSet<string> Keywords = Reserved;
+
     /// <summary>An identifier, quoted only where it needs it: a reserved word, or anything but lower case, digits and _.</summary>
     public string Quote(string name)
     {
         bool plain = name.Length > 0 && !char.IsDigit(name[0]) && name.All(c => c is (>= 'a' and <= 'z') or (>= '0' and <= '9') or '_');
-        if (plain && !Reserved.Contains(name)) return name;
+        if (plain && !Keywords.Contains(name)) return name;
         char open = Quotes[0], close = Quotes.Length > 1 ? Quotes[1] : Quotes[0];
         return open + name.Replace(close.ToString(), new string(close, 2)) + close;
     }
@@ -248,7 +260,7 @@ sealed class Select
         if (OrderBy.Count > 0) b.Append(" ORDER BY ").Append(string.Join(", ", OrderBy.Select(o => o.Desc ? o.Sql + " DESC" : o.Sql)));
         if (Limit is not null && Offset is not null) b.Append(' ').Append(Dialect.Format(d.Paging, Limit, Offset));
         else if (Limit is not null) b.Append(' ').Append(Dialect.Format(d.Limit, Limit));
-        else if (Offset is not null) b.Append(" OFFSET ").Append(Offset);
+        else if (Offset is not null) b.Append(' ').Append(Dialect.Format(d.Offset, Offset));
         if (Lock is not null) b.Append(' ').Append(Lock);
         return b.ToString();
     }
@@ -464,7 +476,7 @@ static class Sql
 }
 
 /// <summary>Gives each table reference in a statement its own alias, preferring the lambda's parameter name.</summary>
-sealed class Aliases
+sealed class Aliases(HashSet<string> keywords)
 {
     readonly HashSet<string> _used = new(StringComparer.Ordinal);
 
@@ -492,5 +504,5 @@ sealed class Aliases
     /// <summary>Keeps <paramref name="name"/> from the aliases taken after it: a name a statement refers to its target by.</summary>
     public void Reserve(string name) => _used.Add(name);
 
-    static bool Reserved(string a) => Dialect.Reserved.Contains(a);
+    bool Reserved(string a) => keywords.Contains(a);
 }

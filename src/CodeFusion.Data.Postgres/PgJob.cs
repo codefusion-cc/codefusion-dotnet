@@ -591,33 +591,22 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
     /// <summary>What this job counts against <see cref="Budget"/> while it is on the shared stack.</summary>
     long _kept;
     static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-    /// <summary>Buffers past this size go with a returned job instead of being pooled.</summary>
-    const int MaxPooledBytes = 64 << 10;
 
     // Completions run where SetResult is called, the loop thread: no thread-pool work item per command.
     // Core's race-free core (InlineValueTaskSourceCore says why): a caller that reads a result and builds its next
     // command on the same pooled job can't get this one's completion
     InlineValueTaskSourceCore<PgResult> _core;
 
+    /// <summary>Its generation and hold, and in Debug its steps: CodeFusion.Data's, as every provider's job. Pooled on
+    /// this class's own stack and thread caches, bounded by the loops' room and by bytes (above).</summary>
+    JobLife _life = new("Postgres", queuesUnheld: true);
+
     /// <summary>Changes each time the job goes back to the pool, so a stale <see cref="PgCommand"/> can't touch it.</summary>
-    internal int Generation;
+    internal int Generation => _life.Generation;
     /// <summary>Queued (or done): no more building, no second run.</summary>
     internal bool Submitted;
     /// <summary>Built and held (<see cref="PgCommand.Hold"/>): no more building, one run or a discard.</summary>
     internal bool Held;
-    /// <summary>While held and not yet taken for its run or discard: the generation it was held at, else
-    /// <see cref="Unclaimed"/>. Taken with one compare-exchange, so of two callers racing only one wins, and one with
-    /// a stale <see cref="PgHeld"/> never does.</summary>
-    long _heldAt = Unclaimed;
-    const long Unclaimed = -1;
-
-    /// <summary>Where a job is in its life. Debug builds check each step and the fields against it (Release ones
-    /// never set it): a step out of order hands one command's rows or result to another.</summary>
-    internal enum Life : byte { Pooled, Building, Held, Queued, Completed }
-    Life _life;
-    int _rentedGeneration;
-    /// <summary>Debug: the loops it was rented for, which count it out until it is back in the pool.</summary>
-    PgLoops? _owner;
 
     // ---- the command: Bind + Execute per statement, back to back ----
     internal byte[] Buf = new byte[512];
@@ -646,7 +635,7 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
     internal byte[]? Saved;
     internal int SavedLen;
 
-    PgJob() => FillReturned(); // Debug: as a returned job's, so the first rent checks the same way
+    PgJob() => JobLife.Poison(Buf); // Debug: as a returned job's, so the first rent checks the same way
 
     internal static PgJob Rent(PgStatement first)
     {
@@ -664,16 +653,16 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
         else
             lock (PoolLock) job = Pop();
         job ??= new PgJob();
-        job.CheckUnwritten();
-        job.To(Life.Building);
+        job._life.CheckPoisoned(job.Buf);
+        job._life.CheckPoisoned(job.Saved);
+        job.To(JobStep.Building);
         job.Statement(first);
         return job;
     }
 
     void Return()
     {
-        CheckReturnable();
-        Generation++;
+        _life.CheckReturnable();
         Submitted = false;
         Held = false;
         Handler = null;
@@ -685,11 +674,13 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
         Value = 0;
         _open = null;
         _arrayAt = -1;
-        if (Buf.Length > MaxPooledBytes) Buf = new byte[512];
-        if (Saved is { Length: > MaxPooledBytes }) Saved = null;
+        if (Buf.Length > JobPool.MaxPooledBytes) Buf = new byte[512];
+        if (Saved is { Length: > JobPool.MaxPooledBytes }) Saved = null;
         _core.Reset();
-        To(Life.Pooled);
-        FillReturned();
+        _life.Returned();
+        CheckInvariants();
+        JobLife.Poison(Buf);
+        JobLife.Poison(Saved);
         if (UseThreadCaches && Buf.Length <= SmallBuffer && (Saved is null || Saved.Length <= SmallBuffer))
         {
             var cache = t_cache ??= new Cache();
@@ -732,13 +723,13 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
     internal void Hold()
     {
         Held = true;
-        To(Life.Held);
-        Volatile.Write(ref _heldAt, (uint)Generation);
+        _life.Hold();
+        CheckInvariants();
     }
 
     /// <summary>Takes the held job for its run or discard; false if another caller took it, or it is no longer the
     /// generation <paramref name="generation"/> held.</summary>
-    internal bool Claim(int generation) => Interlocked.CompareExchange(ref _heldAt, Unclaimed, (uint)generation) == (uint)generation;
+    internal bool Claim(int generation) => _life.Claim(generation);
 
     internal ValueTask<PgResult> Task => new(this, _core.Version);
 
@@ -955,7 +946,7 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
 
     internal void Save(ReadOnlySpan<byte> row)
     {
-        CheckIs(Life.Queued);
+        CheckIs(JobStep.Queued);
         int need = SavedLen + 4 + row.Length;
         if (Saved is null || Saved.Length < need) Array.Resize(ref Saved, Math.Max(need, Math.Max(256, (Saved?.Length ?? 0) * 2)));
         BinaryPrimitives.WriteInt32BigEndian(Saved.AsSpan(SavedLen), row.Length);
@@ -966,7 +957,7 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
     /// <summary>Forgets what an earlier attempt read: the write runs again.</summary>
     internal void Restart()
     {
-        CheckIs(Life.Queued);
+        CheckIs(JobStep.Queued);
         SavedLen = 0;
         Rows = 0;
         Value = 0;
@@ -979,7 +970,7 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
     internal void Complete(in PgResult result)
     {
         // a second completion would complete a recycled job, someone else's command
-        To(Life.Completed);
+        To(JobStep.Completed);
         try
         {
             _core.SetResult(result);
@@ -995,7 +986,7 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
     /// <summary>The outcome of a run that reached its statement's end.</summary>
     internal PgResult Answer()
     {
-        CheckIs(Life.Queued);
+        CheckIs(JobStep.Queued);
         return Failure is null
             ? new PgResult(PgStatus.Ok, Rows, Value, Runs)
             : new PgResult(PgStatus.HandlerFailed, Rows, Value, Runs, Failure);
@@ -1005,36 +996,17 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
 
     /// <summary>Moves the job to <paramref name="next"/>, if its life allows that step, and checks its fields.</summary>
     [Conditional("DEBUG")]
-    internal void To(Life next)
+    internal void To(JobStep next)
     {
-        bool allowed = (_life, next) switch
-        {
-            (Life.Pooled, Life.Building) => true,
-            (Life.Building, Life.Held) or (Life.Building, Life.Queued) or (Life.Held, Life.Queued) => true,
-            (Life.Queued, Life.Completed) => true,
-            (not Life.Pooled, Life.Pooled) => true, // read (Completed), or discarded unrun
-            _ => false,
-        };
-        if (!allowed)
-            throw new InvalidOperationException(next == Life.Completed
-                ? $"a Postgres job was completed while {_life} (twice, or after its return)"
-                : $"a Postgres job went from {_life} to {next}");
-        if (next == Life.Building) _rentedGeneration = Generation;
-        _life = next;
+        _life.To(next);
         CheckInvariants();
-    }
-
-    [Conditional("DEBUG")]
-    void CheckReturnable()
-    {
-        if (_life == Life.Pooled) throw new InvalidOperationException("a Postgres job was returned twice");
     }
 
     /// <summary>The loop touches a job's run only while it is queued: after its completion it may be someone else's.</summary>
     [Conditional("DEBUG")]
-    internal void CheckIs(Life life)
+    internal void CheckIs(JobStep step)
     {
-        if (_life != life) throw new InvalidOperationException($"a Postgres job was used while {_life}, not {life}");
+        _life.CheckIs(step);
         CheckInvariants();
     }
 
@@ -1042,45 +1014,20 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
     [Conditional("DEBUG")]
     void CheckInvariants()
     {
-        bool ok = _life switch
+        bool ok = _life.Step switch
         {
-            Life.Pooled => !Submitted && !Held && Handler is null && State is null && Failure is null && Count == 0 && Len == 0 && _open is null,
-            Life.Building => !Submitted && !Held && Generation == _rentedGeneration,
-            Life.Held => Held && !Submitted && _open is null && Generation == _rentedGeneration,
-            _ => Submitted && _open is null && Count > 0 && Generation == _rentedGeneration,
+            JobStep.Pooled => !Submitted && !Held && Handler is null && State is null && Failure is null && Count == 0 && Len == 0 && _open is null,
+            JobStep.Building => !Submitted && !Held && Generation == _life.RentedGeneration,
+            JobStep.Held => Held && !Submitted && _open is null && Generation == _life.RentedGeneration,
+            _ => Submitted && _open is null && Count > 0 && Generation == _life.RentedGeneration,
         };
         if (!ok)
-            throw new InvalidOperationException($"a Postgres job {_life} with Submitted={Submitted}, Held={Held}, Generation={Generation} (rented at {_rentedGeneration}), {Count} statements");
+            throw new InvalidOperationException($"a Postgres job {_life.Step} with Submitted={Submitted}, Held={Held}, Generation={Generation} (rented at {_life.RentedGeneration}), {Count} statements");
     }
 
     /// <summary>Debug: counts the job out against <paramref name="loops"/> until it is back in the pool.</summary>
     [Conditional("DEBUG")]
-    internal void RentedBy(PgLoops loops)
-    {
-        _owner = loops;
-        Interlocked.Increment(ref loops.JobsOut);
-    }
-
-    /// <summary>Fills a returned job's buffers with 0xDD, so a reader that kept one sees garbage, and lets its loops
-    /// know it is back.</summary>
-    [Conditional("DEBUG")]
-    void FillReturned()
-    {
-        Buf.AsSpan().Fill(Returned);
-        Saved?.AsSpan().Fill(Returned);
-        if (_owner is { } owner) Interlocked.Decrement(ref owner.JobsOut);
-        _owner = null;
-    }
-
-    /// <summary>A job's buffers sat in the pool untouched: anything but 0xDD was written after its return.</summary>
-    [Conditional("DEBUG")]
-    void CheckUnwritten()
-    {
-        if (Buf.AsSpan().IndexOfAnyExcept(Returned) >= 0 || (Saved is not null && Saved.AsSpan().IndexOfAnyExcept(Returned) >= 0))
-            throw new InvalidOperationException("a pooled Postgres job's buffer was written to after its return");
-    }
-
-    const byte Returned = 0xDD;
+    internal void RentedBy(PgLoops loops) => _life.CountOut(loops.Jobs);
 
     PgResult IValueTaskSource<PgResult>.GetResult(short token)
     {

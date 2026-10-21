@@ -36,7 +36,7 @@ internal static class LoopChecks
                 failures.Add($"{n} exception(s) in the loops that no failing connection explains, the first: {l.FirstUnexpected}");
             if (l.Queued > 0) failures.Add($"{l.Queued} command(s) left in the queue");
 #if DEBUG
-            if (Volatile.Read(ref l.JobsOut) is int jobs and not 0) failures.Add($"{jobs} job(s) never back in the pool: a command's task not read, or read twice");
+            if (l.JobsOut is int jobs and not 0) failures.Add($"{jobs} job(s) never back in the pool: a command's task not read, or read twice");
 #endif
         }
         Assert.True(failures.Count == 0, string.Join("\n", failures));
@@ -48,7 +48,7 @@ internal static class LoopChecks
     {
         Assert.True(Volatile.Read(ref loops.UnexpectedFailures) == 0, $"exceptions in the loops that no failing connection explains, the first: {loops.FirstUnexpected}");
 #if DEBUG
-        Assert.True(Volatile.Read(ref loops.JobsOut) == 0, $"{loops.JobsOut} job(s) out with nothing in flight");
+        Assert.True(loops.JobsOut == 0, $"{loops.JobsOut} job(s) out with nothing in flight");
 #endif
     }
 }

@@ -134,6 +134,34 @@ Fixes go into the latest release only.
   is theirs to clear, and a password that SASLprep must normalize (rare: compatibility characters, combining marks),
   which passes through one more string.
 
+## CodeFusion.Data.Sqlite
+
+- **The native library** is SourceGear.sqlite3's `e_sqlite3`. What is pinned and checked, exactly:
+  - Its version, 3.50.4.5, exactly: in this repository's build (`Directory.Packages.props`, `[3.50.4.5]`) and in the
+    package's dependency. NuGet holds an app to that version unless the app references SourceGear.sqlite3 itself: a
+    direct reference to another version wins, with only an NU1608 warning. The check at open below then refuses it.
+  - The package file this repository builds with: its SHA-512, as NuGet records it beside the package, is checked at
+    every build of CodeFusion.Data.Sqlite (`CheckSqliteNativePackage`). An app that consumes the package gets no such
+    check from it; an app that wants one keeps its own lock file (`RestorePackagesWithLockFile`).
+  - At first use, the library loaded, wherever it was loaded from (a portable app's `runtimes/` folder, or the app's
+    own directory, where a RID-specific, self-contained or AOT publish puts it): it must report the tested build,
+    `sqlite3_libversion_number` 3050004 and `sqlite3_sourceid` "2025-07-30 19:33:53 4d8adfb3…", or the provider refuses
+    it and says so. An app that ships its own SQLite build on purpose sets the AppContext switch
+    `CodeFusion.Data.Sqlite.OwnSqliteBuild` to true. The switch turns off only the tested-build check (version and
+    source id); what the provider needs is still checked: 3.44 or newer, not single-threaded (`SQLITE_THREADSAFE=0`),
+    able to say its compile options, and not built without JSON, CTEs, upserts, WAL or subqueries. Each refusal says
+    why. Set it only for a build the app chose and tests itself, never to get past a refusal of a library it didn't
+    mean to ship (a newer SourceGear.sqlite3 through a direct reference): pin that reference instead.
+  - The one call that differs by platform, `sqlite3_config` on Apple arm64 (a variadic argument on the stack), is
+    tested only on a Mac (`BuildCheckTests.MemoryStatisticsAreOff`); CI runs Linux.
+- **Parameters are always bound**, never spliced into SQL text. Identifiers the generator writes are quoted when they
+  are SQLite keywords.
+- **What a client can make the server allocate.** A query that runs allocates nothing once warm, and neither does one
+  that ends as a unique violation (a 409), busy or a timeout. Any other failure carries a `SqliteException` with
+  SQLite's message, a few hundred bytes; the reply is the context's 500 and never includes it. Commands with more than
+  64 parameters or columns allocate their offsets. The README's
+  [Zero allocations, measured](src/CodeFusion.Data.Sqlite/README.md#zero-allocations-measured) has the full list.
+
 ## CodeFusion.Security.Bcrypt
 
 ### What it does to keep hashes safe

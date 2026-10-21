@@ -67,11 +67,16 @@ public sealed class RunsAloneAttribute : Attribute;
 /// [SqlTemplate("lower({0})")] public static Utf8 Lower(Utf8 text) => throw new NotSupportedException();
 /// </code>
 /// </summary>
-[AttributeUsage(AttributeTargets.Method, Inherited = false)]
+[AttributeUsage(AttributeTargets.Method, Inherited = false, AllowMultiple = true)]
 public sealed class SqlTemplateAttribute(string template) : Attribute
 {
     /// <summary>The SQL, with <c>{0}</c> for the first argument.</summary>
     public string Template { get; } = template;
+
+    /// <summary>The dialect (its <see cref="SqlDialectAttribute.Name"/>, such as <c>sqlite</c>) this template is for; null:
+    /// any dialect without one of its own. A method may carry one template per dialect; in a dialect it has none for, a
+    /// method whose body is an expression it translates is that expression (a slug rule in LINQ, and SQLite's own SQL).</summary>
+    public string? Dialect { get; init; }
 }
 
 /// <summary>

@@ -21,13 +21,35 @@ sealed partial class Translator
 
     public bool IsDefinition(ISymbol s) => Known.Attribute(s.OriginalDefinition, K.QueryDefinition) is not null;
 
+    /// <summary>The SQL of a [SqlTemplate] method in this dialect: its template for the dialect, else its template for any
+    /// dialect; null when the method isn't one, or has neither and a definition of its own (its body, translated).</summary>
+    string? Template(IMethodSymbol m, Location at)
+    {
+        string? any = null, mine = null;
+        bool template = false;
+        foreach (var a in m.GetAttributes())
+        {
+            if (!Known.Same(a.AttributeClass, K.SqlTemplate)) continue;
+            template = true;
+            string sql = (string)a.ConstructorArguments[0].Value!;
+            string? dialect = a.NamedArguments.FirstOrDefault(n => n.Key == "Dialect").Value.Value as string;
+            if (dialect is null) any ??= sql;
+            else if (dialect == D.Name) mine ??= sql;
+        }
+        if (!template) return null;
+        if ((mine ?? any) is { } chosen) return chosen;
+        // none for this dialect: a method with a definition of its own is that here, as a method without templates is
+        if (m.IsStatic && Inlinable(m, out var body) && Unwrap(body!) is not IThrowOperation) return null;
+        throw new Refused(at, $"'{m.Name}', which has no [SqlTemplate] for the {D.Name} dialect");
+    }
+
     Value Invoke(IInvocationOperation inv, Env env)
     {
         var m = inv.TargetMethod;
         var at = inv.Syntax.GetLocation();
         var args = inv.Arguments.Where(a => a.Parameter is not null).OrderBy(a => a.Parameter!.Ordinal).Select(a => Unwrap(a.Value)).ToList();
 
-        if (Known.Attribute(m, K.SqlTemplate) is { } template)
+        if (Template(m, at) is { } template)
         {
             // the template may put an argument in a subquery of its own, where a bare column is its table's: the
             // row an UPDATE or DELETE writes is qualified by its name, as in a subquery the translator writes
@@ -36,7 +58,7 @@ sealed partial class Translator
             // its declared type says whether it gives NULL back (coalesce({0}, '') returning Utf8 doesn't), unless it
             // is given a NULL where its parameter takes none, which SQL's functions mostly give back (lower(NULL))
             bool nullable = IsNullable(m.ReturnType) || values.Where((v, i) => i >= m.Parameters.Length || !IsNullable(m.Parameters[i].Type)).Any(MayBeNull);
-            return new SqlValue(Dialect.Format((string)template.ConstructorArguments[0].Value!, sql), m.ReturnType, nullable);
+            return new SqlValue(Dialect.Format(template, sql), m.ReturnType, nullable);
         }
         if (Known.Same(m.ContainingType, K.SqlFunctions))
             return m.Name switch
@@ -278,11 +300,13 @@ sealed partial class Translator
                     if (!selected || current is not (SqlValue or Host or Constant))
                         throw new Refused(at, "AsJson of rows: select one value of each first (Select(t => t.Name).AsJson())");
                     string value = Operand(current, at);
+                    // a template that aggregates around the subquery names its column {1}
+                    string? column = D.JsonArray.Contains("{1}") ? Aliases.Take("v") : null;
                     sub.Columns.Clear();
-                    sub.Columns.Add((value, null));
+                    sub.Columns.Add((value, column));
                     for (int i = 0; i < sub.OrderBy.Count; i++)
                         if (sub.OrderBy[i].Sql == value) sub.OrderBy[i] = ("1", sub.OrderBy[i].Desc);
-                    return new SqlValue(Dialect.Format(D.JsonArray, sub.Render(D)), inv.Type!, false);
+                    return new SqlValue(Dialect.Format(D.JsonArray, sub.Render(D), column ?? ""), inv.Type!, false);
                 });
             default:
                 throw new Refused(at, $"'{name}' on a navigation");

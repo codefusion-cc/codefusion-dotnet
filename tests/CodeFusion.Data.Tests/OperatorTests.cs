@@ -707,47 +707,7 @@ public sealed class OperatorTests(OpsFixture fixture)
         Assert.Equal("""{"id":7,"text":"seven"}""", await Json(db.LabelOnce(7, U("other"))));
     }
 
-    [Fact]
-    public async Task AConditionalWriteOfSeveralRowsWritesEachWhoseConditionHolds()
-    {
-        var db = Db(write: true);
-        await using var admin = TestDb.Admin("cfdata_ops_w");
-        await admin.Execute("INSERT INTO teams VALUES (3, 'green'); INSERT INTO people (id, name, age, active, born, team_id) VALUES " +
-            "(311, 'dt311', 50, true, now(), 3), (312, 'dt312', 50, true, now(), 3), (313, 'dt313', 50, false, now(), 3), (321, 'dp321', 50, true, now(), NULL); " +
-            "INSERT INTO pets VALUES (3211, 321, 'a', 4), (3212, 321, 'b', 4), (3213, 321, 'c', 2)");
-        await Json(db.DeactivateTeam(3));
-        Assert.Equal(204, _response.Status);
-        Assert.Equal(0L, await admin.Scalar("SELECT count(*) FROM people WHERE team_id = 3 AND active"));
-        await Json(db.DeletePetsIf(321, 4));
-        Assert.Equal(204, _response.Status);
-        Assert.Equal("3213", string.Join(",", await Column(admin, "SELECT id FROM pets WHERE owner_id = 321 ORDER BY id")));
-    }
-
-    [Fact]
-    public async Task AConditionalWriteOfSeveralRowsGivesBackTheFirstWrittenOrRefusedWhenNoneWas()
-    {
-        var db = Db(write: true);
-        await using var admin = TestDb.Admin("cfdata_ops_w");
-        // the refused rows come first as the table is read
-        await admin.Execute("INSERT INTO teams VALUES (4, 'gray'); INSERT INTO people (id, name, age, active, born, team_id) VALUES " +
-            "(391, 'gt391', 50, false, now(), 4), (393, 'gt393', 50, true, now(), 4), (392, 'gt392', 50, true, now(), 4), (381, 'po381', 50, true, now(), NULL); " +
-            "INSERT INTO pets VALUES (3811, 381, 'two', 2), (3813, 381, 'four', 4), (3812, 381, 'four', 4)");
-        _response.Next();
-        var deleted = await db.DeleteAPetIf(381, 4);
-        Assert.False(deleted.Refused);
-        Assert.Equal(3812, deleted.Value);
-        Assert.Equal("3811", string.Join(",", await Column(admin, "SELECT id FROM pets WHERE owner_id = 381 ORDER BY id")));
-        _response.Next();
-        var refused = await db.DeleteAPetIf(381, 4);
-        Assert.True(refused.Refused);
-        Assert.Equal("""{"id":392,"text":"gt392"}""", await Json(db.NickTeamIfActive(4, U("n"))));
-        Assert.Equal(200, _response.Status);
-        Assert.Equal(2L, await admin.Scalar("SELECT count(*) FROM people WHERE team_id = 4 AND nick = 'n'"));
-        await Json(db.NickTeamIfActive(2, U("n")));
-        Assert.Equal(403, _response.Status);
-    }
-
-    static async Task<System.Collections.Generic.List<long>> Column(Npgsql.NpgsqlDataSource db, string sql)
+    internal static async Task<System.Collections.Generic.List<long>> Column(Npgsql.NpgsqlDataSource db, string sql)
     {
         await using var cmd = db.CreateCommand(sql);
         await using var r = await cmd.ExecuteReaderAsync();
@@ -891,4 +851,31 @@ public sealed class OperatorTests(OpsFixture fixture)
     {
         foreach (var n in names) yield return n.Length > 0 ? U(n) : throw new FormatException("an empty name");
     }
+}
+
+/// <summary>The shared conditional-write tests on Postgres.</summary>
+[Collection(nameof(OpsTests))]
+public sealed class PostgresConditionalWriteTests(OpsFixture fixture) : ConditionalWriteTests
+{
+    protected override OpsDb Writes()
+    {
+        TestDb.Require();
+        var db = fixture.Writes.CreateContext<OpsDb>();
+        db.Bind(Response);
+        return db;
+    }
+
+    protected override async Task Execute(string sql)
+    {
+        await using var admin = TestDb.Admin("cfdata_ops_w");
+        await admin.Execute(sql);
+    }
+
+    protected override async Task<string> Column(string sql)
+    {
+        await using var admin = TestDb.Admin("cfdata_ops_w");
+        return string.Join(",", await OperatorTests.Column(admin, sql));
+    }
+
+    protected override string Now => "now()";
 }

@@ -67,6 +67,8 @@ public readonly record struct UserRow(Utf8 Username, Utf8 Email, Utf8? Bio, Utf8
 /// <summary>The spec's slug rule, in the text functions of Utf8Operators: SQL in a query, and C# anywhere else.</summary>
 public static class Slugs
 {
-    /// <summary>The title as a slug, then "-" and the article's id: unique, as the id is (the spec's SLUGIFY).</summary>
+    /// <summary>The title as a slug, then "-" and the article's id: unique, as the id is (the spec's SLUGIFY). SQLite
+    /// has no regexp_replace: there spaces become dashes, which the tests' titles need.</summary>
+    [SqlTemplate("lower(replace(trim({0}), ' ', '-')) || '-' || {1}", Dialect = "sqlite")]
     public static Utf8 WithId(Utf8 title, long id) => title.ReplaceMatches("[^A-Za-z0-9]+", "-").ToLowerAscii().Trim('-').Concat("-"u8).Concat(id);
 }

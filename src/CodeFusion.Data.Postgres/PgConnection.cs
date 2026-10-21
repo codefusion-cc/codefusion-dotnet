@@ -972,7 +972,7 @@ sealed class PgConnection : IDisposable
 
     void Row(PgJob job, ReadOnlySpan<byte> body, bool keep, int statement)
     {
-        job.CheckIs(PgJob.Life.Queued);
+        job.CheckIs(JobStep.Queued);
         if (keep)
         {
             job.Save(body);
@@ -998,7 +998,7 @@ sealed class PgConnection : IDisposable
     void Ended(PgJob?[] group, int slot, bool keep)
     {
         var job = group[slot]!;
-        job.CheckIs(PgJob.Life.Queued);
+        job.CheckIs(JobStep.Queued);
         job.Runs++;
         if (keep) return;
         if (_answeredCount == _answered.Length) Array.Resize(ref _answered, _answeredCount * 2);

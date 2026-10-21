@@ -233,6 +233,9 @@ sealed class Row(EntityInfo entity, string? alias, Select? owner, RowMode mode =
     public bool Required;
     /// <summary>Reached through a left join (here or before): every column may be NULL.</summary>
     public bool Optional;
+    /// <summary>Its navigations join LEFT though its columns aren't NULL where they are read: a row's children joined by
+    /// their keys (SQLite), where a row without children is one row whose key marks it, not one of NULL values.</summary>
+    public bool JoinsLeft;
     /// <summary>Through: the scalar subquery written for each column, so a column used twice is the same SQL.</summary>
     public readonly Dictionary<string, string> ColumnSql = new();
     /// <summary>PageSource: the key column, the row it identifies, and the navigation to it (null when the key is the row's own).</summary>
@@ -285,7 +288,7 @@ sealed partial class Translator
     public void StartStatement()
     {
         Params = new ParamList(D);
-        Aliases = new Aliases();
+        Aliases = new Aliases(D.Keywords);
     }
 
     // ---------- the model ----------
@@ -312,10 +315,10 @@ sealed partial class Translator
     /// <summary>
     /// A template of the table's key sequence (<see cref="Dialect.LastInsertedKey"/>, <see cref="Dialect.NextKey"/>),
     /// whose arguments are in a string literal: the table as SQL, which Postgres parses (case folded unless quoted),
-    /// and the column as it is.
+    /// the column as it is, and the table's name as it is (SQLite's sqlite_sequence holds that).
     /// </summary>
     public string Sequence(string template, EntityInfo e, ColumnInfo key) =>
-        Dialect.Format(template, TableSql(e).Replace("'", "''"), key.Name.Replace("'", "''"));
+        Dialect.Format(template, TableSql(e).Replace("'", "''"), key.Name.Replace("'", "''"), e.Table.Replace("'", "''"));
 
     public ViewInfo View(ITypeSymbol type, Location? at)
     {
@@ -673,15 +676,27 @@ sealed partial class Translator
             throw new Refused(at, $"the navigation '{nav.Property.Name}' from this row");
         var target = Entity(nav.Target, at);
         Unwritten(target, at);
+        if (row.Owner is null && !D.WritableCtes && row.Mode == RowMode.Table && row.Name is { } name)
+        {
+            // the row an UPDATE, DELETE or INSERT writes, in its RETURNING (no join there, and no writable CTE to select
+            // from): the navigation's key is the written row's foreign key, its other columns are lookups by it
+            var lookup = new Row(target, null, null, RowMode.Through) { JoinAlias = name, JoinColumn = nav.ForeignKey.Name, Optional = nav.ForeignKey.Kind.Nullable };
+            row.Joins[nav.Property.Name] = lookup;
+            return lookup;
+        }
         var owner = row.Owner ?? throw new Refused(at, $"the navigation '{nav.Property.Name}' here (it would need a join)");
         string fk = Column(row, nav.ForeignKey, at);
         string alias = Aliases.ForTable(target.Table);
         // a nullable key, or a row a left join reached, may have no target: the join keeps the row either way
         bool optional = nav.ForeignKey.Kind.Nullable || row.Optional;
-        string join = $"{(optional ? "LEFT JOIN" : "JOIN")} {TableSql(target)} {alias} ON {alias}.{D.Quote(KeyOf(target, at).Name)} = {fk}";
+        string join = $"{(optional || row.JoinsLeft ? "LEFT JOIN" : "JOIN")} {TableSql(target)} {alias} ON {alias}.{D.Quote(KeyOf(target, at).Name)} = {fk}";
         owner.Joins.Add(join);
         // equal under an inner join; a left join's NULL row would have a NULL key where the foreign key isn't
-        var r = new Row(target, alias, owner) { KeyViaForeignKey = optional ? null : fk, Optional = optional, JoinSql = join, Required = nav.Required && !optional };
+        var r = new Row(target, alias, owner)
+        {
+            KeyViaForeignKey = optional ? null : fk, Optional = optional, JoinsLeft = row.JoinsLeft, JoinSql = join,
+            Required = nav.Required && !optional && !row.JoinsLeft,
+        };
         row.Joins[nav.Property.Name] = r;
         return r;
     }

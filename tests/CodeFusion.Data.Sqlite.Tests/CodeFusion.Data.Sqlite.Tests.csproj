@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- CodeFusion.Data.Sqlite: the Conduit queries the generator compiles for SQLite, run against SQLite files in a temp
+       folder with the same seed and the same expectations as CodeFusion.Data.Tests' execution tests (linked from there),
+       plus the provider's own tests: group commit, crash recovery, races, allocation. Nothing to set up: SQLite runs in
+       the test process. The allocation tests run in Release only. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>CodeFusion.Data.Sqlite.Tests</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <InterceptorsNamespaces>$(InterceptorsNamespaces);CodeFusion.Data.Generated</InterceptorsNamespaces>
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <NoWarn>$(NoWarn);CA1861;CA2012;CA1515;CA1819;CS1591;CA1001;CA1711;CA1707;xUnit1051;xUnit1069</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <Compile Include="../Shared/RunGuard.cs" Link="Shared/RunGuard.cs" />
+    <ProjectReference Include="../../src/CodeFusion.Data.Sqlite/CodeFusion.Data.Sqlite.csproj" />
+    <!-- a real event-loop server (HttpServer with HttpTransport.EventLoop) ending SQLite batches: ServerLoopTests -->
+    <ProjectReference Include="../../src/CodeFusion.Http/CodeFusion.Http.csproj" />
+    <!-- The crash tests start and kill it; built next to the tests. -->
+    <ProjectReference Include="../CodeFusion.Data.Sqlite.CrashChild/CodeFusion.Data.Sqlite.CrashChild.csproj" />
+    <ProjectReference Include="../../src/CodeFusion.Data.Generator/CodeFusion.Data.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
+    <!-- Conduit's entities, views and LINQ queries, shared with the Postgres tests; this project adds SQLite's part. -->
+    <Compile Include="../Shared/Conduit/Entities.cs" Link="Conduit/Entities.cs" />
+    <Compile Include="../Shared/Conduit/Views.cs" Link="Conduit/Views.cs" />
+    <Compile Include="../Shared/Conduit/ConduitQueries.cs" Link="Conduit/ConduitQueries.cs" />
+    <!-- The operator tests' schema and LINQ queries, shared with the Postgres tests. -->
+    <Compile Include="../Shared/Ops/OpsQueries.cs" Link="Ops/OpsQueries.cs" />
+    <Compile Include="../Shared/Ops/ConditionalWriteTests.cs" Link="Ops/ConditionalWriteTests.cs" />
+    <!-- The execution tests and their oracle, as they are: the same cases and expected replies as on Postgres. -->
+    <Compile Include="../CodeFusion.Data.Tests/ExecutionTests.cs" Link="Shared/ExecutionTests.cs" />
+    <Compile Include="../CodeFusion.Data.Tests/SeedModel.cs" Link="Shared/SeedModel.cs" />
+    <Compile Include="../CodeFusion.Data.Tests/FakeResponse.cs" Link="Shared/FakeResponse.cs" />
+    <Compile Include="../CodeFusion.Data.Tests/Texts.cs" Link="Shared/Texts.cs" />
+    <Compile Include="../CodeFusion.Data.Tests/AllocationTests.cs" Link="Shared/AllocationTests.cs" />
+  </ItemGroup>
+
+</Project>

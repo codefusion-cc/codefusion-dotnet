@@ -245,12 +245,16 @@ CodeFusion.Data.SqlDialectAttribute.Booleans.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Booleans.init -> void
 CodeFusion.Data.SqlDialectAttribute.Concat.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Concat.init -> void
+CodeFusion.Data.SqlDialectAttribute.Greatest.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Greatest.init -> void
 CodeFusion.Data.SqlDialectAttribute.InArray.get -> string!
 CodeFusion.Data.SqlDialectAttribute.InArray.init -> void
 CodeFusion.Data.SqlDialectAttribute.InsertOrIgnore.get -> CodeFusion.Data.SqlInsertOrIgnore
 CodeFusion.Data.SqlDialectAttribute.InsertOrIgnore.init -> void
 CodeFusion.Data.SqlDialectAttribute.IntegerText.get -> string!
 CodeFusion.Data.SqlDialectAttribute.IntegerText.init -> void
+CodeFusion.Data.SqlDialectAttribute.InsertSelectNeedsWhere.get -> bool
+CodeFusion.Data.SqlDialectAttribute.InsertSelectNeedsWhere.init -> void
 CodeFusion.Data.SqlDialectAttribute.JsonAggregate.get -> string!
 CodeFusion.Data.SqlDialectAttribute.JsonAggregate.init -> void
 CodeFusion.Data.SqlDialectAttribute.JsonArray.get -> string!
@@ -261,6 +265,10 @@ CodeFusion.Data.SqlDialectAttribute.Lateral.get -> bool
 CodeFusion.Data.SqlDialectAttribute.Lateral.init -> void
 CodeFusion.Data.SqlDialectAttribute.ListRows.get -> string!
 CodeFusion.Data.SqlDialectAttribute.ListRows.init -> void
+CodeFusion.Data.SqlDialectAttribute.Keywords.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Keywords.init -> void
+CodeFusion.Data.SqlDialectAttribute.Least.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Least.init -> void
 CodeFusion.Data.SqlDialectAttribute.LockRows.get -> string!
 CodeFusion.Data.SqlDialectAttribute.LockRows.init -> void
 CodeFusion.Data.SqlDialectAttribute.Limit.get -> string!
@@ -274,6 +282,8 @@ CodeFusion.Data.SqlDialectAttribute.Now.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Now.init -> void
 CodeFusion.Data.SqlDialectAttribute.NullSafeEqual.get -> string!
 CodeFusion.Data.SqlDialectAttribute.NullSafeEqual.init -> void
+CodeFusion.Data.SqlDialectAttribute.Offset.get -> string!
+CodeFusion.Data.SqlDialectAttribute.Offset.init -> void
 CodeFusion.Data.SqlDialectAttribute.Paging.get -> string!
 CodeFusion.Data.SqlDialectAttribute.Paging.init -> void
 CodeFusion.Data.SqlDialectAttribute.Parameter.get -> string!
@@ -299,6 +309,8 @@ CodeFusion.Data.SqlDialectAttribute.TrimStart.get -> string!
 CodeFusion.Data.SqlDialectAttribute.TrimStart.init -> void
 CodeFusion.Data.SqlDialectAttribute.UpperAscii.get -> string!
 CodeFusion.Data.SqlDialectAttribute.UpperAscii.init -> void
+CodeFusion.Data.SqlDialectAttribute.ToInteger.get -> string!
+CodeFusion.Data.SqlDialectAttribute.ToInteger.init -> void
 CodeFusion.Data.SqlDialectAttribute.WritableCtes.get -> bool
 CodeFusion.Data.SqlDialectAttribute.WritableCtes.init -> void
 CodeFusion.Data.SqlFunctions
@@ -320,6 +332,8 @@ CodeFusion.Data.SqlString.AppendLiteral(string! literal) -> void
 CodeFusion.Data.SqlString.SqlString() -> void
 CodeFusion.Data.SqlString.SqlString(int literalLength, int formattedCount) -> void
 CodeFusion.Data.SqlTemplateAttribute
+CodeFusion.Data.SqlTemplateAttribute.Dialect.get -> string?
+CodeFusion.Data.SqlTemplateAttribute.Dialect.init -> void
 CodeFusion.Data.SqlTemplateAttribute.SqlTemplateAttribute(string! template) -> void
 CodeFusion.Data.SqlTemplateAttribute.Template.get -> string!
 CodeFusion.Data.Table<T>

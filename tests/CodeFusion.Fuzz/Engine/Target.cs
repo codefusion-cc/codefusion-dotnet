@@ -38,6 +38,8 @@ static class Targets
         new("pg-scram-first", PgTargets.ScramClientFinal, 1024, 600),
         new("pg-scram-final", PgTargets.ScramServerFinal, 1024, 6000),
         new("pg-settings", PgTargets.Settings, 1024, 6000),
+        new("sqlite-json-array", SqliteTargets.JsonArray, 2048, 4000),
+        new("sqlite-saved-row", SqliteTargets.SavedRow, 1024, 3000),
     ];
 
     public static Target Get(string name) =>

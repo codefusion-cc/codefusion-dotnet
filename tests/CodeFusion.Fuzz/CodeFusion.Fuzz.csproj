@@ -4,7 +4,8 @@
   <Import Project="../../src/CodeFusion.Http/buildTransitive/CodeFusion.Http.props" />
 
   <!-- Coverage-guided fuzzing of the code that reads bytes from the network: the HTTP request parser (alone and
-       against Kestrel's), the JSON body binder, and the Postgres client's message, startup and SCRAM parsing.
+       against Kestrel's), the JSON body binder, the Postgres client's message, startup and SCRAM parsing; and of the
+       SQLite provider's text arrays and kept rows.
        The same targets run two ways (README.md):
        - dotnet test: Corpus/ is replayed and mutated a fixed number of times from a fixed seed, on every build;
        - CODEFUSION_FUZZ=<target> under libfuzzer-dotnet with the libraries instrumented by sharpfuzz (CI, nightly). -->
@@ -28,6 +29,7 @@
     <PackageReference Include="SharpFuzz" />
     <ProjectReference Include="../../src/CodeFusion.Http/CodeFusion.Http.csproj" />
     <ProjectReference Include="../../src/CodeFusion.Data.Postgres/CodeFusion.Data.Postgres.csproj" />
+    <ProjectReference Include="../../src/CodeFusion.Data.Sqlite/CodeFusion.Data.Sqlite.csproj" />
     <ProjectReference Include="../../src/CodeFusion.Http.Generators/CodeFusion.Http.Generators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <Compile Include="../CodeFusion.Http.Tests/Sample/SampleApp.cs" Link="Json/SampleApp.cs" />
     <Compile Include="../CodeFusion.Http.Tests/TestTransport.cs" Link="Json/TestTransport.cs" />

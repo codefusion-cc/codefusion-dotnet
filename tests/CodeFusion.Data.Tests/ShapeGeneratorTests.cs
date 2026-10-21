@@ -125,6 +125,28 @@ public sealed class ShapeGeneratorTests
             CodeFusion.Data.Generator.Dialect.ThenGuardOfPostgres);
     }
 
+    [Fact]
+    public void AMethodWithATemplateOnlyForAnotherDialectIsItsDefinitionHere()
+    {
+        string source = Context("""
+                public Many<Name> Low() => People.Select(p => new Name(p.Id, Lowers.Of(p.Name))).Many();
+                public Many<Name> Thrown() => People.Select(p => new Name(p.Id, Lowers.Nowhere(p.Name))).Many();
+            """, """
+            public static class Lowers
+            {
+                [SqlTemplate("lite_lower({0})", Dialect = "lite")]
+                public static Utf8 Of(Utf8 text) => text.ToLowerAscii();
+
+                [SqlTemplate("lite_lower({0})", Dialect = "lite")]
+                public static Utf8 Nowhere(Utf8 text) => throw new System.NotSupportedException();
+            }
+            """);
+        var r = Run(source);
+        Assert.Equal("SELECT p.id, translate(p.name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') FROM people p", r.Sql("Low"));
+        // a method that is only its templates still needs one for the dialect
+        Assert.Contains("'Nowhere', which has no [SqlTemplate] for the postgres dialect", Message(Single(r, "CFDATA001")), System.StringComparison.Ordinal);
+    }
+
     // ---------- an insert of a list's texts ----------
 
     [Fact]

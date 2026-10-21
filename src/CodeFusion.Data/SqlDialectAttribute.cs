@@ -39,6 +39,10 @@ public sealed class SqlDialectAttribute : Attribute
     /// <summary>A parameter's marker; {0} is its number from 1: <c>${0}</c> (Postgres), <c>?{0}</c> (SQLite), <c>@p{0}</c> (SQL Server).</summary>
     public string Parameter { get; init; } = "${0}";
 
+    /// <summary>Words this dialect keeps for itself beyond Postgres's reserved ones, space-separated: a table, column or
+    /// alias that is one of them is quoted. SQLite lists its own keywords here.</summary>
+    public string Keywords { get; init; } = "";
+
     /// <summary>The characters a quoted identifier starts and ends with: <c>""</c>, or <c>[]</c> for SQL Server.
     /// Identifiers are quoted only where they need it (reserved words, capitals).</summary>
     public string Quotes { get; init; } = "\"\"";
@@ -50,6 +54,10 @@ public sealed class SqlDialectAttribute : Attribute
     /// <summary>A limit alone; {0} is the limit.</summary>
     public string Limit { get; init; } = "LIMIT {0}";
 
+    /// <summary>An offset alone; {0} is the offset: <c>OFFSET {0}</c>, or <c>LIMIT -1 OFFSET {0}</c> for SQLite, whose OFFSET
+    /// needs a LIMIT.</summary>
+    public string Offset { get; init; } = "OFFSET {0}";
+
     /// <summary>How changed rows come back.</summary>
     public SqlReturning Returning { get; init; } = SqlReturning.Returning;
 
@@ -57,19 +65,21 @@ public sealed class SqlDialectAttribute : Attribute
     public SqlInsertOrIgnore InsertOrIgnore { get; init; } = SqlInsertOrIgnore.OnConflictDoNothing;
 
     /// <summary>A list of a correlated subquery's single column as one JSON array (never NULL); {0} is the subquery:
-    /// <c>array_to_json(ARRAY({0}))</c>; SQLite <c>(SELECT json_group_array(v) FROM ({0}))</c>.</summary>
+    /// <c>array_to_json(ARRAY({0}))</c>. A template that names {1} gets the subquery's column aliased so, for an
+    /// aggregate around it: SQLite <c>(SELECT json_group_array({1}) FROM ({0}))</c>.</summary>
     public string JsonArray { get; init; } = "array_to_json(ARRAY({0}))";
 
     /// <summary>An aggregate of a whole query's single column as one JSON array (NULL without rows); {0} is the
     /// value, {1} its <c>ORDER BY</c> clause or empty: <c>array_to_json(array_agg({0}{1}))</c>.</summary>
     public string JsonAggregate { get; init; } = "array_to_json(array_agg({0}{1}))";
 
-    /// <summary>The key the last insert in this unit drew; {0} is the table, {1} the key column:
-    /// <c>currval(pg_get_serial_sequence('{0}', '{1}'))</c>; SQLite <c>last_insert_rowid()</c>.</summary>
+    /// <summary>The key the last insert into the table in this unit drew; {0} is the table as SQL (quoted where it
+    /// must be), {1} the key column, {2} the table's name as it is, each escaped for a string literal:
+    /// <c>currval(pg_get_serial_sequence('{0}', '{1}'))</c>; SQLite's is the table's row of <c>sqlite_sequence</c>.</summary>
     public string LastInsertedKey { get; init; } = "currval(pg_get_serial_sequence('{0}', '{1}'))";
 
-    /// <summary>Draws a new key before the row is inserted, so the row's other values can use it; {0} is the table,
-    /// {1} the key column. Empty: the dialect can't, and an insert whose values use its own key is refused.</summary>
+    /// <summary>Draws a new key before the row is inserted, so the row's other values can use it; {0}, {1} and {2} as
+    /// in <see cref="LastInsertedKey"/>. Empty: the dialect can't, and an insert whose values use its own key is refused.</summary>
     public string NextKey { get; init; } = "nextval(pg_get_serial_sequence('{0}', '{1}'))";
 
     /// <summary>Whether {0} is one of the elements of the array parameter {1}: <c>{0} = ANY({1})</c>.</summary>
@@ -153,13 +163,30 @@ public sealed class SqlDialectAttribute : Attribute
     /// </summary>
     public string? ThenGuard { get; init; }
 
-    /// <summary>Whether a subquery in FROM may refer to the rows before it (<c>CROSS JOIN LATERAL</c>). False (SQLite): a
-    /// page of the newest rows per group (<c>SelectMany</c> before <c>Page</c>) is refused.</summary>
+    /// <summary>A floating-point value as an integer, cut toward zero as C# casts it; {0} is the value, {1} the SQL integer
+    /// type: <c>CAST(trunc({0}) AS {1})</c>; SQLite <c>CAST({0} AS {1})</c>, whose cast already cuts toward zero.</summary>
+    public string ToInteger { get; init; } = "CAST(trunc({0}) AS {1})";
+
+    /// <summary>The smaller of two counts (never NULL): <c>LEAST({0}, {1})</c>; SQLite <c>min({0}, {1})</c>.</summary>
+    public string Least { get; init; } = "LEAST({0}, {1})";
+
+    /// <summary>The larger of two counts (never NULL): <c>GREATEST({0}, {1})</c>; SQLite <c>max({0}, {1})</c>.</summary>
+    public string Greatest { get; init; } = "GREATEST({0}, {1})";
+
+    /// <summary>Whether a subquery in FROM may refer to the rows before it (<c>LEFT JOIN LATERAL</c>). False (SQLite): a
+    /// page's rows join without it, and a row's children are joined by their keys being in the correlated top n; a page
+    /// of the newest rows per group (<c>SelectMany</c> before <c>Page</c>) is refused.</summary>
     public bool Lateral { get; init; } = true;
 
-    /// <summary>Whether a CTE may write (<c>WITH w AS (INSERT ...) SELECT ...</c>), and a DELETE join other rows
-    /// (<c>DELETE ... USING</c>). False (SQLite): a write from the rows a query found (<c>Query.Then</c>) is refused.</summary>
+    /// <summary>Whether a CTE may write (<c>WITH d AS (DELETE ... RETURNING ...)</c>). False (SQLite): a conditional write
+    /// is two statements of one unit, the write with RETURNING and the refused rows after it, and the rows a write
+    /// returns read their navigations through scalar subqueries. The provider hands the reader every row of every
+    /// statement of the unit, in order. A write from the rows a query found (<c>Query.Then</c>) is refused.</summary>
     public bool WritableCtes { get; init; } = true;
+
+    /// <summary>Whether <c>INSERT ... SELECT ... ON CONFLICT</c> needs a WHERE in its SELECT to parse (SQLite reads the ON
+    /// as a join's otherwise): the generator adds <c>WHERE true</c> where there is none.</summary>
+    public bool InsertSelectNeedsWhere { get; init; }
 
     /// <summary>The lock a conditional write (<c>UpdateIf</c>, <c>DeleteIf</c>) takes on the rows it finds, so their
     /// condition is checked as a concurrent write left them; {0} is the table's alias: <c>FOR UPDATE OF {0}</c>.
