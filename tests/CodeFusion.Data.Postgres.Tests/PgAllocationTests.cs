@@ -125,4 +125,47 @@ public sealed class PgAllocationTests
     }
 
     static readonly PgRowHandler Touch2 = static (in PgRow r, object? s) => ((long[])s!)[0] += r.GetInt64(0);
+
+    static readonly PgStatement Times10 = new("SELECT $1::bigint * 10", PgType.Int8);
+    static readonly PgRowHandler First = static (in PgRow r, object? _) => r.GetInt64(0);
+
+    /// <summary>Starts <paramref name="pending"/>'s reads all at once, then reads their results: the jobs of every
+    /// read are out of the pool together.</summary>
+    static async Task<long> Burst(PgReader reader, ValueTask<PgResult>[] pending)
+    {
+        for (int i = 0; i < pending.Length; i++) pending[i] = reader.Command(Times10).Int8(i).Run(First, null);
+        long sum = 0;
+        for (int i = 0; i < pending.Length; i++) sum += (await pending[i].ConfigureAwait(false)).Value;
+        return sum;
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task AsManyReadsInFlightAs512RequestsOf20AllocateNothingOnceWarm()
+    {
+        Require();
+        Assert.SkipWhen(Debug(), "Debug builds make every async method's state machine a class: run in Release");
+        // TechEmpower's queries test with each request's reads started together: 512 times 20 in flight at once
+        var reader = new PgReader(Settings());
+        reader.Start(4);
+        try
+        {
+            var pending = new ValueTask<PgResult>[512 * 20];
+            long expected = 10L * pending.Length * (pending.Length - 1) / 2;
+            Assert.Equal(expected, await Task.Run(() => Burst(reader, pending)));
+            Assert.Equal(expected, await Task.Run(() => Burst(reader, pending)));
+            var (sum, allocated) = await Task.Run(async () =>
+            {
+                long before = GC.GetTotalAllocatedBytes(precise: true);
+                long s = await Burst(reader, pending).ConfigureAwait(false);
+                return (s, GC.GetTotalAllocatedBytes(precise: true) - before);
+            });
+            Assert.Equal(expected, sum);
+            // the test's own async method: a few hundred bytes; a job made anew is about a kilobyte, per read
+            Assert.True(allocated < 4096, $"{allocated} bytes for {pending.Length} reads");
+        }
+        finally
+        {
+            LoopChecks.Stop(reader);
+        }
+    }
 }

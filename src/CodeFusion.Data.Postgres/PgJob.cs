@@ -449,9 +449,10 @@ public readonly struct PgHeld
 /// </summary>
 sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
 {
-    /// <summary>Most of the jobs a burst left behind are dropped: the workload has a few thousand commands in
-    /// flight, not the 65,536 a full read queue holds.</summary>
-    const int MaxPooled = 4096;
+    /// <summary>The jobs kept for reuse, about a kilobyte each. Enough for 512 requests each with 20 commands in flight
+    /// at once (TechEmpower's queries and updates tests with their reads started together), which 4,096 dropped and
+    /// made anew every burst; beyond it a burst's extra jobs go, rather than the 65,536 a full queue holds.</summary>
+    const int MaxPooled = 16384;
     /// <summary>A stack, so the jobs in use are the few warm ones, with their buffers grown to what they carry.</summary>
     static readonly PgJob?[] Pool = new PgJob?[MaxPooled];
     static readonly object PoolLock = new();
