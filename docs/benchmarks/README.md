@@ -57,6 +57,7 @@ readers per core and four writers. These are reduced-rig numbers; the TechEmpowe
 | 2026-10-21 | [sqlite-park-with-batches](2026-10-21-sqlite-park-with-batches.md) | SQLite Exclusive with event-loop batches: parking against spinning | NORMAL level; FULL with readers off the loop: loop -8 to -19%, readers more, both about -8% |
 | 2026-10-21 | [twelve-entry-read-in-batch](2026-10-21-twelve-entry-read-in-batch.md) | The $12 entry after the second SQLite review, against e3b4ce0, with probes | about -5% (49.5-52.6k vs 52.8-54.6k), p95/p99 level; all of it reads waiting for the COMMIT (not deferred: 55.5-55.9k) |
 | 2026-10-21 | [twelve-entry-reads-by-table](2026-10-21-twelve-entry-reads-by-table.md) | The $12 entry with reads joining the batch only by table, against e3b4ce0 | level within the spread (51.8-52.6k vs 51.5-53.9k), p95/p99 a little lower; most reads still wait, as the guarantee needs |
+| 2026-10-21 | [twelve-entry-third-review](2026-10-21-twelve-entry-third-review.md) | The $12 entry after the third review, with a probe of the kept rows; the throughput tool before and after eafbbd8 | at load 5.5-8.8: 40.1-45.5k vs 49.7-52.7k; probe 46.4-49.1k; eafbbd8 level locally; needs a quiet rerun |
 
 ## Template
 
