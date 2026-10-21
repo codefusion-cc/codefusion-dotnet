@@ -542,12 +542,15 @@ public sealed unsafe class SqliteWriter
             EventLoopThread.RequestBatchEnd();
         }
         job.Queued();
+        // its tables first: learning them may prepare, and run a query, in the open transaction. Then the transaction is
+        // checked, before the job joins: one lost by then fails what it held, and this job runs in a new one.
+        ulong writes = job.BatchedRead ? 0 : WritesOf(job);
+        CheckBatchTransaction();
         if (_batchCount == _batch.Length) Array.Resize(ref _batch, _batch.Length * 2);
         _batch[_batchCount++] = job;
         try
         {
-            CheckBatchTransaction();
-            if (!job.BatchedRead) _batchWrote |= WritesOf(job); // before it runs: a failed write still counts
+            _batchWrote |= writes; // before it runs: a failed write still counts
             if (!_batchOpen)
             {
                 int rc = Begin();

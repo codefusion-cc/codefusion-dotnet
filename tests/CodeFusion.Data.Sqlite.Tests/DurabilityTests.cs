@@ -67,19 +67,37 @@ public sealed class DurabilityTests : IDisposable
     [Fact(Timeout = 30_000)]
     public async Task AReadOnTheLoopThatRollsBackLosesNoAnsweredWrite()
     {
-        var s = _db.Open(_db.Database(exclusive: true, batches: true));
+        var s = _db.Open(_db.Database(exclusive: true, batches: true, more: ["CREATE TABLE other (k INTEGER PRIMARY KEY); INSERT INTO other VALUES (1)"]));
         Failing.Register(s.Writer.Connection.Db);
         using var loop = new TestLoop(s);
         ValueTask<DataResult> a = default, read = default, b = default;
         await loop.WakeUp(() =>
         {
             a = Kv.Write(s, "a", 1);
-            // reads no table the batch wrote, so it runs in the batch's transaction outside it, and rolls it back
-            read = Sqlite.Run<Value>(s.Read(Statement("SELECT cf_ioerr()")).Hold(), null, default);
+            // reads a table the batch didn't write, so it runs in the batch's transaction outside it; its I/O error
+            // makes SQLite roll that transaction back (a statement that reads a table does; one that reads none doesn't)
+            read = Sqlite.Run<Value>(s.Read(Statement("SELECT cf_ioerr() FROM other")).Hold(), null, default);
             b = Kv.Write(s, "b", 2);
         });
         Assert.False((await read).IsOk);
         await AnsweredAsStored(s, ("a", a), ("b", b));
+    }
+
+    [Fact(Timeout = 30_000)]
+    public async Task AWriteAfterTheBatchsTransactionWasLostRunsInANewOne()
+    {
+        var s = _db.Open(_db.Database(exclusive: true, batches: true));
+        using var loop = new TestLoop(s);
+        ValueTask<DataResult> a = default, b = default;
+        await loop.WakeUp(() =>
+        {
+            a = Kv.Write(s, "a", 1);
+            // the transaction goes behind the batch's back, as when a statement it runs to learn a table fails
+            s.Writer.Connection.Exec("ROLLBACK");
+            b = Kv.Write(s, "b", 2);
+        });
+        await AnsweredAsStored(s, ("a", a), ("b", b));
+        Assert.Equal(1, Kv.Read(s, "b").Rows); // so it was answered Ok: it ran, in a new transaction
     }
 
     // ---------- 2: the transaction is rolled back twice ----------

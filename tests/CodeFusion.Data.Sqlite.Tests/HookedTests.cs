@@ -23,7 +23,6 @@ public sealed class HookedTests : IDisposable
         SqliteReaders.StoppedRead = null;
         SqliteJob.SaveFault = null;
         SqliteConn.BeforeInterrupt = null;
-        SqliteReaders.OwnReadFailed = null;
         SqliteConn.AfterInterrupt = null;
 #endif
         _db.Dispose();
@@ -165,33 +164,6 @@ public sealed class HookedTests : IDisposable
         Assert.Equal(DataStatus.Ok, slow.Status);
         Assert.True(next.IsOk, $"the statement after the one timed was interrupted: {next}");
         Assert.Equal(0, s.Interrupted);
-#endif
-    }
-
-    /// <summary>A read on the loop that doesn't join the batch runs in its transaction; when its error makes SQLite roll
-    /// that transaction back (an I/O error can), nothing written before it is answered Ok, and a write after it isn't
-    /// committed on its own and answered Failed.</summary>
-    [Fact(Timeout = 30_000)]
-    public async Task AReadThatRollsTheBatchBackLeavesEveryWriteAnsweredAsStored()
-    {
-#if !DEBUG
-        Assert.Skip("needs the Debug hook");
-#else
-        var s = _db.Open(_db.Database(exclusive: true, batches: true));
-        Failing.Register(s.Writer.Connection.Db);
-        using var loop = new TestLoop(s);
-        ValueTask<DataResult> a = default, read = default, b = default;
-        // as SQLite does for some errors (3.54 for an I/O error in any statement): the transaction is gone
-        SqliteReaders.OwnReadFailed = static conn => conn.Exec("ROLLBACK");
-        await loop.WakeUp(() =>
-        {
-            a = Kv.Write(s, "a", 1);
-            read = Sqlite.Run<Value>(s.Read(DurabilityTests.Statement("SELECT cf_ioerr()")).Hold(), null, default);
-            b = Kv.Write(s, "b", 2);
-        });
-        SqliteReaders.OwnReadFailed = null;
-        Assert.False((await read).IsOk);
-        await DurabilityTests.AnsweredAsStored(s, ("a", a), ("b", b));
 #endif
     }
 
