@@ -37,7 +37,8 @@ public sealed class PgSettings
     public TimeSpan MaxReconnectDelay = TimeSpan.FromSeconds(2);
     /// <summary>The connections a reader or writer opens for statements that run alone (<see cref="PgStatement.RunsAlone"/>),
     /// at the first such command: each runs one command at a time, and the next command goes to one that is free, so
-    /// a slow report holds up only its own connection. They come on top of the loops' own.</summary>
+    /// a slow report holds up only its own connection. They come on top of the loops' own. At least one is opened,
+    /// whatever this says.</summary>
     public int AloneConnections = 2;
     /// <summary>Answer a server that asks for a cleartext or md5 password or runs SCRAM with fewer than Postgres's
     /// 4096 iterations, and log in where a password is set but the server never asks for it (trust). Off: only SCRAM

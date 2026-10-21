@@ -453,16 +453,22 @@ public readonly struct PgHeld
 sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
 {
     // The jobs kept for reuse: a stack, so the jobs in use are the few warm ones, with their buffers grown to what they
-    // carry. It keeps at most as many as the loops of the process can hold at once (each loops object's queue and its
-    // groups in flight, see Reserve), and never more than were out together: a burst's jobs come back and wait for the
-    // next one, so steady load makes none. Each is about a kilobyte; the buffers grown past SmallBuffer that pooled
-    // jobs keep are held within GrownBudget bytes all together, the rest shrink back on return.
-    static PgJob?[] _pool = new PgJob?[256];
+    // carry. It keeps no more than the loops of the process can hold at once (each loops object's queue and its groups
+    // in flight, see Reserve), never more than MaxPooled, and never more than were out together: a burst's jobs come
+    // back and wait for the next one, so steady load makes none. And it holds at most Budget bytes, each job counted
+    // whole (its object, about JobBytes, and its buffers): past that a returning job's buffers shrink back, and if that
+    // isn't enough, the jobs at the bottom of the stack, the ones least recently used, go. The stack is a ring, so
+    // they go from its bottom at no cost.
+    static PgJob?[]? _pool;
     static readonly object PoolLock = new();
-    static int _pooled, _capacity;
-    static long _grownKept;
+    static int _bottom, _pooled, _capacity;
+    static long _pooledBytes;
+    const int MaxPooled = 16384;
+    const long Budget = 32 << 20;
+    const int JobBytes = 512;
+    /// <summary>A job whose buffers are past this goes straight to the shared stack, where it is counted, never into a
+    /// thread's cache: so what the caches hold is at most CacheSize small jobs a thread.</summary>
     const int SmallBuffer = 4 << 10;
-    const long GrownBudget = 16 << 20;
 
     /// <summary>Makes room in the pool for <paramref name="jobs"/> more (negative: gives it back), for loops that can
     /// hold that many commands at once.</summary>
@@ -471,17 +477,23 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
         lock (PoolLock)
         {
             _capacity = Math.Max(0, _capacity + jobs);
-            while (_pooled > _capacity) Drop(_pool[--_pooled]!, ref _pool[_pooled]);
+            while (_pooled > Math.Min(_capacity, MaxPooled)) DropBottom();
         }
     }
 
-    /// <summary>Under the pool's lock: a job leaving the pool for good, its kept bytes with it.</summary>
-    static void Drop(PgJob job, ref PgJob? slot)
+    /// <summary>Under the pool's lock: the least recently pooled job goes.</summary>
+    static void DropBottom()
     {
-        slot = null;
-        if (job._kept > 0) Interlocked.Add(ref _grownKept, -job._kept);
+        var job = _pool![_bottom]!;
+        _pool[_bottom] = null;
+        _bottom = (_bottom + 1) % MaxPooled;
+        _pooled--;
+        _pooledBytes -= job._kept;
         job._kept = 0;
     }
+
+    /// <summary>What a pooled job holds, counted against <see cref="Budget"/>.</summary>
+    long Footprint => JobBytes + Buf.Length + (Saved?.Length ?? 0);
 
     /// <summary>For tests: off, every job comes from and goes back to the shared stack, so the job a command takes is
     /// the one given back last.</summary>
@@ -510,26 +522,33 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
         }
     }
 
-    /// <summary>Under the pool's lock: onto the shared stack if it has room, else gone.</summary>
+    /// <summary>Under the pool's lock: onto the top of the shared stack; gone if the loops have no room for it. Past the
+    /// budget its buffers shrink back first (a job grown for one large command keeps its buffers through every small
+    /// one after, so shrinking them is what brings the pool back under it), then the least recently pooled jobs go.</summary>
     static void Push(PgJob job)
     {
-        if (_pooled < _capacity)
+        if (_pooled >= Math.Min(_capacity, MaxPooled)) return;
+        long bytes = job.Footprint;
+        if (_pooledBytes + bytes > Budget)
         {
-            if (_pooled == _pool.Length) Array.Resize(ref _pool, Math.Min(_pool.Length * 2, Math.Max(_capacity, 256)));
-            _pool[_pooled++] = job;
+            if (job.Buf.Length > 512) job.Buf = new byte[512];
+            job.Saved = null;
+            bytes = job.Footprint;
+            while (_pooled > 0 && _pooledBytes + bytes > Budget) DropBottom();
         }
-        else
-        {
-            PgJob? gone = job;
-            Drop(job, ref gone);
-        }
+        _pool ??= new PgJob?[MaxPooled];
+        _pool[(_bottom + _pooled++) % MaxPooled] = job;
+        _pooledBytes += job._kept = bytes;
     }
 
     static PgJob? Pop()
     {
         if (_pooled == 0) return null;
-        var job = _pool[--_pooled];
-        _pool[_pooled] = null;
+        int top = (_bottom + --_pooled) % MaxPooled;
+        var job = _pool![top]!;
+        _pool[top] = null;
+        _pooledBytes -= job._kept;
+        job._kept = 0;
         return job;
     }
 
@@ -552,7 +571,7 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
             }
     }
 
-    /// <summary>The grown buffer bytes this job holds that count against <see cref="GrownBudget"/> while it is pooled.</summary>
+    /// <summary>What this job counts against <see cref="Budget"/> while it is on the shared stack.</summary>
     long _kept;
     static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     /// <summary>Buffers past this size go with a returned job instead of being pooled.</summary>
@@ -627,12 +646,7 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
         }
         else
             lock (PoolLock) job = Pop();
-        if (job is null) job = new PgJob();
-        else if (job._kept > 0)
-        {
-            Interlocked.Add(ref _grownKept, -job._kept); // in use: its buffers are its command's
-            job._kept = 0;
-        }
+        job ??= new PgJob();
         job.CheckUnwritten();
         job.To(Life.Building);
         job.Statement(first);
@@ -656,22 +670,10 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
         _arrayAt = -1;
         if (Buf.Length > MaxPooledBytes) Buf = new byte[512];
         if (Saved is { Length: > MaxPooledBytes }) Saved = null;
-        // grown buffers stay while the pooled jobs' all together fit the budget; past it they shrink back
-        long grown = (Buf.Length > SmallBuffer ? Buf.Length : 0) + (Saved is { Length: > SmallBuffer } ? Saved.Length : 0);
-        if (grown > 0)
-        {
-            if (Interlocked.Add(ref _grownKept, grown) <= GrownBudget) _kept = grown;
-            else
-            {
-                Interlocked.Add(ref _grownKept, -grown);
-                if (Buf.Length > SmallBuffer) Buf = new byte[512];
-                if (Saved is { Length: > SmallBuffer }) Saved = null;
-            }
-        }
         _core.Reset();
         To(Life.Pooled);
         FillReturned();
-        if (UseThreadCaches)
+        if (UseThreadCaches && Buf.Length <= SmallBuffer && (Saved is null || Saved.Length <= SmallBuffer))
         {
             var cache = t_cache ??= new Cache();
             if (cache.Count == CacheSize) Spill(cache);
@@ -692,8 +694,11 @@ sealed class PgJob : IValueTaskSource<PgResult>, IValueTaskSource<DataResult>
         get { lock (PoolLock) return _pooled; }
     }
 
-    /// <summary>The grown buffer bytes pooled jobs keep. For tests.</summary>
-    internal static long GrownKept => Interlocked.Read(ref _grownKept);
+    /// <summary>The bytes the shared stack's jobs hold, counted against the budget. For tests.</summary>
+    internal static long PooledBytes
+    {
+        get { lock (PoolLock) return _pooledBytes; }
+    }
 
     /// <summary>Back to the pool without having run (refused, cancelled at once, or the build failed).</summary>
     internal void Discard() => Return();

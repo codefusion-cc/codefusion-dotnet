@@ -854,10 +854,13 @@ What was decided:
 - **`RunsAlone` statements run on connections of their own**: `PgSettings.AloneConnections`, 2 by default, made at the
   first such command. Each runs one command in its own transaction, and the next goes to a free one.
 - **The job pool is bounded**:
-  - its room is what the started loops can hold (their queues and groups, given back when they complete);
-  - grown buffers stay within 16 MB all together;
+  - by bytes: 32 MB for the shared pool, each job counted whole (about 512 B of its own and its buffers). Past that
+    a returning job's buffers shrink back (a job grown for one large command keeps its buffers through every small
+    one after it), then the least recently used jobs go, from the bottom of a ring;
+  - by count: what the started loops can hold (their queues and groups, given back when they complete), at most
+    16,384;
   - a buffer past 64 KB is never kept;
-  - a thread's cache of 32 goes back from its finalizer.
+  - a thread's cache holds up to 32 jobs whose buffers are 4 KB or less, and goes back from its finalizer.
 
 The review's findings, each test red on the code before its fix:
 
@@ -867,10 +870,15 @@ The review's findings, each test red on the code before its fix:
 | a small batch sent while another was answered could block on full buffers | `PgPipelineTests.ABatchSentWhileAnotherIsAnsweredTakesRepliesInWhileTheSocketIsFull` | 0 of 5 sends took replies in |
 | one alone loop: a slow report held up every alone command | `PgAloneTests.ASlowCommandThatRunsAloneHoldsUpNoOtherThatRunsAlone`, `TheConnectionsForCommandsThatRunAloneAreAsManyAsTheSettingsSay` | waited; 1 connection for 3 |
 | the pool kept 64 KB buffers for 16,384 jobs | `PgAllocationTests.APoolFilledByLargeCommandsKeepsAtMostItsByteBudget` | 479 MB kept after a burst of 4,096 |
+| (re-review N3) buffers up to 4 KB counted against nothing | `PgAllocationTests.APoolFilledBySmallButNotTinyCommandsStaysBounded` (the live heap after a compacting GC; GC.GetTotalMemory over-reads with regions) | 66 MB kept for 16,384 commands of 3.9 KB |
 | the pool's room never given back | `PgAllocationTests.ThePoolHasRoomForWhatTheLoopsCanHoldAndGivesItBackWhenTheyStop` | room still held after the loops stopped |
 | the reuse guard never saw a reused job (the thread caches) | `PgJobReuseGuardTests` (asserts the job is the same) | another job |
 | the burst test passed without sharing | `PgPipelineTests.ABurstWhileOtherLoopsSleepIsSharedOutAmongThem` (queued under the queue's lock) | 1 group of 32 with sharing off |
 | `Provider.Alone` called on a provider that doesn't declare it: CS0117 | `MinimalProviderTests.QueriesOverAProviderThatDeclaresOnlyWhatItMustCompile` | CS0117 |
+
+`PgAllocationTests.ABurstAllocatesAlmostNothingOnceWarmWithTheThreadCachesOn` measures the production setting (under
+256 KB for 10,240 reads: at most the caches' worth of jobs made), next to the test with the caches off (under 4 KB).
+`PgAloneTests` opens both alone connections before its timed part.
 
 The broken-connection test raced xunit's synchronization context: its reads now go into the queue behind a slow
 read, with no await between. That race can't be shown red on demand.
