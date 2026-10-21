@@ -103,9 +103,9 @@ instead of reading beside it. On one core, where they take turns anyway, that is
 
 (`benchmarks/CodeFusion.Data.Sqlite.Throughput`: 100,000 rows, reads and updates by key, in a container pinned to one
 CPU of a Colima VM, linux-arm64; three rounds alternating the two, two with `Full`.) Reads and the writer take turns: a
-read waits for at most one group, and the writer for the read running and at most one more, however long it waits for
-a CPU. On more cores it costs: reads no longer run beside each other, so 4 threads on an 8-core Mac read 1.2 to 1.8
-M/s where the default reads 6.4 M/s. The runs, and the ones before them, are in
+read waits for the group running and at most one more, and the writer for the read running and at most one more,
+however long it waits for a CPU. On more cores it costs: reads no longer run beside each other, so 4 threads on an
+8-core Mac read 1.2 to 1.8 M/s where the default reads 6.4 M/s. The runs, and the ones before them, are in
 [docs/benchmarks](../../docs/benchmarks/README.md).
 
 Behind CodeFusion.Http's event loops (`HttpTransport.EventLoop`), `EventLoopBatches = true` goes one step further: a

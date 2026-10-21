@@ -259,11 +259,11 @@ internal sealed class SqliteReaders : IDisposable
     /// <summary>The served taker's marks: in line behind the read that waited, or waiting for the connection.</summary>
     void RaiseMarks()
     {
-        MarksUp();
         // the reads see the writer in line: once one has gone, no other starts, whether or not the writer is on a CPU to
         // say so (on a busy machine a woken writer can wait milliseconds for one, and reads overtook it)
         if (Volatile.Read(ref _readersWaiting) > 0) Interlocked.Exchange(ref _writerQueued, Volatile.Read(ref _readsDone) + 1);
         else Interlocked.Exchange(ref _writerWaits, 1);
+        MarksUp();
     }
 
     bool EnterInTurn(bool raised)
@@ -306,8 +306,8 @@ internal sealed class SqliteReaders : IDisposable
         return true;
     }
 
-    /// <summary>Debug, tests: the most reads that started while one taker's marks were up in <see cref="Enter"/>, from just
-    /// before they went up to its take; a read already running doesn't count. Each taker counts its own wait.</summary>
+    /// <summary>Debug, tests: the most reads that started while one taker's marks were up in <see cref="Enter"/>, from once
+    /// they are visible to its take. Each taker counts its own wait.</summary>
     internal int MostReadsBeforeAWrite;
     /// <summary>Debug: every read that took the shared connection, so far, and as the served taker's marks went up.</summary>
     long _readsStarted, _readsAtMarks;
@@ -320,8 +320,16 @@ internal sealed class SqliteReaders : IDisposable
         while (started > (most = Volatile.Read(ref MostReadsBeforeAWrite)) && Interlocked.CompareExchange(ref MostReadsBeforeAWrite, started, most) != most) { }
     }
 
+    /// <summary>Debug: after the marks are visible, so a read that started before them, or that took the connection
+    /// as they went up, doesn't count.</summary>
     [Conditional("DEBUG")]
-    void MarksUp() => _readsAtMarks = Volatile.Read(ref _readsStarted);
+    void MarksUp()
+    {
+        _readsAtMarks = Volatile.Read(ref _readsStarted);
+#if DEBUG
+        MarksRaised?.Invoke();
+#endif
+    }
 
     [Conditional("DEBUG")]
     void ReadStarted() => Interlocked.Increment(ref _readsStarted);
@@ -413,12 +421,12 @@ internal sealed class SqliteReaders : IDisposable
         if (Volatile.Read(ref _readersParked) != 0) lock (_readGate) Monitor.Pulse(_readGate);
     }
 
-    /// <summary>Wakes every parked thread, after a full fence that follows the change they wait for: the writer's group
-    /// or a loop's batch ended, the writer gave up, or the source stops.</summary>
+    /// <summary>Wakes the parked taker and reads, after a full fence that follows the change they wait for: the writer's
+    /// group or a loop's batch ended, the writer gave up, or the source stops. (The takers queued behind it wait for their
+    /// ticket, which the one served hands on, give up or not; the stop wakes them too.)</summary>
     void WakeParked()
     {
         if (Volatile.Read(ref _writerParked) != 0) lock (_writeGate) Monitor.PulseAll(_writeGate);
-        if (Volatile.Read(ref _entersParked) != 0) lock (_enterGate) Monitor.PulseAll(_enterGate);
         if (Volatile.Read(ref _readersParked) != 0) lock (_readGate) Monitor.PulseAll(_readGate);
     }
 
@@ -516,6 +524,9 @@ internal sealed class SqliteReaders : IDisposable
     }
 
 #if DEBUG
+    /// <summary>Debug, tests: runs once a taker's marks are visible to reads, on the thread that raised them (the taker,
+    /// or the one before it as it handed over), one taker at a time in the order they are served.</summary>
+    internal Action? MarksRaised;
     /// <summary>Debug, tests: runs right after the connection is given back (<see cref="Exit"/>).</summary>
     internal static Action? AfterExit;
     /// <summary>Debug, tests: runs while a read that took the connection after the stop still holds it.</summary>
@@ -666,6 +677,7 @@ internal sealed class SqliteReaders : IDisposable
         // Exclusive mode: waits for the connection give up from now on, the writer's for its last groups too
         if (_shared) Volatile.Write(ref _giveUpAt, Stopwatch.GetTimestamp() + (long)(StopWait.TotalSeconds * Stopwatch.Frequency));
         WakeParked(); // threads parked for a connection see the stop
+        if (Volatile.Read(ref _entersParked) != 0) lock (_enterGate) Monitor.PulseAll(_enterGate); // and the takers queued
         if (_shared)
         {
             // the writer's connection, which it closes after its last group: only the read running is waited for, and a

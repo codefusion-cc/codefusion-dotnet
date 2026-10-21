@@ -132,10 +132,10 @@ public sealed class ExclusiveTests : IDisposable
         Volatile.Write(ref stop, 1);
         foreach (var t in threads) t.Join();
 #if DEBUG
-        // the turns: while a write waits, at most two reads start, one that took the connection as the writer came and
-        // one let through after it, however long the writer waits for a CPU
+        // the turns: once a write's marks are up, at most one read starts, the one let through or one that took the
+        // connection as they went up, however long the writer waits for a CPU
         int most = s.Readers.MostReadsBeforeAWrite;
-        Assert.True(most <= 2, $"{readers} readers: {most} reads started while one write waited");
+        Assert.True(most <= 1, $"{readers} readers: {most} reads started while one write waited");
 #endif
         // and nobody waits for ever: a write waits for about two reads, and time on a shared machine is only a guard
         Assert.True(took.Elapsed.TotalMilliseconds < 10 * (2 * alone.Elapsed.TotalMilliseconds + 200 * 6 * read + 200),
@@ -152,10 +152,19 @@ public sealed class ExclusiveTests : IDisposable
         var s = _db.Open(_db.Database(exclusive: true));
         Assert.True((await Kv.WriteMany(s, "seed", 2_000)).IsOk);
         var r = s.Readers;
-        // one clock for both sides: a read counts against a wait if it was asked for after the wait began and ended
-        // before the wait did, so a read already running, or one whose thread was slow to say it ended, never counts
+        // one clock for both sides: a read counts against a wait if it was asked for after the wait's marks were visible
+        // and ended before the wait did, so a read already running, or one whose thread was slow to say it ended, never
+        // counts
         long clock = 0;
         int stop = 0;
+        var marks = new System.Collections.Generic.List<long>();
+#if DEBUG
+        // the takers' marks go up one taker at a time, in the order they take the connection
+        r.MarksRaised = () =>
+        {
+            lock (marks) marks.Add(Interlocked.Increment(ref clock));
+        };
+#endif
         var reads = new System.Collections.Generic.List<(long Asked, long Ended)>[4];
         var threads = new Thread[reads.Length];
         for (int t = 0; t < threads.Length; t++)
@@ -173,18 +182,17 @@ public sealed class ExclusiveTests : IDisposable
             threads[t].Start();
         }
         await Task.Delay(50, TestContext.Current.CancellationToken); // the readers are reading
-        var waits = new System.Collections.Generic.List<(long Began, long Ended)>[2];
-        var takers = new Thread[waits.Length];
+        var takes = new System.Collections.Generic.List<long>[2];
+        var takers = new Thread[takes.Length];
         for (int t = 0; t < takers.Length; t++)
         {
-            var mine = waits[t] = [];
+            var mine = takes[t] = [];
             takers[t] = new Thread(() =>
             {
                 for (int i = 0; i < 300; i++)
                 {
-                    long began = Interlocked.Increment(ref clock);
                     if (!r.Enter()) return;
-                    mine.Add((began, Interlocked.Increment(ref clock)));
+                    mine.Add(Interlocked.Increment(ref clock)); // before the next taker can take it
                     r.Exit();
                 }
             }) { IsBackground = true };
@@ -193,26 +201,28 @@ public sealed class ExclusiveTests : IDisposable
         foreach (var t in takers) t.Join();
         Volatile.Write(ref stop, 1);
         foreach (var t in threads) t.Join();
+        Assert.Equal(300, takes[0].Count);
+        Assert.Equal(300, takes[1].Count);
+#if DEBUG
+        r.MarksRaised = null;
         var all = new System.Collections.Generic.List<(long Asked, long Ended)>();
         foreach (var l in reads) all.AddRange(l);
+        var took = new System.Collections.Generic.List<long>(takes[0]);
+        took.AddRange(takes[1]);
+        took.Sort();
+        Assert.Equal(took.Count, marks.Count);
         int most = 0;
-        foreach (var l in waits)
+        for (int i = 0; i < took.Count; i++)
         {
-            Assert.Equal(300, l.Count);
-            foreach (var (began, ended) in l)
-            {
-                int within = 0;
-                foreach (var (asked, done) in all)
-                    if (asked > began && done < ended) within++;
-                most = Math.Max(most, within);
-            }
+            int within = 0;
+            foreach (var (asked, done) in all)
+                if (asked > marks[i] && done < took[i]) within++;
+            most = Math.Max(most, within);
         }
-        // each wait lets through at most one read for its own turn and one for the taker ahead of it, and each of those
-        // turns one more read that took the connection as the marks went up
-        Assert.True(most <= 4, $"{most} reads asked for and done while one taker waited beside another");
-#if DEBUG
-        // and once its marks are up, at most the two of its own turn
-        Assert.True(r.MostReadsBeforeAWrite <= 2, $"{r.MostReadsBeforeAWrite} reads started while one taker's marks were up");
+        // once a taker's marks are up, at most the read that waited goes before it
+        Assert.True(most <= 1, $"{most} reads asked for and done while one taker's marks were up");
+        // and one started: that one, or one that took the connection as the marks went up (it goes instead)
+        Assert.True(r.MostReadsBeforeAWrite <= 1, $"{r.MostReadsBeforeAWrite} reads started while one taker's marks were up");
 #endif
     }
 
@@ -264,7 +274,7 @@ public sealed class ExclusiveTests : IDisposable
         Assert.Equal(Writes, Kv.Count(s, "thread-%"));
 #if DEBUG
         int most = s.Readers.MostReadsBeforeAWrite;
-        Assert.True(most <= 2, $"{threads.Length} readers: {most} reads started while the writer or the batch waited");
+        Assert.True(most <= 1, $"{threads.Length} readers: {most} reads started while the writer or the batch waited");
 #endif
     }
 

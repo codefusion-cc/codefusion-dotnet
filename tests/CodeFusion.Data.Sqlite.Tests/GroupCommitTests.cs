@@ -115,8 +115,14 @@ public sealed class GroupCommitTests : IDisposable
         using var other = SqliteConn.Open(db.Path, db, writer: true);
         Assert.Equal(0, other.Once(new SqliteStatement("BEGIN IMMEDIATE")));
         var first = Kv.Write(s, "first", 0);
+        // it waits on the lock with it under the 2 s timeout from now: the four join and the lock goes at once
         var waited = System.Diagnostics.Stopwatch.StartNew();
-        while (s.Writer.Queued > 0) Assert.True(waited.Elapsed < TimeSpan.FromSeconds(10), "the writer never took the first write");
+        SpinWait spin = default;
+        while (s.Writer.Queued > 0)
+        {
+            Assert.True(waited.Elapsed < TimeSpan.FromSeconds(10), "the writer never took the first write");
+            spin.SpinOnce(); // yields: on one core this thread would take the CPU the writer needs
+        }
         var a = Kv.Write(s, "a", 1);
         var b = Kv.Write(s, "b-one", 1);
         var slow = Kv.WriteMany(s, "slow", 100_000_000);
