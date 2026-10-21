@@ -268,6 +268,11 @@ public sealed class ShapeGeneratorTests
     [InlineData("(a AND b) AND 'c AND d' = x AND \"e AND f\" = 1", "(a AND b)|'c AND d' = x|\"e AND f\" = 1")]
     [InlineData("CASE WHEN a THEN CASE WHEN b AND c THEN d END END AND e", "CASE WHEN a THEN CASE WHEN b AND c THEN d END END|e")]
     [InlineData("x.weekend AND x.ends_at = 1", "x.weekend|x.ends_at = 1")]
+    [InlineData("E'x\\' AND y' = a AND b", "E'x\\' AND y' = a|b")]
+    [InlineData("$$a AND b$$ = x AND $q$c) AND (d$q$ = y", "$$a AND b$$ = x|$q$c) AND (d$q$ = y")]
+    [InlineData("a /* b AND (c */ AND d", "a /* b AND (c */|d")]
+    [InlineData("a -- b AND c\n AND d", "a -- b AND c\n|d")]
+    [InlineData("'CASE' = x AND \"end\" = 1 AND y", "'CASE' = x|\"end\" = 1|y")]
     public void ConditionsSplitOnlyAtTheirTopLevel(string sql, string parts)
     {
         Assert.Equal(parts, string.Join("|", CodeFusion.Data.Generator.Sql.Conjuncts(sql)));

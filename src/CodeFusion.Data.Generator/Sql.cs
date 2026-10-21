@@ -281,35 +281,24 @@ static class Sql
         return true;
     }
 
-
     /// <summary>
     /// Where <paramref name="op"/> (" AND ", " = ") stands at the top level of <paramref name="sql"/>: outside
-    /// parentheses, string literals, quoted names, and CASE ... END (whose WHEN and THEN hold conditions of their own).
+    /// parentheses and CASE ... END (whose WHEN and THEN hold conditions of their own), in <see cref="Code"/>, so never
+    /// in a string literal, a quoted name or a comment.
     /// </summary>
     static List<int> TopLevelAt(string sql, string op)
     {
+        string code = Code(sql);
         var at = new List<int>();
         int depth = 0;
-        for (int i = 0; i < sql.Length; i++)
+        for (int i = 0; i < code.Length; i++)
         {
-            char c = sql[i];
-            if (c is '\'' or '"')
-            {
-                // a doubled quote is one in the text
-                int end = i + 1;
-                for (; end < sql.Length; end++)
-                {
-                    if (sql[end] != c) continue;
-                    if (end + 1 < sql.Length && sql[end + 1] == c) end++;
-                    else break;
-                }
-                i = end;
-            }
-            else if (c == '(') depth++;
+            char c = code[i];
+            if (c == '(') depth++;
             else if (c == ')') depth--;
-            else if (Word(sql, i, "CASE")) depth++;
-            else if (Word(sql, i, "END")) depth--;
-            else if (depth == 0 && string.CompareOrdinal(sql, i, op, 0, op.Length) == 0)
+            else if (Word(code, i, "CASE")) depth++;
+            else if (Word(code, i, "END")) depth--;
+            else if (depth == 0 && string.CompareOrdinal(code, i, op, 0, op.Length) == 0)
             {
                 at.Add(i);
                 i += op.Length - 1;

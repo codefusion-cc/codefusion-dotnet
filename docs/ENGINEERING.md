@@ -957,7 +957,8 @@ What the fixes decided:
 - A correction is taken also where every row found makes the same write: the same delete, which reads nothing of
   the row found, or an ignored insert of the same key.
 - The reply of a Then with a Select is the row found of the smallest key.
-- Conditions split at AND only outside parentheses, string literals, quoted names and CASE ... END.
+- Conditions split at AND only outside parentheses and CASE ... END, scanning `Sql.Code`, which blanks string
+  literals (E'' and dollar-quoted too), quoted names and comments.
 - `ToLowerAscii` and `ToUpperAscii` are `translate()` of A to Z, which keeps the text's collation. `regexp_replace`
   fails on text of a nondeterministic collation, and `replace` does before Postgres 18 (documented on the settings).
 - `Concat(long)` writes its number through `SqlDialectAttribute.IntegerText` (`CAST({0} AS text)`); `AnyOfQuery`
