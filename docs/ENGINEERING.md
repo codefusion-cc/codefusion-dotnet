@@ -970,7 +970,8 @@ What the fixes decided:
   so its table is checked as consistently as the others. It costs a few index lookups for the table written, the
   tables read and their partitions, and as many again for each table a delete can reach: it grows with how far the delete cascades,
   not with the catalog's size ([then-guard-cost](benchmarks/2026-10-21-then-guard-cost.md) measures it). PlanTests
-  compare with the contest's statements so checked, catalog reads included, and
+  compare the tables read with the contest's statements so checked (another index of a table read as often passes:
+  favorites' two indexes cost Unfavorite's delete the same, and CI's planner took the other), and
   `TheCheckReadsTheCatalogByItsIndexes` pins that an index condition bounds each catalog read (with sequential scans
   off: the planner scans a small catalog table whole, as that costs less). The triggers are looked up by a scalar
   subquery with LIMIT 1, which the planner can't turn into a hash of the whole of pg_trigger.

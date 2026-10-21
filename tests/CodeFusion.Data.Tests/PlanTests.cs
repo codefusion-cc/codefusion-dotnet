@@ -163,10 +163,7 @@ public sealed class PlanTests
         var ours = Scans(await PlanJson(sql, types.Select(TypeName).ToArray()));
         var theirs = Scans(await PlanJson(reference, referenceTypes));
         string both = $"{name}: the contest's reads\n{string.Join("\n", theirs)}\nthe compiled one's\n{string.Join("\n", ours)}";
-        // no index or table read that theirs doesn't read (a delete may take another of their indexes, the primary key
-        // where theirs takes the article's and filters), and no more reads
-        foreach (var scan in ours) Assert.True(theirs.Any(t => Where(t) == Where(scan)), both);
-        Assert.True(ours.Count <= theirs.Count, both);
+        Assert.True(ReadsNoMore(ours, theirs) is null, ReadsNoMore(ours, theirs) + "\n" + both);
         TestContext.Current.TestOutputHelper?.WriteLine(both);
     }
 
@@ -228,8 +225,54 @@ public sealed class PlanTests
         return all;
     }
 
-    /// <summary>A scan's relation and index, without the kind of scan.</summary>
-    static string Where(string scan) => scan.Substring(0, scan.IndexOf(" | ", StringComparison.Ordinal));
+    // Unfavorite's reads on CI's fresh Postgres 18 (run 39581090857): the delete's two indexes of favorites cost the
+    // same there, and each statement took another of them
+    static readonly List<string> CiTheirs =
+    [
+        "article_tags article_tags_pkey | Index Only Scan", "articles articles_pkey | Index Scan", "articles articles_slug_key | Index Scan",
+        "favorites - | ModifyTable", "favorites favorites_article_idx | Index Only Scan", "favorites favorites_article_idx | Index Scan",
+        "favorites favorites_article_idx | Index Scan", "follows follows_followee_idx | Index Scan", "pg_class pg_class_oid_index | Index Scan",
+        "pg_inherits - | Seq Scan", "tags - | Seq Scan", "users users_pkey | Index Scan",
+    ];
+
+    static readonly List<string> CiOurs =
+    [
+        "article_tags article_tags_pkey | Index Only Scan", "articles articles_slug_key | Index Scan", "favorites - | ModifyTable",
+        "favorites favorites_article_idx | Index Only Scan", "favorites favorites_article_idx | Index Scan", "favorites favorites_pkey | Index Scan",
+        "follows follows_followee_idx | Index Scan", "pg_class pg_class_oid_index | Index Scan", "pg_inherits - | Seq Scan",
+        "tags - | Seq Scan", "users users_pkey | Index Scan",
+    ];
+
+    [Fact]
+    public void ReadingNoMoreAllowsAnotherIndexOfTheSameTableOnly()
+    {
+        // another index of a table read as often: the planner's pick between two of the same cost
+        Assert.Null(ReadsNoMore(CiOurs, CiTheirs));
+        // a table theirs doesn't read, a table read more often, a table read whole where theirs looks it up
+        Assert.NotNull(ReadsNoMore([.. CiOurs, "comments comments_article_idx | Index Scan"], CiTheirs));
+        Assert.NotNull(ReadsNoMore([.. CiOurs, "users users_pkey | Index Scan"], CiTheirs));
+        Assert.NotNull(ReadsNoMore([.. CiOurs.Where(s => s != "follows follows_followee_idx | Index Scan"), "follows - | Seq Scan"], CiTheirs));
+    }
+
+    /// <summary>
+    /// Why <paramref name="ours"/> reads more of the tables than <paramref name="theirs"/>, or null: a table theirs
+    /// doesn't read, more reads of one, or more of it read whole (a sequential scan). Which index of a table serves a
+    /// read is the planner's pick where two cost the same, as favorites' primary key and article index do for
+    /// Unfavorite's delete, so it may differ. The catalog's reads are TheCheckReadsTheCatalogByItsIndexes's to pin.
+    /// </summary>
+    static string? ReadsNoMore(List<string> ours, List<string> theirs)
+    {
+        static string Relation(string s) => s[..s.IndexOf(' ', StringComparison.Ordinal)];
+        static bool Whole(string s) => s.EndsWith("| Seq Scan", StringComparison.Ordinal);
+        foreach (var read in ours.Where(s => !s.StartsWith("pg_", StringComparison.Ordinal)).GroupBy(Relation))
+        {
+            var their = theirs.Where(t => Relation(t) == read.Key).ToList();
+            if (their.Count == 0) return $"{read.Key}: theirs doesn't read it";
+            if (read.Count() > their.Count) return $"{read.Key}: read {read.Count()} times, theirs {their.Count}";
+            if (read.Count(Whole) > their.Count(Whole)) return $"{read.Key}: read whole {read.Count(Whole)} times, theirs {their.Count(Whole)}";
+        }
+        return null;
+    }
 
     /// <summary>The scans of a plan, each as its relation, index (or none) and kind of scan.</summary>
     static List<string> Scans(JsonElement node)

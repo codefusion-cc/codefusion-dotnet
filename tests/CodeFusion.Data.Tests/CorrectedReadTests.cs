@@ -107,11 +107,14 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
     public async Task AnInsertWithoutOrIgnoreIsTheOneMore()
     {
         Assert.Contains("FROM pets p2 WHERE p2.owner_id = t.id AND p2.legs > 2) + CASE WHEN 3 > 2 THEN 1 ELSE 0 END), true FROM t", Q.AddPetCounted);
+        // a person of its own, with a pet above the count and one below: other tests of the collection give ann pets,
+        // in an order the runner picks
+        string name = await Person(9805);
+        await using (var admin = TestDb.Admin("cfdata_ops_w")) await admin.Execute("INSERT INTO pets VALUES (8200, 9805, 'rex', 4), (8199, 9805, 'tweety', 2)");
         var db = Db();
-        // ann has rex (4 legs) and tweety (2)
-        Assert.Equal(new Tally(1, 2, true), await Tally(db.AddPetCounted(U("ann"), 8201)));
+        Assert.Equal(new Tally(9805, 2, true), await Tally(db.AddPetCounted(U(name), 8201)));
         _response.Next();
-        await db.AddPetCounted(U("ann"), 8201).WriteAsync(_response);
+        await db.AddPetCounted(U(name), 8201).WriteAsync(_response);
         Assert.Equal(409, _response.Status);
     }
 
