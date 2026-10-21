@@ -86,6 +86,23 @@ public sealed class ShapeGeneratorTests
         Assert.Contains("write this query with Sql<T>", Message(d), System.StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("""People.Select(p => new Name(p.Id, p.Name.Replace("a"u8, "\0"u8))).Many()""", "\"\\0\"u8")]
+    [InlineData("""People.Select(p => new Name(p.Id, p.Name.Concat("x\0"u8))).Many()""", "\"x\\0\"u8")]
+    [InlineData("""People.Where(p => p.Name == "a\0b"u8).Select(p => new Name(p.Id, p.Name)).Many()""", "\"a\\0b\"u8")]
+    [InlineData("""People.Select(p => new Name(p.Id, p.Name.Trim('\0'))).Many()""", "'\\0'")]
+    [InlineData("""People.Select(p => new Name(p.Id, p.Name.ReplaceMatches("a", "x\0"))).Many()""", "\"x\\0\"")]
+    [InlineData("""Sql<Name>($"SELECT id, name FROM people WHERE name <> '\0'").Many()""", "Q")]
+    public void ANulInAnyTextTheStatementWritesIsRefused(string query, string at)
+    {
+        string source = Context($$"""
+                public Many<Name> Q() => {{query}};
+            """);
+        var d = Single(Run(source), "CFDATA001");
+        Assert.Equal(at, At(d, source));
+        Assert.Contains("a NUL, which SQL text can't hold", Message(d), System.StringComparison.Ordinal);
+    }
+
     // ---------- an insert of a list's texts ----------
 
     [Fact]

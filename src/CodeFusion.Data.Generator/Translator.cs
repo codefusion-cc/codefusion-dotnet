@@ -388,7 +388,7 @@ sealed partial class Translator
             case IInstanceReferenceOperation:
                 return new ContextValue(op.Type!);
             case IUtf8StringOperation u8:
-                return new SqlValue(Sql.String(u8.Value), K.Utf8, false);
+                return new SqlValue(Sql.String(u8.Value, at), K.Utf8, false);
             case IDefaultValueOperation d:
                 return new Constant(null, d.Type ?? _compilation.ObjectType);
             case IConversionOperation c:
@@ -986,8 +986,8 @@ sealed partial class Translator
     {
         null => "NULL",
         bool b => b ? D.True : D.False,
-        string s => Sql.String(s),
-        char ch => Sql.String(ch.ToString()),
+        string s => Sql.String(s, at),
+        char ch => Sql.String(ch.ToString(), at),
         // typed: 2.5 alone is numeric in SQL, and 2 an integer
         double d => Dialect.Format(D.ToFloat, FloatLiteral(d.ToString("R", CultureInfo.InvariantCulture)), "double precision"),
         float f => Dialect.Format(D.ToFloat, FloatLiteral(f.ToString("R", CultureInfo.InvariantCulture)), "real"),

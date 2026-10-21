@@ -146,8 +146,7 @@ sealed partial class Translator
                 if (values[1] is not Constant { Constant_: char c })
                     throw new Refused(Arg(1), $"{m.Name}'s character that isn't a constant");
                 if (char.IsSurrogate(c)) throw new Refused(Arg(1), $"{m.Name} by half a character (a surrogate)");
-                if (c == '\0') throw new Refused(Arg(1), $"{m.Name} by a NUL, which SQL text can't hold");
-                literals.Add(Sql.String(c.ToString()));
+                literals.Add(Sql.String(c.ToString(), Arg(1)));
                 break;
             }
             case "Replace":
@@ -160,11 +159,10 @@ sealed partial class Translator
                 string pattern = Literal(1, "pattern"), replacement = Literal(2, "replacement");
                 if (Patterns.Problem(pattern) is { } problem)
                     throw new Refused(Arg(1), $"ReplaceMatches with {problem}, which .NET and SQL may read differently, so the pattern");
-                if (replacement.IndexOf('\0') >= 0) throw new Refused(Arg(2), "ReplaceMatches with a NUL, which SQL text can't hold, in the replacement");
                 if (Patterns.ReplacementProblem(replacement) is { } bad)
                     throw new Refused(Arg(2), $"ReplaceMatches with {bad}, which .NET and SQL read differently, so the replacement");
-                literals.Add(Sql.String(pattern));
-                literals.Add(Sql.String(replacement));
+                literals.Add(Sql.String(pattern, Arg(1)));
+                literals.Add(Sql.String(replacement, Arg(2)));
                 break;
             }
             case "Concat":

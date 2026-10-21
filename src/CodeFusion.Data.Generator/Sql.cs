@@ -372,6 +372,12 @@ static class Sql
     /// <summary>A string literal.</summary>
     public static string String(string s) => "'" + s.Replace("'", "''") + "'";
 
+    /// <summary>A string literal of a constant at <paramref name="at"/>, which SQL text can't hold with a NUL in it.</summary>
+    public static string String(string s, Location? at) => s.IndexOf('\0') < 0 ? String(s) : throw new Refused(at, NulText);
+
+    /// <summary>What a NUL in a constant is refused as; a statement holding one anywhere is refused too.</summary>
+    public const string NulText = "text with a NUL, which SQL text can't hold,";
+
     /// <summary>
     /// <paramref name="sql"/> with what isn't SQL's own words blanked, at the same positions: comments become spaces,
     /// and the inside of a string literal (dollar-quoted too) or a quoted name spaces between its quotes, so a keyword

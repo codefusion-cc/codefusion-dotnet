@@ -118,6 +118,8 @@ sealed partial class Translator
             }
             var chain = Parse(body, new Env());
             Root(chain, body.Syntax.GetLocation());
+            // a NUL in any text the statements hold (a constant refused where it is, or the text of Sql)
+            if (q.Statements.Any(s => s.Sql.IndexOf('\0') >= 0)) throw new Refused(at, Sql.NulText);
             return q;
         }
         catch (Refused r)
