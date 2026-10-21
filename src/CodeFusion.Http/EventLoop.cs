@@ -200,7 +200,7 @@ internal abstract unsafe class EventLoop
                     _server.Report("http event loop failed", fail ? new IOException("the test hook failed the wait")
                         : Errno(OperatingSystem.IsLinux() ? "epoll_wait" : "kevent"));
                     if (_listener is { } listener) _server.TakeOver(listener);
-                    _server.AbortConnectionsOf(this);
+                    _server.CloseConnectionsOf(this);
                     return;
                 }
                 Wakes++;

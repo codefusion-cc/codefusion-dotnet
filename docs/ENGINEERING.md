@@ -1043,7 +1043,9 @@ default elsewhere, and the choice for handlers that block or apps that put the p
   - The kernel spreads connections by a hash of their addresses, not in turn: a few long-lived connections may share a
     loop. `ListenerPerLoop = false` keeps one listener and gives connections to the loops in turn.
   - A loop that fails hands its listener to the runtime's accepts, so its queued connections aren't reset; with every
-    loop failed, connections wait on their sockets as Sockets' do.
+    loop failed, connections wait on their sockets as Sockets' do. The connections it had are closed with a FIN, as a
+    timeout closes them: a reset (it used `Close(0)`) reached a connection it had just accepted before its client's
+    own connect had finished, and failed that connect (Linux CI, arm64 and x64).
   - The runtime's `ReuseAddress` sets SO_REUSEPORT on Unix anyway (checked on macOS), so port sharing by a process of
     the same user is no different from Sockets'.
   - macOS keeps one listener and the runtime's accepts.
