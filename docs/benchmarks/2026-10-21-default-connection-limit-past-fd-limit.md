@@ -10,7 +10,9 @@
   the load generator on CPUs 1-3; .NET 10.0.13.
 - **Method:** twelve-dollar-codefusion's tools/bench/conns.sh, `--ulimit nofile=8192:8192`, 10,000 load.js users at
   1,000 a second, a 20 s settle, a 60 to 90 s hold. Unfixed runs one after the other; per-thread CPU from
-  /proc/<pid>/task/*/stat during the hold.
+  /proc/<pid>/task/*/stat during the hold. No other session used the VM meanwhile, but a test suite ran on the host
+  Mac during the default-limit run, so its requests per second and CPU are indicative, not an A/B; what it shows is
+  that the server stayed up and didn't spin.
 
 | Run | Connections held | Requests answered | Server CPU over the hold | End |
 |---|---|---|---|---|
