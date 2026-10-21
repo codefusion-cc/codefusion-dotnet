@@ -18,7 +18,11 @@ CodeFusion.Http.BodyKind.Value = 3 -> CodeFusion.Http.BodyKind
 CodeFusion.Http.BodySource
 CodeFusion.Http.BodySource.BodySource() -> void
 CodeFusion.Http.BodySource.BodySource(byte[]! buffer, int start, int length, CodeFusion.IRequestArena! arena, CodeFusion.ErrorReply! invalidBody) -> void
+CodeFusion.Http.BodySource.BodySource(byte[]! buffer, int start, int length, CodeFusion.IRequestArena! arena, CodeFusion.ErrorReply! invalidBody, CodeFusion.ErrorReply? malformedBody, CodeFusion.ErrorReply? missingBody) -> void
 CodeFusion.Http.BodySource.InvalidBody.get -> CodeFusion.ErrorReply!
+CodeFusion.Http.BodySource.IsEmpty.get -> bool
+CodeFusion.Http.BodySource.MalformedBody.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.BodySource.MissingBody.get -> CodeFusion.ErrorReply?
 CodeFusion.Http.BodyValue
 CodeFusion.Http.BodyValue.BodyValue() -> void
 CodeFusion.Http.BodyValue.BoolValue.get -> bool
@@ -34,9 +38,11 @@ CodeFusion.Http.BodyValue.Kind.get -> CodeFusion.Http.BodyKind
 CodeFusion.Http.Endpoint
 CodeFusion.Http.Endpoint.Auth.get -> CodeFusion.Http.AuthMode
 CodeFusion.Http.Endpoint.Endpoint() -> void
+CodeFusion.Http.Endpoint.InvalidRouteValue.get -> CodeFusion.ErrorReply?
 CodeFusion.Http.EndpointBuilder
 CodeFusion.Http.EndpointBuilder.AuthOptional() -> CodeFusion.Http.EndpointBuilder!
 CodeFusion.Http.EndpointBuilder.AuthRequired() -> CodeFusion.Http.EndpointBuilder!
+CodeFusion.Http.EndpointBuilder.WithInvalidRouteValue(CodeFusion.ErrorReply! error) -> CodeFusion.Http.EndpointBuilder!
 CodeFusion.Http.EndpointRouteBuilderExtensions
 CodeFusion.Http.EndpointSetup
 CodeFusion.Http.EndpointSetup.RouteValue(string! name) -> int
@@ -59,6 +65,7 @@ CodeFusion.Http.HttpApp.Start() -> void
 CodeFusion.Http.HttpApp.StopAsync() -> System.Threading.Tasks.Task!
 CodeFusion.Http.HttpAppBuilder
 CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret) -> CodeFusion.Http.HttpAppBuilder!
+CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret, CodeFusion.Http.JwtOptions! options) -> CodeFusion.Http.HttpAppBuilder!
 CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret, System.TimeSpan lifetime) -> CodeFusion.Http.HttpAppBuilder!
 CodeFusion.Http.HttpAppBuilder.AddJwtAuth(string! secret, System.TimeSpan lifetime, bool allowShortSecret) -> CodeFusion.Http.HttpAppBuilder!
 CodeFusion.Http.HttpAppBuilder.AddPerConnection<TService>(System.Func<TService!>! factory) -> void
@@ -81,8 +88,20 @@ CodeFusion.Http.HttpAppErrors.Internal.get -> CodeFusion.ErrorReply!
 CodeFusion.Http.HttpAppErrors.Internal.set -> void
 CodeFusion.Http.HttpAppErrors.InvalidBody.get -> CodeFusion.ErrorReply!
 CodeFusion.Http.HttpAppErrors.InvalidBody.set -> void
+CodeFusion.Http.HttpAppErrors.InvalidRouteValue.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.HttpAppErrors.InvalidRouteValue.set -> void
+CodeFusion.Http.HttpAppErrors.InvalidToken.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.HttpAppErrors.InvalidToken.set -> void
+CodeFusion.Http.HttpAppErrors.InvalidTokenPayload.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.HttpAppErrors.InvalidTokenPayload.set -> void
 CodeFusion.Http.HttpAppErrors.Log.get -> System.Action<CodeFusion.Http.HttpExchange!, System.Exception!>?
 CodeFusion.Http.HttpAppErrors.Log.set -> void
+CodeFusion.Http.HttpAppErrors.MalformedBody.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.HttpAppErrors.MalformedBody.set -> void
+CodeFusion.Http.HttpAppErrors.MissingBody.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.HttpAppErrors.MissingBody.set -> void
+CodeFusion.Http.HttpAppErrors.MissingToken.get -> CodeFusion.ErrorReply?
+CodeFusion.Http.HttpAppErrors.MissingToken.set -> void
 CodeFusion.Http.HttpAppErrors.NotFound.get -> CodeFusion.ErrorReply!
 CodeFusion.Http.HttpAppErrors.NotFound.set -> void
 CodeFusion.Http.HttpAppErrors.Unauthorized.get -> CodeFusion.ErrorReply!
@@ -180,11 +199,34 @@ CodeFusion.Http.JsonBody.ReadObject() -> bool
 CodeFusion.Http.JsonBody.ReadRootObject() -> bool
 CodeFusion.Http.JsonBody.ReadText() -> CodeFusion.Http.BodyValue
 CodeFusion.Http.JsonBody.ReadTextArray() -> CodeFusion.Http.BodyValue
-CodeFusion.Http.JsonBody.ReadToEnd() -> void
+CodeFusion.Http.JsonBody.ReadToEnd() -> bool
 CodeFusion.Http.JsonBody.SkipValue() -> void
 CodeFusion.Http.JsonBody.Text(in CodeFusion.Http.BodyValue value) -> CodeFusion.Utf8
 CodeFusion.Http.JsonBody.TextList(in CodeFusion.Http.BodyValue value) -> CodeFusion.Utf8List
 CodeFusion.Http.Jwt
+CodeFusion.Http.Jwt.Issue(long userId, long now, System.ReadOnlySpan<CodeFusion.Utf8> claims, System.Span<byte> dest) -> int
+CodeFusion.Http.Jwt.Issue(long userId, params System.ReadOnlySpan<CodeFusion.Utf8> claims) -> CodeFusion.Utf8
+CodeFusion.Http.Jwt.Jwt(string! secret, CodeFusion.Http.JwtOptions! options) -> void
+CodeFusion.Http.Jwt.MaxIssuedBytesWith(System.ReadOnlySpan<CodeFusion.Utf8> claims) -> int
+CodeFusion.Http.Jwt.Scheme.get -> string!
+CodeFusion.Http.JwtClaim
+CodeFusion.Http.JwtClaim.JwtClaim(string! name) -> void
+CodeFusion.Http.JwtClaim.MaxBytes.get -> int
+CodeFusion.Http.JwtClaim.MaxBytes.init -> void
+CodeFusion.Http.JwtClaim.MinBytes.get -> int
+CodeFusion.Http.JwtClaim.MinBytes.init -> void
+CodeFusion.Http.JwtClaim.Name.get -> string!
+CodeFusion.Http.JwtClaim.Required.get -> bool
+CodeFusion.Http.JwtClaim.Required.init -> void
+CodeFusion.Http.JwtOptions
+CodeFusion.Http.JwtOptions.AllowShortSecret.get -> bool
+CodeFusion.Http.JwtOptions.AllowShortSecret.set -> void
+CodeFusion.Http.JwtOptions.Claims.get -> System.Collections.Generic.IList<CodeFusion.Http.JwtClaim!>!
+CodeFusion.Http.JwtOptions.JwtOptions() -> void
+CodeFusion.Http.JwtOptions.Lifetime.get -> System.TimeSpan
+CodeFusion.Http.JwtOptions.Lifetime.set -> void
+CodeFusion.Http.JwtOptions.Scheme.get -> string!
+CodeFusion.Http.JwtOptions.Scheme.set -> void
 CodeFusion.Http.MinDataRate
 CodeFusion.Http.MinDataRate.BytesPerSecond.get -> double
 CodeFusion.Http.MinDataRate.GracePeriod.get -> System.TimeSpan
@@ -272,6 +314,7 @@ CodeFusion.Http.RequestContext.Errors.get -> CodeFusion.Http.HttpAppErrors!
 CodeFusion.Http.RequestContext.Exchange.get -> CodeFusion.Http.HttpExchange!
 CodeFusion.Http.RequestContext.Json.get -> System.Text.Json.Utf8JsonWriter!
 CodeFusion.Http.RequestContext.Query.get -> CodeFusion.Http.QuerySource
+CodeFusion.Http.RequestContext.RejectRouteValue(CodeFusion.Http.Endpoint! endpoint) -> System.Threading.Tasks.ValueTask
 CodeFusion.Http.RequestContext.RequestBody.get -> CodeFusion.Http.BodySource
 CodeFusion.Http.RequestContext.Reset() -> void
 CodeFusion.Http.RequestContext.RetryAfter.get -> int
@@ -297,14 +340,18 @@ CodeFusion.Http.RouteGroup.Map(CodeFusion.Http.RequestMethod method, string! pat
 CodeFusion.Http.RouteGroup.MapGroup(string! prefix) -> CodeFusion.Http.RouteGroup!
 CodeFusion.Http.RouteGroup.Prefix.get -> string!
 CodeFusion.Http.Viewer
+CodeFusion.Http.Viewer.Claim(System.ReadOnlySpan<byte> name) -> CodeFusion.Utf8
 CodeFusion.Http.Viewer.Id.get -> long
 CodeFusion.Http.Viewer.IsAuthenticated.get -> bool
 CodeFusion.Http.Viewer.Token.get -> CodeFusion.Utf8
+CodeFusion.Http.Viewer.TryGetClaim(System.ReadOnlySpan<byte> name, out CodeFusion.Utf8 value) -> bool
 CodeFusion.Http.Viewer.Viewer() -> void
 CodeFusion.Http.Viewer.Viewer(long id, CodeFusion.Utf8 token) -> void
+const CodeFusion.Http.Jwt.MaxClaims = 16 -> int
 const CodeFusion.Http.Jwt.MaxIssuedBytes = 193 -> int
 const CodeFusion.Http.Jwt.MaxTokenBytes = 4096 -> int
 const CodeFusion.Http.Jwt.MinSecretBytes = 32 -> int
+const CodeFusion.Http.JwtClaim.MaxNameBytes = 64 -> int
 override CodeFusion.Http.Reply.Equals(object? obj) -> bool
 override CodeFusion.Http.Reply.GetHashCode() -> int
 static CodeFusion.Http.BodyValue.FromNested(bool valid) -> CodeFusion.Http.BodyValue
