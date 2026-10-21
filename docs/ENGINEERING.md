@@ -895,7 +895,9 @@ What it decided:
   `Utf8JsonReader`'s tokens (type, start, value bytes, escape flag, `TryGetInt64`, `TryGetInt32`, `TryGetDouble`,
   `Skip`). It reports a syntax error as `Malformed` instead of throwing. `JsonBody` reads through it, the generated
   binders have no `try` or `catch`, and `ReadToEnd()` says whether the body was JSON before any field's reply. A
-  malformed body costs no exception and no allocation, and every body binds 7 to 20% faster than before the branch.
+  malformed body costs no exception and no allocation, and stops where it breaks (23 ns at its second byte). On the
+  three bodies measured (57 B to 2 KB), valid and bad-field bodies bind within noise to 35% faster than before the
+  branch (third iteration of the benchmark file).
   - Held to the reader token by token: `JsonSyntaxTests` (60 cases, 25,000 generated inputs with numbers at and past
     the Int32, Int64 and Double limits, 5,000 arbitrary byte arrays, depth 63 to 1,000) and the `json-syntax` fuzz
     target, replayed at 20 times its mutations.
@@ -948,6 +950,7 @@ except where the row says the test is a guard.
 | 10 | `Jwt.Viewer` and `JsonSyntax.IsValid` were called only by tests, and the auth property test covered `Jwt.Viewer`, not the dispatcher's path | both deleted; the dispatcher's rule is `HttpApp.Refuses`, which `Dispatch`, `BinderPropertyTests` (through `JwtSchemeTests.Dispatched`: `Authenticate` and `Refuses`) and the hand-written benchmark app all call; the cursor check is test code | `ViewersMatchTheContestAuth`, `ArbitraryHeadersAgreeToo` | with the rule broken on purpose (a header without the scheme taken as anonymous), 2 red; the old test stayed green on that |
 | 11 | `[Range(typeof(ulong), ...)]` was CFH0103 | `UInt64` among the types the generator reads | `RouteValueRangesItUses` (`typeof(ulong)`, `typeof(byte)`) | CFH0103 |
 | 7 | `TryTextEquals` said its text was ASCII of at most 16 bytes; a paragraph said a body is malformed when the reader throws; `JsonSyntax` was described as the binders' check | rewritten or marked superseded | (comments) | |
+| 6 | The benchmark's conclusions went past what two small bodies, best of two rounds, could support | `BodyBindingBenchmarks` adds a 2 KB order (numbers, a bool, nested objects, skipped keys, a long escaped note) and an early malformation, checks each body binds as its kind says, and runs three rounds for a median; the docs now claim what that measures | third iteration in `docs/benchmarks/2026-10-21-body-syntax-check.md` | (claims) |
 
 ## Fuzzing (tests/CodeFusion.Fuzz)
 

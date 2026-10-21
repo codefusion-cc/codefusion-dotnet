@@ -63,10 +63,54 @@
 - **Memory and CPU:** nothing allocates on any body with the single pass, and nothing throws. `AppAllocationTests`
   has the malformed feed case back under the 0.5 B bar with every other case, with no allowance.
 - **Conclusion:**
-  - The single pass is faster than the base on every case, not just within noise: 7 to 20% on well-formed and
-    bad-field bodies, and a malformed body costs 0.1 to 0.25 µs and nothing on the heap instead of about 4 µs and an
+  - (Narrowed by the third iteration, which measures realistic bodies.) On these two bodies the single pass was 7 to
+    20% faster on well-formed and bad-field bodies, and a malformed body costs 0.1 to 0.25 µs and nothing on the heap instead of about 4 µs and an
     exception. Kept.
   - It is faster because the cursor does less than `Utf8JsonReader`: one final block, no comments, no options, no
     value sequences. It isn't "faster JSON" in general: a string's UTF-8 is still checked once, by the binder.
   - What keeps it honest is the oracle, not the speed: `JsonSyntaxTests` and the `json-syntax` fuzz target compare
     every token (type, start, bytes, escape, the Int64, Int32 and Double readings) with `Utf8JsonReader`'s.
+
+## Third iteration: realistic bodies, three rounds, median
+
+- **Question:** the second review found the first two iterations too narrow to support "faster on every case": two
+  small bodies of texts and a list, no numbers, bools, nested objects or skipped values, malformed only at the end,
+  best of two rounds under load. Does the single pass still cost no more than the base on a realistic body?
+- **Code:** before = 5eb3a83, single pass = d1a1f85, current = 9cb0640 (the second review's fixes) plus this
+  benchmark. The same `BodyBindingBenchmarks.cs` in each tree; its setup now checks that each body binds, or
+  doesn't, as its kind says.
+- **Bodies:** Login (57 B, two texts), Article (176 B, an escape and a list), and Order (about 2 KB: an Int64, an
+  Int32, a Double, a bool, a list, a required and an optional nested object, unknown keys holding an object and
+  nested arrays to skip, a 1.6 KB note with escapes). Each valid, with a bad field (a number as text, or the price
+  as a string), malformed at its end (cut short) and malformed early (`{x` at its second byte).
+- **Machine:** as above. Load average 3.1 to 10.9.
+- **Method:** `--job short`, three rounds: before, single, current; current, single, before; before, single,
+  current. The figure is the median of the three rounds' means. One side's rounds differ by up to 20% (Login, valid,
+  current: 112.7 to 135.5 ns) and 28% (Order, malformed, before), so differences under about 10% are noise here.
+
+| Case | Before | Single pass | Current | Current vs before |
+|---|---|---|---|---|
+| Login, valid | 144.3 ns | 110.6 ns | 131.6 ns | −9% (noise) |
+| Login, bad field | 130.0 ns | 107.9 ns | 106.5 ns | −18% |
+| Login, malformed at the end | 3,938 ns, 1,192 B | 102.9 ns, 0 B | 101.1 ns, 0 B | −97% |
+| Login, malformed early | 3,500 ns, 1,040 B | 24.0 ns, 0 B | 23.0 ns, 0 B | −99% |
+| Article, valid | 381.8 ns | 336.0 ns | 339.4 ns | −11% |
+| Article, bad field | 288.2 ns | 262.1 ns | 263.6 ns | −9% (noise) |
+| Article, malformed at the end | 4,969 ns, 1,192 B | 247.9 ns, 0 B | 243.4 ns, 0 B | −95% |
+| Article, malformed early | 3,455 ns, 1,040 B | 25.8 ns, 0 B | 28.4 ns, 0 B | −99% |
+| Order, valid | 3,203 ns | 2,169 ns | 2,168 ns | −32% |
+| Order, bad field | 3,060 ns | 2,075 ns | 2,002 ns | −35% |
+| Order, malformed at the end | 6,580 ns, 1,208 B | 1,457 ns, 0 B | 1,446 ns, 0 B | −78% |
+| Order, malformed early | 3,446 ns, 1,040 B | 38.6 ns, 0 B | 37.7 ns, 0 B | −99% |
+
+- **Memory and CPU:** no body allocates on the single pass or current; before, every malformed body allocated its
+  `JsonException` (1,040 to 1,208 B).
+- **Conclusion:**
+  - On these three bodies the single pass costs no more than the base on any valid or bad-field body, and less on
+    the 2 KB order (a third less), where the cursor's simpler number, string and skip paths have the most to do. The
+    first two iterations' "7 to 20% faster on every body" is replaced by this: within noise to a third faster,
+    depending on the body, measured on three bodies.
+  - A malformed body costs no exception and no allocation, and stops where it breaks: 23 to 38 ns at the second
+    byte, against 3.4 µs and 1 KB before.
+  - The second review's fixes cost nothing measurable (current against single pass, every case within noise).
+  - Not measured: bodies over 16 KB, very deep nesting, and the default (non-short) job.
