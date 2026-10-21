@@ -403,10 +403,11 @@ internal abstract unsafe class EventLoop
         }
     }
 
-    /// <summary>Out of descriptors or memory: the listener stops waking the loop until the heartbeat resumes it.</summary>
-    void Pause(Socket listener, int errno)
+    /// <summary>Out of descriptors or memory, or an accept that threw: the listener stops waking the loop until the
+    /// heartbeat resumes it.</summary>
+    void Pause(Socket listener, Exception failure)
     {
-        _server.AcceptFailed(new IOException($"accept4 failed: {Marshal.GetPInvokeErrorMessage(errno)} (errno {errno})"));
+        _server.AcceptFailed(failure);
         try
         {
             if (Watch(listener, add: false, on: false) < 0) return; // still watched: the next wake tries again
@@ -449,6 +450,11 @@ internal abstract unsafe class EventLoop
             {
                 return; // the server stopped
             }
+            catch (Exception e)
+            {
+                Pause(l, e); // what no accept should throw: tried again at the next heartbeat, as out of descriptors
+                return;
+            }
             finally
             {
                 if (held) h.DangerousRelease();
@@ -457,14 +463,24 @@ internal abstract unsafe class EventLoop
             {
                 if (errno == Again) return;
                 if (!OutOfResources(errno)) continue; // that connection failed before it was taken; the next may not
-                Pause(l, errno);
+                Pause(l, new IOException($"accept4 failed: {Marshal.GetPInvokeErrorMessage(errno)} (errno {errno})"));
                 return;
             }
             _server.AcceptWorks();
-            // Admit owns the socket: it closes it, or its connection does
+            HttpExchange? c;
+            try
+            {
+                // Admit owns the socket: it closes it, or its connection does
 #pragma warning disable CA2000
-            if (Wrap(fd) is { } s) _server.Admit(s, this)?.StartRun();
+                c = Wrap(fd) is { } s ? _server.Admit(s, this) : null;
 #pragma warning restore CA2000
+            }
+            catch (Exception e)
+            {
+                Pause(l, e); // out of memory for the connection, say: closed, and the listener rests till the heartbeat
+                return;
+            }
+            c?.StartRun();
         }
     }
 
@@ -484,6 +500,11 @@ internal abstract unsafe class EventLoop
         {
             handle.Dispose();
             return null;
+        }
+        catch
+        {
+            handle.Dispose();
+            throw;
         }
     }
 

@@ -43,8 +43,10 @@ public sealed class HttpServerOptions
     public MinDataRate? MinResponseDataRate { get; set; } = MinDataRate.Default;
 
     /// <summary>The most connections open at once; past it a new connection is closed as soon as it is accepted.
-    /// Null, the default as in Kestrel, sets no limit, so nothing bounds how many slow clients can each hold their
-    /// connection and its buffers.</summary>
+    /// Null, the default, takes it from the process's descriptor limit (RLIMIT_NOFILE, which the runtime raises to
+    /// its hard limit) less 1024, or less half of a limit under 2048: past the limit accept fails and the connections
+    /// waiting hang, and so does whatever else opens a descriptor, the runtime included, which has ended the process
+    /// there. Where there is no such limit (Windows) null sets none.</summary>
     public int? MaxConnections { get; set; }
 
     /// <summary>The request line with its CRLF, in bytes; longer gets 414.</summary>

@@ -124,6 +124,10 @@ public sealed class HttpServer : IAsyncDisposable
     /// listener (Linux); a non-zero errno is taken as that accept's failure. Release builds make no such calls.</summary>
     internal Func<int, int>? AcceptHook;
 
+    /// <summary>Debug builds call it before each of the runtime's accepts (macOS's loops, Sockets, a failed loop's
+    /// listener); what it throws is taken as that accept's failure. Release builds make no such calls.</summary>
+    internal Action? RuntimeAcceptHook;
+
     /// <summary>Debug builds call it on a loop's thread once it has turned its listener off for lack of descriptors,
     /// before it says so: where a heartbeat's resume could land. Release builds make no such calls.</summary>
     internal Action<EventLoop>? PauseHook;
@@ -141,6 +145,10 @@ public sealed class HttpServer : IAsyncDisposable
     int _poolCount;
     int _active;
     readonly int _maxConnections;
+
+    /// <summary>The connection limit in effect: <see cref="HttpServerOptions.MaxConnections"/>, or the default the
+    /// descriptor limit sets.</summary>
+    internal int ConnectionLimit => _maxConnections;
     uint _connectionIds;
     EventLoop[]? _loops;
 
@@ -165,7 +173,7 @@ public sealed class HttpServer : IAsyncDisposable
         RequestBuffers = new BufferPool(options.RequestBufferSize, options.MaxPooledBuffers);
         ResponseBuffers = new BufferPool(options.ResponseBufferSize, options.MaxPooledBuffers);
         _pool = new HttpExchange[options.MaxPooledConnections];
-        _maxConnections = options.MaxConnections ?? int.MaxValue;
+        _maxConnections = options.MaxConnections ?? FileDescriptors.MaxConnections(FileDescriptors.SoftLimit());
     }
 
     internal bool Stopping => _stopping;
@@ -298,38 +306,51 @@ public sealed class HttpServer : IAsyncDisposable
 
     async Task AcceptAsync(Socket listener)
     {
+        // after a failure the next accept waits, twice as long each time up to a second, so a lasting one (out of
+        // descriptors or memory) doesn't spin
+        int backoff = MinAcceptBackoffMs;
         while (!_stopping)
         {
-            Socket s;
+            HttpExchange? c;
             try
             {
-                s = await listener.AcceptAsync(CancellationToken.None).ConfigureAwait(false);
+                RuntimeAccepting();
+                Socket s = await listener.AcceptAsync(CancellationToken.None).ConfigureAwait(false);
+                AcceptWorks();
+                backoff = MinAcceptBackoffMs;
+                c = Admit(s, null);
             }
             catch (ObjectDisposedException)
             {
                 return;
             }
-            catch (SocketException) when (_stopping)
+            catch (Exception) when (_stopping)
             {
                 return;
             }
-            catch (SocketException e)
+            catch (SocketException e) when (e.SocketErrorCode is SocketError.ConnectionReset or SocketError.ConnectionAborted)
             {
-                // Out of file descriptors, or a connection reset before it was accepted: wait and go on.
-                if (e.SocketErrorCode is not (SocketError.ConnectionReset or SocketError.ConnectionAborted))
-                {
-                    AcceptFailed(e);
-                    await Task.Delay(10).ConfigureAwait(false);
-                }
+                continue; // that connection left before it was taken
+            }
+            catch (Exception e)
+            {
+                // Out of descriptors or memory, or anything else: accepting must not end while the server runs.
+                AcceptFailed(e);
+                await Task.Delay(backoff).ConfigureAwait(false);
+                backoff = Math.Min(backoff * 2, MaxAcceptBackoffMs);
                 continue;
             }
-            AcceptWorks();
-            if (Admit(s, null) is not { } c) continue;
+            if (c is null) continue;
             // on its loop's thread, so its first request is handled in a batch as every later one is
             if (c.Loop is { } loop) loop.Post(c);
             else ThreadPool.UnsafeQueueUserWorkItem(c, preferLocal: false);
         }
     }
+
+    const int MinAcceptBackoffMs = 10, MaxAcceptBackoffMs = 1000;
+
+    [Conditional("DEBUG")]
+    void RuntimeAccepting() => RuntimeAcceptHook?.Invoke();
 
     /// <summary>One line per run of accept failures, not one per retry, from whichever thread accepts.</summary>
     internal void AcceptFailed(Exception e)
@@ -343,7 +364,8 @@ public sealed class HttpServer : IAsyncDisposable
     }
 
     /// <summary>A connection accepted: its connection object, attached, or null when it was closed at once (the
-    /// server stops, or is at its limit). <paramref name="loop"/>: the event loop that accepted it.</summary>
+    /// server stops, or is at its limit). <paramref name="loop"/>: the event loop that accepted it. What it throws
+    /// (out of memory for the connection object) it throws with the socket closed.</summary>
     internal HttpExchange? Admit(Socket s, EventLoop? loop)
     {
         if (_stopping)
@@ -361,9 +383,19 @@ public sealed class HttpServer : IAsyncDisposable
             s.Dispose();
             return null;
         }
-        Admitting(loop);
-        // the limit is checked where the count goes up, under the lock: loops admit at once
-        if (Rent(loop) is not { } c)
+        HttpExchange? c;
+        try
+        {
+            Admitting(loop);
+            // the limit is checked where the count goes up, under the lock: loops admit at once
+            c = Rent(loop);
+        }
+        catch
+        {
+            s.Dispose(); // out of memory for a connection object, say: the socket isn't left open
+            throw;
+        }
+        if (c is null)
         {
             s.Dispose(); // past the limit: closed at once, before it costs a connection object
             return null;
@@ -381,20 +413,16 @@ public sealed class HttpServer : IAsyncDisposable
         lock (_lock)
         {
             if (_active >= _maxConnections) return null;
+            // what can run out of memory comes first, before anything is taken
+            if (_freeCount == 0 && _slotCount == _slots.Length)
+            {
+                var bigger = new HttpExchange?[_slots.Length * 2];
+                _slots.AsSpan().CopyTo(bigger);
+                Volatile.Write(ref _slots, bigger);
+            }
             HttpExchange c = _poolCount > 0 ? _pool[--_poolCount] : new HttpExchange(this);
             c.CheckPooled();
-            int slot;
-            if (_freeCount > 0) slot = _free[--_freeCount];
-            else
-            {
-                if (_slotCount == _slots.Length)
-                {
-                    var bigger = new HttpExchange?[_slots.Length * 2];
-                    _slots.AsSpan().CopyTo(bigger);
-                    Volatile.Write(ref _slots, bigger);
-                }
-                slot = _slotCount++;
-            }
+            int slot = _freeCount > 0 ? _free[--_freeCount] : _slotCount++;
             c.Slot = slot;
             c.ConnectionId = unchecked(++_connectionIds);
             c.Loop = loop ?? LoopFor(c.ConnectionId);
