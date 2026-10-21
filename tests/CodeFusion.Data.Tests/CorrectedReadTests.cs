@@ -233,6 +233,47 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
     }
 
     [Fact]
+    public async Task TheRowFoundIsCheckedWhetherOrNotTheSelectReadsAnotherTable()
+    {
+        TestDb.Require();
+        const string schema = "cfdata_guard_found";
+        await using var admin = TestDb.Admin();
+        await admin.Execute($"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; SET search_path = {schema}; {OpsFixture.Schema}; {OpsFixture.Seed}; " +
+            "CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$; " +
+            "INSERT INTO teams VALUES (9880, 'found'); INSERT INTO chain_a VALUES (1, 'one'), (2, 'two'); " +
+            "INSERT INTO chain_b VALUES (1, 1), (2, 2); INSERT INTO chain_c VALUES (1, 1, 9880), (2, 2, 9880)");
+        await using var db0 = TestDb.Admin(schema);
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<DataResult>();
+        var source = Source(schema, failures);
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            // the Select gives back only the row found, which the delete may cascade into: the row given back could be gone
+            _response.Next();
+            FailedByTheGuard(await db.DropChainOf(1, U("one")), failures);
+            Assert.Equal(2L, await db0.Scalar("SELECT count(*) FROM chain_c"));
+            // a trigger on the table an insert writes could change the row found as well
+            await db0.Execute("CREATE TRIGGER t BEFORE INSERT ON pets FOR EACH ROW EXECUTE FUNCTION touch()");
+            _response.Next();
+            FailedByTheGuard(await db.GivePet(U("ann"), 8951, U("rex")), failures);
+            Assert.Equal(0L, await db0.Scalar("SELECT count(*) FROM pets WHERE id = 8951"));
+            await db0.Execute("DROP TRIGGER t ON pets");
+            _response.Next();
+            Assert.Equal(DataStatus.Ok, (await db.GivePet(U("ann"), 8951, U("rex"))).Status);
+            // with no key cascading into chain_c, the row found is as the delete left it
+            await db0.Execute("ALTER TABLE chain_c DROP CONSTRAINT chain_c_b_id_fkey; DELETE FROM chain_c WHERE id = 1");
+            await db0.Execute("INSERT INTO chain_c VALUES (1, 2, 9880)");
+            _response.Next();
+            Assert.Equal(new Number(1, 9880), (await db.DropChainOf(1, U("one"))).Value);
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
+    }
+
+    [Fact]
     public async Task ATriggerRowSecurityOrARoundingColumnOnTheTableWrittenFailsTheStatement()
     {
         TestDb.Require();

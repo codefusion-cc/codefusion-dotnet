@@ -143,17 +143,15 @@ sealed partial class Translator
             Expect(e.KeyColumns.Count > 0, at, $"Then's Select over {e.Type.Name}, which has no key to give back the first row found by ([Key], or an Id)");
             foreach (var k in e.KeyColumns) final.OrderBy.Add((Column(row, k, at), false));
             final.Limit = "1";
-            // the statement checks first that the tables read are as the write left them, which the model can't see all of
-            if (written.Corrected || written.Reads.Count > 0)
-            {
-                if (D.ThenGuard.Length == 0) throw new Refused(at, $"Then whose Select reads tables in {D.Name}, which can't check its tables' triggers and foreign keys, so it");
-                written.Read(TableSql(written.Table));
-                written.Read(TableSql(e));
-                string columns = written.Columns.Count == 0 ? "('', 'text')"
-                    : string.Join(", ", written.Columns.Select(c => $"({Sql.String(c.Name)}, {Sql.String(Dialect.BoundType(c.Kind))})"));
-                final.Where.Add(Dialect.Format(D.ThenGuard, Sql.String(TableSql(written.Table)), columns, string.Join(", ", written.Reads.Select(Sql.String)),
-                    written.Deleted is not null ? D.True : D.False, written.Corrected ? D.True : D.False));
-            }
+            // the statement checks first that the tables read are as the write left them, which the model can't see all of:
+            // the row found too, whatever else the Select reads, which a cascade or a trigger may have changed or deleted
+            if (D.ThenGuard.Length == 0) throw new Refused(at, $"Then with a Select in {D.Name}, which can't check its tables' triggers and foreign keys, so it");
+            written.Read(TableSql(written.Table));
+            written.Read(TableSql(e));
+            string columns = written.Columns.Count == 0 ? "('', 'text')"
+                : string.Join(", ", written.Columns.Select(c => $"({Sql.String(c.Name)}, {Sql.String(Dialect.BoundType(c.Kind))})"));
+            final.Where.Add(Dialect.Format(D.ThenGuard, Sql.String(TableSql(written.Table)), columns, string.Join(", ", written.Reads.Select(Sql.String)),
+                written.Deleted is not null ? D.True : D.False, written.Corrected ? D.True : D.False));
         }
         foreach (var c in writeRow.Needed.Concat(row.Needed).Distinct())
             find.Columns.Add((Column(findRow, e.Columns.Values.First(x => x.Name == c), at), null));

@@ -69,11 +69,11 @@ write: `ProfileView.Of(u, viewer)` after the follow is followed, and an article'
 is the snapshot's count and one if the snapshot held no favorite of that key (written now, or by a concurrent request
 the snapshot missed). After an insert with `OrIgnore` that needs the table's key, `[Key]` on each of its columns.
 After a delete, the Select may not read a table whose rows lead to the table deleted from (a cascade could have
-changed it). What the model can't see the statement checks first, in the catalog: a rule or trigger on the table
-written or on any table the delete cascades into, key after key, a foreign key by which the delete reaches a table
-read, and, for a corrected read, row security or a
-column that may store another value than the one written, or compare it in a collation other than the default. Any of
-them fails the statement with a message starting `CodeFusion: the Select after Then can't read`, and nothing is written.
+changed it). What the model can't see the statement checks first, in the catalog, whatever the Select reads
+(the row found is read too): a rule or trigger on the table written or on any table the delete cascades into, key
+after key, a foreign key by which the delete reaches a table read, and, for a corrected read, row security or a column
+that may store another value than the one written, or compare it in a collation other than the default. Any of them
+fails the statement with a message starting `CodeFusion: the Select after Then can't read`, and nothing is written.
 
 A page of each row's children is `SelectMany` of a navigation, the child itself as its result, before one OrderBy of
 the child's key and the page. Each source row's children come from a lateral join that takes, in the page's order,

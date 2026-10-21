@@ -266,7 +266,8 @@ public sealed class ShapeGeneratorTests
                 public Write<Name> WithoutSelect(Utf8 name) => People.Where(p => p.Name == name).Then(p => Pets.Delete());
             """);
         var r = Run(source);
-        Assert.Equal("WITH t AS (SELECT p.id, p.name FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (owner_id, name) SELECT t.id, $2 FROM t) SELECT t.id, t.name FROM t ORDER BY t.id LIMIT 1", r.Sql("Give"));
+        Assert.Equal("WITH t AS (SELECT p.id, p.name FROM people p WHERE p.name = $1), w AS (INSERT INTO pets (owner_id, name) SELECT t.id, $2 FROM t) SELECT t.id, t.name FROM t" +
+            Guards.Then("pets", [("owner_id", "bigint"), ("name", "text")], ["pets", "people"], delete: false, corrected: false) + " ORDER BY t.id LIMIT 1", r.Sql("Give"));
         // a condition holding AND inside a CASE is one condition
         Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > 1) DELETE FROM pets x USING t WHERE (CASE WHEN x.id > 0 AND x.id < 9 THEN x.owner_id = t.id OR x.id = 2 ELSE false END)", r.Sql("TakeCase"));
         Assert.Equal("WITH t AS (SELECT p.id FROM people p WHERE p.age > $1) DELETE FROM pets x WHERE x.owner_id = ANY(ARRAY(SELECT t.id FROM t))", r.Sql("Take"));

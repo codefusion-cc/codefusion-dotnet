@@ -204,6 +204,7 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Table<Gadget> Gadgets => Table<Gadget>();
     public Table<TenantItem> TenantItems => Table<TenantItem>();
     public Table<ChainA> ChainAs => Table<ChainA>();
+    public Table<ChainC> ChainCs => Table<ChainC>();
 
     // ---------- Where ----------
 
@@ -528,9 +529,9 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Write<Number> DropChain(long team, Utf8 name) =>
         Teams.Where(t => t.Id == team).Then(t => ChainAs.Where(a => a.Name == name).Delete()).Select(t => new Number(t.Id, t.Chains.Count()));
 
-    /// <summary>The same delete, giving back the team's own columns only.</summary>
-    public Write<Number> DropChainQuietly(long team, Utf8 name) =>
-        Teams.Where(t => t.Id == team).Then(t => ChainAs.Where(a => a.Name == name).Delete()).Select(t => new Number(t.Id, t.Id));
+    /// <summary>The same delete from a chain_c row found, which it may cascade into, giving back that row's own columns.</summary>
+    public Write<Number> DropChainOf(long id, Utf8 name) =>
+        ChainCs.Where(c => c.Id == id).Then(c => ChainAs.Where(a => a.Name == name).Delete()).Select(c => new Number(c.Id, c.TeamId));
 
     /// <summary>An insert without OrIgnore: the row written is the one more, whatever its columns.</summary>
     public Write<Tally> AddPetCounted(Utf8 name, long id) =>

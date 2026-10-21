@@ -953,8 +953,9 @@ What the fixes decided:
   modifier, a type other than the one its value is bound as (a long into an integer column), or a collation other than the default (a
   nondeterministic one compares the snapshot's rows otherwise than the correction compares the row written). Any of them
   casts `'CodeFusion: the Select after Then can't read <table> as the write left it ...'` to an integer, which fails
-  the statement (22P02) before its write commits. The check is a few catalog lookups by index per statement, run only
-  for a Then whose Select reads a table or is corrected; PlanTests compare with the contest's statements so checked,
+  the statement (22P02) before its write commits. The check is a few catalog lookups by index per statement, run for
+  every Then with a Select, whatever it reads: the row given back is the one found, which a cascade or a trigger may
+  have changed or deleted, so its table is checked as consistently as the others; PlanTests compare with the contest's statements so checked,
   catalog reads included, and `TheCheckReadsTheCatalogByItsIndexes` pins that an index serves each catalog read (with
   sequential scans off: the planner scans a small catalog table whole, as that costs less). The triggers are looked up
   by a scalar subquery with LIMIT 1, which the planner can't turn into a hash of the whole of pg_trigger.
