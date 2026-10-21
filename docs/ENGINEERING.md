@@ -883,12 +883,18 @@ What it decided:
   one that leaves no value of digits are CFH0103. The reply is the endpoint's, then the app's, then `NotFound`, one
   `??` chain in `RejectRouteValue`. Auth runs in the dispatcher before the endpoint binds anything, as before.
 - A malformed body cost a `JsonException` (1,176 B per request in `AppAllocationTests`), as it had since the binders
-  were written; it mattered once a malformed body had its own reply. The binder now checks the body's syntax first,
-  without throwing (`JsonSyntax`, about 150 lines, one pass), and answers a malformed body before the reader sees it.
-  The check is never stricter than the reader: `JsonSyntaxTests` (60 cases, 25,000 generated inputs, depth 63 to
-  1,000) and the `json-syntax` fuzz target hold them to the same verdict, and the binder keeps its `catch` for
-  anything the check lets through. Broken on purpose (leading zeros taken, the depth limit one off), the property
-  test failed. A well-formed body is now read twice; nothing was measured for it here, so no figure is claimed.
+  were written; it mattered once a malformed body had its own reply. For one commit the binder checked every body's
+  syntax first, without throwing (`JsonSyntax`, about 150 lines, one pass). The check is never stricter than the
+  reader: `JsonSyntaxTests` (60 cases, 25,000 generated inputs, depth 63 to 1,000) and the `json-syntax` fuzz target
+  hold them to the same verdict. Broken on purpose (leading zeros taken, the depth limit one off), the property test
+  failed.
+- That read a well-formed body twice: binding got 65 to 75% slower
+  ([2026-10-21-body-syntax-check.md](benchmarks/2026-10-21-body-syntax-check.md)). On the coordinator's call the
+  binder binds first again. The check runs only where binding failed without the reader throwing: a root that isn't
+  an object, where it tells `[1,` (malformed) from `[]` (another shape) instead of reading on until the reader throws.
+  A well-formed body costs what it did before the branch (within 2 to 8% on a loaded Mac). A malformed body throws
+  again, 1,192 B and about 4 µs. `AppAllocationTests` allows exactly that for the malformed feed case, and
+  `EdgeTests.ABodysSyntaxIsCheckedOnlyWhereBindingFailed` pins where the generated binder calls the check.
 - An Opus review of the diff found nothing critical or high. Fixed, each test red on the code before:
   `Jwt.Issue` asked the arena for six times a value's length before checking the value (a 1 MB claim took about
   8 MB from the pool, then a 500), and its size sum could overflow: the claims are checked first now, sized by their

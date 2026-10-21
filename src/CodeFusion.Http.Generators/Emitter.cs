@@ -448,17 +448,14 @@ internal static class Emitter
         w.Line("value = default;");
         w.Line($"if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? {structural};");
         w.Line($"var b = new {Http}.JsonBody(source);");
-        w.Line($"if (!b.IsWellFormed()) return source.MalformedBody ?? {structural};");
         w.Line($"global::System.Span<byte> name = stackalloc byte[{buffer}];");
         Locals(w, b);
         if (b.Envelope is not null) w.Line("bool found = false;");
         w.Line("try");
         w.Open("");
+        w.Line("// a root that isn't an object: JSON of another shape, or malformed further on, which the check tells without throwing");
         w.Line("if (!b.ReadRootObject())");
-        w.Open("");
-        w.Line("b.ReadToEnd(); // JSON of another shape, unless the rest is malformed");
-        w.Line($"return {structural};");
-        w.Close();
+        w.Line($"    return b.IsWellFormed() ? {structural} : source.MalformedBody ?? {structural};");
         if (b.Envelope is not null)
         {
             w.Line("while (b.NextProperty())");

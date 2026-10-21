@@ -5,7 +5,7 @@ namespace CodeFusion.Http;
 
 /// <summary>
 /// Whether bytes are one JSON value (RFC 8259) as <c>Utf8JsonReader</c> reads a final block with no comments, no
-/// trailing commas and a depth limit, checked without throwing: a malformed body costs no exception. It is never
+/// trailing commas and a depth limit, checked without throwing, for what a binder must classify by itself. It is never
 /// stricter than the reader, so what it refuses the reader would throw on; it doesn't check strings for UTF-8, which
 /// the reader doesn't either.
 /// </summary>

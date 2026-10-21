@@ -50,7 +50,7 @@ public class AppAllocationTests(ITestOutputHelper output)
         { "feed: no bearer token, 401", 1 },
         { "feed: invalid token, 401", 1 },
         { "feed: invalid token payload, 401", 1 },
-        { "feed: malformed body, 400", 1 },
+        { "feed: malformed body, 400, its JsonException only", 1 },
         { "feed: no body, 400", 1 },
         { "feed: invalid post id after auth, 400", 1 },
         { "feed: post id out of range, 400", 1 },
@@ -74,7 +74,7 @@ public class AppAllocationTests(ITestOutputHelper output)
         "feed: no bearer token, 401" => Feed("POST", "/posts", "Token " + FeedToken[7..], """{"body":"x"}"""),
         "feed: invalid token, 401" => Feed("POST", "/posts", FeedToken[..^4] + "AAAA", """{"body":"x"}"""),
         "feed: invalid token payload, 401" => Feed("POST", "/posts", "Bearer " + JwtClaimTests.Signed(System.Text.Encoding.UTF8.GetBytes($$"""{"sub":"0","username":"jake","exp":{{DateTimeOffset.UtcNow.ToUnixTimeSeconds() + 3600}}}"""), secret: FeedApp.Secret), """{"body":"x"}"""),
-        "feed: malformed body, 400" => Feed("POST", "/posts", FeedToken, """{"body":"x"""),
+        "feed: malformed body, 400, its JsonException only" => Feed("POST", "/posts", FeedToken, """{"body":"x"""),
         "feed: no body, 400" => Feed("POST", "/posts", FeedToken, ""),
         "feed: invalid post id after auth, 400" => Feed("POST", "/posts/abc/like", FeedToken, ""),
         "feed: post id out of range, 400" => Feed("GET", "/posts/0", null, null),
@@ -125,6 +125,9 @@ public class AppAllocationTests(ITestOutputHelper output)
         double perRequest = (double)allocated / (measured * connections);
         output.WriteLine($"{name}, {connections} connection(s): {allocated} bytes over {measured * connections} requests: {perRequest:F3} B/request");
         foreach (var g in ticks.Types.GroupBy(t => t).OrderByDescending(g => g.Count())) output.WriteLine($"  {g.Count(),4} samples: {g.Key}");
-        Assert.True(perRequest < 0.5, $"{perRequest:F3} bytes per request");
+        // A malformed body is bound until the reader throws: its one JsonException (1,192 B in BodyBindingBenchmarks)
+        // is the price of reading a well-formed body only once (docs/benchmarks/2026-10-21-body-syntax-check.md).
+        double allowed = name.EndsWith("its JsonException only", StringComparison.Ordinal) ? 1_800 : 0.5;
+        Assert.True(perRequest < allowed, $"{perRequest:F3} bytes per request");
     }
 }

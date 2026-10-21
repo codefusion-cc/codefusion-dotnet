@@ -25,6 +25,7 @@ is the GC collections and allocation rate of the CodeFusion process during a sus
 
 | Date | File | What was tested | Result |
 |---|---|---|---|
+| 2026-10-21 | [2026-10-21-body-syntax-check.md](2026-10-21-body-syntax-check.md) | body binding: before the spec options, with the syntax check first, and binding first | check first: valid bodies 65-75% slower, malformed 0 B; binding first: valid within 2-8% of the base, malformed back to one 1,192 B exception |
 
 ## Template
 

@@ -163,8 +163,9 @@ public ref struct JsonBody
 
     static ReadOnlySpan<byte> Utf8Bom => [0xEF, 0xBB, 0xBF];
 
-    /// <summary>Whether the body is JSON the reader takes, checked first without throwing, so a malformed body costs no
-    /// exception. Never stricter than the reader: one it lets through that the reader refuses still throws.</summary>
+    /// <summary>Whether the whole body is JSON the reader takes, checked without throwing: the binder asks only where
+    /// binding failed without the reader throwing (a root that isn't an object), so a good body is read once. Never
+    /// stricter than the reader.</summary>
     public readonly bool IsWellFormed() => JsonSyntax.IsValid(_buffer.AsSpan(_start + _bom, _length - _bom), Options.MaxDepth);
 
     /// <summary>Reads the root value: true when it is an object.</summary>

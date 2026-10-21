@@ -11,7 +11,6 @@ partial struct NewArticle
         value = default;
         if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? InvalidBody;
         var b = new global::CodeFusion.Http.JsonBody(source);
-        if (!b.IsWellFormed()) return source.MalformedBody ?? InvalidBody;
         global::System.Span<byte> name = stackalloc byte[66];
         global::CodeFusion.Http.BodyValue f0 = default;
         global::CodeFusion.Http.BodyValue f1 = default;
@@ -31,11 +30,9 @@ partial struct NewArticle
         bool found = false;
         try
         {
+            // a root that isn't an object: JSON of another shape, or malformed further on, which the check tells without throwing
             if (!b.ReadRootObject())
-            {
-                b.ReadToEnd(); // JSON of another shape, unless the rest is malformed
-                return InvalidBody;
-            }
+                return b.IsWellFormed() ? InvalidBody : source.MalformedBody ?? InvalidBody;
             while (b.NextProperty())
             {
                 if (!global::System.MemoryExtensions.SequenceEqual(b.PropertyName(name), "article"u8))

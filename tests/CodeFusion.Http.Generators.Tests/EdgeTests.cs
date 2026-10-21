@@ -36,6 +36,26 @@ public class EdgeTests
         Assert.Contains("SequenceEqual(b.PropertyName(name), \"user\"u8)", body, StringComparison.Ordinal);
     }
 
+    // A well-formed body is read once, as before the syntax check existed: the check runs only where binding has
+    // failed without the reader throwing, a root that isn't an object, to tell a malformed rest from another shape.
+    [Fact]
+    public void ABodysSyntaxIsCheckedOnlyWhereBindingFailed()
+    {
+        string body = Generated("""
+            [JsonEnvelope("user")] public partial struct NewUser { public Utf8 Email; public long Age; }
+            public static class P
+            {
+                public static void Map(IEndpointRouteBuilder api) => api.MapPost("/users", static (NewUser u) => Reply.NoContent());
+            }
+            """, "NewUser.Body.g.cs");
+        string[] lines = body.Split('\n');
+        int check = Array.FindIndex(lines, l => l.Contains("IsWellFormed()", StringComparison.Ordinal));
+        Assert.True(check > 0, body);
+        Assert.Single(lines, l => l.Contains("IsWellFormed()", StringComparison.Ordinal));
+        Assert.Contains("if (!b.ReadRootObject())", lines[check - 1], StringComparison.Ordinal);
+        Assert.DoesNotContain("ReadToEnd(); // JSON of another shape", body, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void AnIntQueryFieldsBoundsStayInsideInt()
     {

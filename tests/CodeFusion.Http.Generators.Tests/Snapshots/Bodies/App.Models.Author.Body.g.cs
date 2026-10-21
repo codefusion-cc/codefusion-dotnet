@@ -11,17 +11,14 @@ partial struct Author
         value = default;
         if (source.IsEmpty) return source.MissingBody ?? source.MalformedBody ?? source.InvalidBody;
         var b = new global::CodeFusion.Http.JsonBody(source);
-        if (!b.IsWellFormed()) return source.MalformedBody ?? source.InvalidBody;
         global::System.Span<byte> name = stackalloc byte[24];
         global::CodeFusion.Http.BodyValue f0 = default;
         global::CodeFusion.Http.BodyValue f1 = default;
         try
         {
+            // a root that isn't an object: JSON of another shape, or malformed further on, which the check tells without throwing
             if (!b.ReadRootObject())
-            {
-                b.ReadToEnd(); // JSON of another shape, unless the rest is malformed
-                return source.InvalidBody;
-            }
+                return b.IsWellFormed() ? source.InvalidBody : source.MalformedBody ?? source.InvalidBody;
             while (b.NextProperty())
             {
                 global::System.ReadOnlySpan<byte> n = b.PropertyName(name);
