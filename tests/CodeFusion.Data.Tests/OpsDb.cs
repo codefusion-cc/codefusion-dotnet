@@ -48,6 +48,7 @@ public sealed class Pet
     public Person Owner { get; init; } = null!;
     public Utf8 Name { get; init; }
     public int Legs { get; init; }
+    public float? Weight { get; init; }
 }
 
 public sealed class Label
@@ -537,6 +538,11 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Write<Tally> AddPetCounted(Utf8 name, long id) =>
         People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { Id = id, OwnerId = p.Id, Name = p.Name, Legs = 3 }))
             .Select(p => new Tally(p.Id, p.Pets.Count(x => x.Legs > 2), p.Pets.Any(x => x.Name == p.Name)));
+
+    /// <summary>The same insert with a float set, the pets of a weight counted.</summary>
+    public Write<Tally> AddPetWeighed(Utf8 name, long id) =>
+        People.Where(p => p.Name == name).Then(p => Insert(Pets, new Pet { Id = id, OwnerId = p.Id, Name = p.Name, Legs = 3, Weight = 2.5f }))
+            .Select(p => new Tally(p.Id, p.Pets.Count(x => x.Weight > 2f), p.Pets.Any(x => x.Name == p.Name)));
 
     // ---------- pages of each row's children ----------
 

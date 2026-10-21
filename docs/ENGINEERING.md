@@ -949,10 +949,12 @@ What the fixes decided:
   perf/data-batched-updates' merged updates check their table): a rule or non-internal trigger on the table written,
   or on any table a delete reaches from it key after key (a recursive CTE over the foreign keys that cascade, set
   NULL or set a default, found through pg_depend's index), such a foreign key into a table the Select reads (the
-  found table and the table written included), and, for a corrected read, row security on it or a column the insert sets with a type
-  modifier, a type other than the one its value is bound as (a long into an integer column), or a collation other than the default (a
-  nondeterministic one compares the snapshot's rows otherwise than the correction compares the row written). Any of them
-  casts `'CodeFusion: the Select after Then can't read <table> as the write left it ...'` to an integer, which fails
+  found table and the table written included), and, for a corrected read, row security on it or a column the insert
+  sets with a type modifier, a type other than the one its value is bound as except a wider one of the same kind
+  (int into bigint and float into double precision hold the value; long into integer narrows, and int into double
+  precision crosses to floats, which past 2^53 don't hold every integer), or a collation other than the default (a
+  nondeterministic one compares the snapshot's rows otherwise than the correction compares the row written). Any of
+  them casts `'CodeFusion: the Select after Then can't read <table> as the write left it ...'` to an integer, which fails
   the statement (22P02) before its write commits. The check is a few catalog lookups by index per statement, run for
   every Then with a Select, whatever it reads: the row given back is the one found, which a cascade or a trigger may
   have changed or deleted, so its table is checked as consistently as the others; PlanTests compare with the contest's statements so checked,
@@ -982,7 +984,7 @@ purpose), then green on the C and the ICU database.
 |---|---|---|
 | the guard followed a delete's cascades one table deep, and checked rules and triggers on the table written only | `CorrectedReadTests.ACascadeTwoTablesAwayFromTheDeleteFailsTheStatement` (chain_a to chain_b to chain_c, none of it in the model; a trigger and a rule on chain_b) | the count of chain_c as before the delete |
 | a corrected read of a column in a nondeterministic or other non-default collation | `ACorrectedReadOfAColumnInAnotherCollationFailsTheStatement` (ICU `ci`, and `"C"`) | the pet written |
-| a column of another type than its value is bound as passed the fixed list of types | `ACorrectedReadOfAColumnOfAnotherTypeThanTheValueBoundFailsTheStatement` (int into float8 and int8, long into int4) | the pet written |
+| a column of another type than its value is bound as passed the fixed list of types | `ACorrectedReadOfAColumnOfAnotherTypeThanTheValueBoundFailsTheStatement` (int into float8, long into int4, long into numeric); `AWiderColumnOfTheKindBoundHoldsTheValueAsBound` (int into int4 and int8, float into float4 and float8 pass) | the pet written; with the exact match first asked for, int into int8 and float into float4 failed |
 | a NUL in a Utf8 or string constant, in Replace or Concat, or in the text of Sql broke the generated class | `ShapeGeneratorTests.ANulInAnyTextTheStatementWritesIsRefused` (6 rows) | no error for 4 |
 | conditions split inside E'' strings, dollar quotes and comments | `ConditionsSplitOnlyAtTheirTopLevel` (5 rows more) | 4 split wrong |
 | two copies of the guard, nothing tying them | `TheThenGuardIsOneTextTheGeneratorKeeps` (the attribute holds none, the text pinned) | the attribute's copy |

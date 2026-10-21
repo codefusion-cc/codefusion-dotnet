@@ -116,7 +116,8 @@ public sealed class ShapeGeneratorTests
             "OR (SELECT true FROM pg_trigger g WHERE g.tgrelid = r.oid AND NOT g.tgisinternal LIMIT 1) " +
             "OR {3} AND EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = ANY (ARRAY[{2}]::regclass[]) AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd'))) " +
             "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM (VALUES {1}) v(n, t) JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = v.n::name " +
-            "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid <> v.t::regtype)) " +
+            "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid::regtype <> ALL (CASE v.t WHEN 'smallint' THEN '{int2,int4,int8}'::regtype[] " +
+            "WHEN 'integer' THEN '{int4,int8}'::regtype[] WHEN 'real' THEN '{float4,float8}'::regtype[] ELSE ARRAY[v.t::regtype] END))) " +
             "THEN ('CodeFusion: the Select after Then can''t read ' || c.relname || ' as the write left it (a rule, a trigger, row security, a foreign key that cascades " +
             "into a table it reads, or a column that may store another value than the one written or compare it otherwise)')::int ELSE 0 END FROM pg_class c WHERE c.oid = {0}::regclass) = 0",
             CodeFusion.Data.Generator.Dialect.ThenGuardOfPostgres);

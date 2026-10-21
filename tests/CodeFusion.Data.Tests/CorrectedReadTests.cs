@@ -372,17 +372,59 @@ public sealed class CorrectedReadTests(OpsFixture fixture)
                 _response.Next();
                 return await db.AddPetCounted(U("ann"), id);
             }
-            // Pet.Legs is an int, bound as integer: a column of another type, whatever it stores, isn't compared as bound
+            // Pet.Legs is an int, bound as integer: a float column is another kind, which past 2^53 doesn't hold every integer
             await db0.Execute("ALTER TABLE pets ALTER COLUMN legs TYPE double precision");
             FailedByTheGuard(await Add(8901), failures);
-            await db0.Execute("ALTER TABLE pets ALTER COLUMN legs TYPE bigint");
-            FailedByTheGuard(await Add(8902), failures);
-            // and Pet.Id a long, bound as bigint
+            // Pet.Id is a long, bound as bigint: a narrower integer column
             await db0.Execute("ALTER TABLE pets ALTER COLUMN legs TYPE integer, ALTER COLUMN id TYPE integer");
             FailedByTheGuard(await Add(8903), failures);
+            // the type of no number: the exact one, numeric(1000) holding every bigint still another
+            await db0.Execute("ALTER TABLE pets ALTER COLUMN id TYPE numeric");
+            FailedByTheGuard(await Add(8902), failures);
             Assert.Equal(0L, await db0.Scalar("SELECT count(*) FROM pets WHERE id IN (8901, 8902, 8903)"));
             await db0.Execute("ALTER TABLE pets ALTER COLUMN id TYPE bigint");
             Assert.Equal(DataStatus.Ok, (await Add(8904)).Status);
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
+    }
+
+    [Fact]
+    public async Task AWiderColumnOfTheKindBoundHoldsTheValueAsBound()
+    {
+        TestDb.Require();
+        const string schema = "cfdata_guard_wider";
+        await using var admin = TestDb.Admin();
+        await admin.Execute($"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; SET search_path = {schema}; {OpsFixture.Schema}; {OpsFixture.Seed}");
+        await using var db0 = TestDb.Admin(schema);
+        var failures = new System.Collections.Concurrent.ConcurrentQueue<DataResult>();
+        var source = Source(schema, failures);
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            // ann has rex (4 legs) and tweety (2 legs, below the count)
+            async Task<Tally> Counted(long id)
+            {
+                _response.Next();
+                return (await db.AddPetCounted(U("ann"), id)).Value;
+            }
+            async Task<Tally> Weighed(long id)
+            {
+                _response.Next();
+                return (await db.AddPetWeighed(U("ann"), id)).Value;
+            }
+            // an int into integer, as bound, and into bigint, which holds every int as it is
+            Assert.Equal(new Tally(1, 2, true), await Counted(8961));
+            await db0.Execute("ALTER TABLE pets ALTER COLUMN legs TYPE bigint");
+            Assert.Equal(new Tally(1, 3, true), await Counted(8962));
+            // a float into real, as bound, and into double precision, which holds every float as it is
+            Assert.Equal(new Tally(1, 1, true), await Weighed(8963));
+            await db0.Execute("ALTER TABLE pets ALTER COLUMN weight TYPE double precision");
+            Assert.Equal(new Tally(1, 2, true), await Weighed(8964));
+            Assert.Empty(failures);
         }
         finally
         {

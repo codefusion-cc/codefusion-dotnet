@@ -23,8 +23,8 @@ sealed class Dialect
     /// the insert sets, rows of a VALUES of each one's name and the type it is bound as; {3} whether the write deletes,
     /// {4} whether a read is corrected. A rule or a trigger on the table written may write more; a delete may cascade,
     /// key by key, into a table read, and each table it reaches may have rules or triggers of its own; and a corrected
-    /// read needs no row security and columns that store the value written (no type modifier, the type bound) and
-    /// compare it as the correction does (the default collation).
+    /// read needs no row security and columns that store the value written (no type modifier, the type bound or a
+    /// wider integer or float) and compare it as the correction does (the default collation).
     /// </summary>
     public const string ThenGuardOfPostgres =
         "(SELECT CASE WHEN EXISTS (WITH RECURSIVE r(oid) AS (SELECT c.oid UNION SELECT k.conrelid FROM r JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass " +
@@ -34,19 +34,23 @@ sealed class Dialect
         "OR (SELECT true FROM pg_trigger g WHERE g.tgrelid = r.oid AND NOT g.tgisinternal LIMIT 1) " +
         "OR {3} AND EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = ANY (ARRAY[{2}]::regclass[]) AND k.contype = 'f' AND k.confrelid = r.oid AND k.confdeltype IN ('c', 'n', 'd'))) " +
         "OR {4} AND (c.relrowsecurity OR EXISTS (SELECT 1 FROM (VALUES {1}) v(n, t) JOIN pg_attribute a ON a.attrelid = c.oid AND a.attname = v.n::name " +
-        "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid <> v.t::regtype)) " +
+        "WHERE a.atttypmod <> -1 OR a.attcollation NOT IN (0, 100) OR a.atttypid::regtype <> ALL (CASE v.t WHEN 'smallint' THEN '{int2,int4,int8}'::regtype[] " +
+        "WHEN 'integer' THEN '{int4,int8}'::regtype[] WHEN 'real' THEN '{float4,float8}'::regtype[] ELSE ARRAY[v.t::regtype] END))) " +
         "THEN ('CodeFusion: the Select after Then can''t read ' || c.relname || ' as the write left it (a rule, a trigger, row security, a foreign key that cascades " +
         "into a table it reads, or a column that may store another value than the one written or compare it otherwise)')::int ELSE 0 END FROM pg_class c WHERE c.oid = {0}::regclass) = 0";
 
-    /// <summary>The Postgres type a column's value is bound as (the parameter types of
-    /// <see cref="ParamList"/>), which the Then guard compares with the column's: a column of another type may store
-    /// another value than the one the correction compares.</summary>
+    /// <summary>The Postgres type of a column's value as the model declares it (a short a smallint and a float a real,
+    /// though <see cref="ParamList"/> binds both wider), which the Then guard compares with the column's: the column may
+    /// be of that type or a wider integer or float, any other may store another value than the one the correction
+    /// compares.</summary>
     public static string BoundType(ValueKind kind) => kind.Scalar switch
     {
         Scalar.Int64 => "bigint",
-        Scalar.Int32 or Scalar.Int16 => "integer",
+        Scalar.Int32 => "integer",
+        Scalar.Int16 => "smallint",
         Scalar.Boolean => "boolean",
-        Scalar.Double or Scalar.Single => "double precision",
+        Scalar.Double => "double precision",
+        Scalar.Single => "real",
         Scalar.Timestamp => "timestamp with time zone",
         _ => "text",
     };
