@@ -37,7 +37,8 @@ The hits there were:
   write through `HttpServerOptions.Stderr`, the same lines as before and the one Console use, with a `#pragma`.
   `ErrorHookTests` cover a handler's exception reaching `OnError`, a hook that throws (counted, and the connection
   answers the next request), a null hook, and the default's exact stderr lines; each went red with its code broken.
-  Not covered: accept failing (it needs the process out of descriptors) and `Report`'s own catch on the accept and
+  Accept failing is covered by Debug hooks that make an accept, an admission, a start or a backoff throw, and by the
+  sample app under `ulimit -n 256` (see "Past the descriptor limit"). Not covered: `Report`'s own catch on the
   connection paths (no test can make a connection loop throw on demand).
 - `PoolingAsyncValueTaskMethodBuilder` on `HttpExchange.RunAsync` and `FlushAsync`. They keep it, with a `#pragma`
   and the reason. Switched to `PooledValueTaskMethodBuilder`, `KeepAliveRequestsAllocateNothing(async: true,
@@ -836,6 +837,58 @@ hot paths is the same as before: each check is a `[Conditional("DEBUG")]` call, 
 Http 505: all pass in Release (the 7 Debug-only check tests skip) and in Debug (the allocation tests skip), against a
 Postgres 18 with CODEFUSION_TEST_DB and the four CODEFUSION_TEST_PG_* logins set. The allocation tests pass in Release.
 
+### Pipelined reads, shared bursts and RunsAlone (perf/pg-pipelining)
+
+What was decided:
+- **Two groups in flight per read connection** (`PgReader.MaxInFlight`). The loop sends what has queued while Postgres
+  still answers the group before, so a backend never waits a round trip. More than two gained nothing measured.
+- **A group that binds a statement whose Parse is still unanswered waits** for the batches before it. Postgres skips
+  everything after an error up to the Sync, that Parse included, so sending at once would bind a statement that
+  doesn't exist (`PgConnection.BindsPendingParse`).
+- **A failing read's skipped reads go out again** as a new batch behind the rest, in their group. They are back in
+  flight before the send, so a failed send ends them Broken with the rest.
+- **A broken connection fails every command in flight**, and the next group reconnects.
+- **A burst is shared out among the loops asleep**: a loop that finds others asleep takes its share (at least
+  `PgQueue.ShareAtLeast`, 4) and wakes the next.
+- **A batch sent while another is answered takes replies in** whenever the socket is full: those replies can fill our
+  buffers while Postgres waits for us to read them. On Linux this uses MSG_DONTWAIT, which costs no system call.
+- **`RunsAlone` statements run on connections of their own**: `PgSettings.AloneConnections`, 2 by default, made at the
+  first such command. Each runs one command in its own transaction, and the next goes to a free one.
+- **The job pool is bounded**:
+  - by bytes: 32 MB for the shared pool, each job counted whole (about 512 B of its own and its buffers). Past that
+    a returning job grown past 4 KB goes (a job grown for one large command keeps its buffers through every small one
+    after it; shrinking them instead would allocate on a return), and a smaller one takes the place of the least
+    recently used jobs, from the bottom of a ring;
+  - by count: what the started loops can hold (their queues and groups, given back when they complete), at most
+    16,384;
+  - a buffer past 64 KB is never kept;
+  - a thread's cache holds up to 32 jobs whose buffers are 4 KB or less, and goes back from its finalizer;
+  - each loop that starts makes the jobs its groups and its thread's cache can hold (the first loop also a cache's
+    worth for each core's callers), so the shared pool is never empty while other threads' caches hold jobs. Without
+    it, `AllocationTests.QueriesAllocateNothingOnceWarm` failed about one run in three in the full suite: the shared
+    pool held 0 jobs at the end, and 10 to 16 were made in the measured runs.
+
+The review's findings, each test red on the code before its fix:
+
+| Finding | Test | Red before |
+|---|---|---|
+| a rerun whose send failed: its reads never answered, the group lost; after two the loop spun | `PgPipelineTests.ARerunWhoseSendFailsEndsItsReadsBrokenAndTheLoopGoesOn` | timed out (31 reads unanswered) |
+| a small batch sent while another was answered could block on full buffers | `PgPipelineTests.ABatchSentWhileAnotherIsAnsweredTakesRepliesInWhileTheSocketIsFull` | 0 of 5 sends took replies in |
+| one alone loop: a slow report held up every alone command | `PgAloneTests.ASlowCommandThatRunsAloneHoldsUpNoOtherThatRunsAlone`, `TheConnectionsForCommandsThatRunAloneAreAsManyAsTheSettingsSay` | waited; 1 connection for 3 |
+| the pool kept 64 KB buffers for 16,384 jobs | `PgAllocationTests.APoolFilledByLargeCommandsKeepsAtMostItsByteBudget` | 479 MB kept after a burst of 4,096 |
+| (re-review N3) buffers up to 4 KB counted against nothing | `PgAllocationTests.APoolFilledBySmallButNotTinyCommandsStaysBounded` (the live heap after a compacting GC; GC.GetTotalMemory over-reads with regions) | 66 MB kept for 16,384 commands of 3.9 KB |
+| the pool's room never given back | `PgAllocationTests.ThePoolHasRoomForWhatTheLoopsCanHoldAndGivesItBackWhenTheyStop` | room still held after the loops stopped |
+| the reuse guard never saw a reused job (the thread caches) | `PgJobReuseGuardTests` (asserts the job is the same) | another job |
+| the burst test passed without sharing | `PgPipelineTests.ABurstWhileOtherLoopsSleepIsSharedOutAmongThem` (queued under the queue's lock) | 1 group of 32 with sharing off |
+| `Provider.Alone` called on a provider that doesn't declare it: CS0117 | `MinimalProviderTests.QueriesOverAProviderThatDeclaresOnlyWhatItMustCompile` | CS0117 |
+
+`PgAllocationTests.ABurstAllocatesAlmostNothingOnceWarmWithTheThreadCachesOn` measures the production setting (under
+256 KB for 10,240 reads: at most the caches' worth of jobs made), next to the test with the caches off (under 4 KB).
+`PgAloneTests` opens both alone connections before its timed part.
+
+The broken-connection test raced xunit's synchronization context: its reads now go into the queue behind a slow
+read, with no await between. That race can't be shown red on demand.
+
 ## The SQLite provider (tests/CodeFusion.Data.Sqlite.Tests)
 
 228 tests, nothing to set up. 47 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked unchanged:
@@ -1362,15 +1415,52 @@ default elsewhere, and the choice for handlers that block or apps that put the p
   - `CodeFusion.EventLoopThread.Current` (Core) is the loop's index on its thread and -1 elsewhere.
 - **Listeners:** on Linux each loop has its own listening socket (SO_REUSEPORT), level-triggered in its epoll set.
   - It accepts up to 64 connections per wake-up with `accept4` and starts each on its own thread.
-  - Out of descriptors or memory, it stops watching the listener (one report per run of failures), and the heartbeat
-    watches it again. The pause is one state changed by compare-and-swap, set after the listener is off.
+  - Out of descriptors or memory, or on any exception from an accept, an admission or a start, it stops watching the
+    listener (one report per run of failures), and the heartbeat watches it again. The pause is one state changed by
+    compare-and-swap, set after the listener is off. If turning it off fails, the listener is taken out of the epoll
+    set (which frees memory rather than needing it) and the heartbeat adds it back: left on, the level-triggered
+    listener would wake the loop at once, again and again.
   - The kernel spreads connections by a hash of their addresses, not in turn: a few long-lived connections may share a
     loop. `ListenerPerLoop = false` keeps one listener and gives connections to the loops in turn.
   - A loop that fails hands its listener to the runtime's accepts, so its queued connections aren't reset; with every
-    loop failed, connections wait on their sockets as Sockets' do.
+    loop failed, connections wait on their sockets as Sockets' do. The connections it had are closed with a FIN, as a
+    timeout closes them: a reset (it used `Close(0)`) reached a connection it had just accepted before its client's
+    own connect had finished, and failed that connect (Linux CI, arm64 and x64).
   - The runtime's `ReuseAddress` sets SO_REUSEPORT on Unix anyway (checked on macOS), so port sharing by a process of
     the same user is no different from Sockets'.
   - macOS keeps one listener and the runtime's accepts.
+
+### Past the descriptor limit (fix/accept-past-resource-limits)
+
+The $12 entry died past 65,535 descriptors: out of them, the runtime spun, said "Out of memory." and aborted
+(docs/benchmarks/2026-10-21-default-connection-limit-past-fd-limit.md). On macOS the runtime's accept threw something
+other than a `SocketException` at about 10k sockets, and accepting ended without a word.
+
+- `MaxConnections` defaults to the soft RLIMIT_NOFILE less 1024, or less half of a limit under 2048 (the runtime
+  alone holds about 50 descriptors on macOS). The server raises the soft limit to the hard one first, on macOS to at
+  most OPEN_MAX (10,240), as CoreCLR's PAL does at start: NativeAOT doesn't, and under systemd's soft 1024 an AOT app
+  would get 512 connections. 64-bit Linux and macOS only.
+- The runtime's accept (Sockets, macOS's loops, a failed loop's listener) never ends while the server runs. Any
+  exception is reported once per run of failures (`http accept failing`, then `http accept works again`) and the
+  next accept waits 10 ms, doubling up to 1 s; if that wait's timer can't be made, the thread sleeps instead.
+- Admitting or starting a connection that throws closes it and gives its object back. A loop's `Wrap` closes the
+  descriptor if even its handle can't be made, and a run whose builder throws before it begins ends as a failed
+  connection.
+
+Each with its test first, seen failing before the fix (`EventLoopGuaranteeTests` unless named):
+
+| Failure | Test |
+|---|---|
+| An accept that throws ended accepting | `AnAcceptThatThrowsIsReportedAndAcceptingGoesOn`, both transports |
+| An admission that throws left the socket open | `AConnectionWhoseAdmissionThrowsIsClosedAndAcceptingGoesOn` |
+| A start that throws (posting to a loop, queuing on the pool) ended accepting and kept the connection | `AConnectionWhoseStartThrowsIsClosedAndAcceptingGoesOn` |
+| A backoff that throws ended accepting | `ABackoffThatThrowsDoesNotEndAccepting` |
+| A listener that couldn't be turned off woke its loop at every wait | `OnLinuxAListenerThatCantBeTurnedOffIsTakenOutUntilTheHeartbeat` (Linux, CI only) |
+| Past the descriptor limit the server hung at EMFILE | `DescriptorLimitTests.PastTheDescriptorLimitNewConnectionsAreClosedAndTheServerGoesOn`, the sample app under `ulimit -n 256` with 2 loops |
+| NativeAOT kept a low soft limit | `DescriptorLimitTests.TheSoftLimitIsRaisedToTheHardOne`, `DescriptorLimitRaiseTests` (lowers the test process's own soft limit, alone) |
+
+Not tested: out of memory inside `Wrap`'s handle and a run's builder, which no hook reaches; the Linux loop's tests
+run only in CI.
 
 ### Review fixes (review of f00a731)
 
@@ -1405,9 +1495,29 @@ Each fix had its test first, seen failing on the code before it (`EventLoopGuara
 | 9 (low): stale docs | This section, the package README, SECURITY.md (the exact bound, and port sharing for both transports) | |
 | (coordinator) a connection's first request ran on the pool thread that started it, outside any batch | A new connection starts with no edge (epoll's ADD and kqueue's EV_ADD report bytes already waiting), and one the runtime accepted is started on its loop's thread (a queue per loop, and its wake) | `AConnectionsFirstRequestIsHandledInABatch`, for both listener settings (red before) |
 
+### Buffers per loop (perf/http-loop-pools)
+
+The C4 profile of json (1.17M req/s) had `System.Threading.Lock` at about 2% of the app's time: `BufferPool`'s locked
+shards, rented and returned around every request.
+- Each pool the server's connections use (request, response, and the app's arena chunks) now keeps a stack per event
+  loop, touched only by that loop's thread, so no lock.
+- A rent or return on a loop's thread goes there first. Any other thread (a continuation off the loop, Sockets) uses
+  the shards, as does what a full stack can't take. A loop's stack never sees another thread.
+- Each stack holds capacity / (2 x loops) arrays (at least one, while the capacity has one per loop), taken out of the
+  shards' share: `MaxPooledBuffers` stays the whole bound. With fewer arrays than loops there are no stacks.
+- A loop that ends (its wait failed, or the stop) gives its stacks back to the shards on its own thread.
+- Tests (`LoopPoolTests`), each red with its part broken:
+  - rents and returns go through the loop's stack;
+  - a buffer given back off its loop goes to the shards;
+  - each loop keeps exactly its share (red with the stacks off);
+  - the pools keep no more than `MaxPooledBuffers` in all (red with the shards at the full capacity);
+  - a failed loop's stacks go back to the shards (red without the drain);
+  - the arena's chunks use it too.
+- `ServerChecks`' pool balance counts the loop stacks; the allocation tests are unchanged.
+
 ### Tests
 
-`EventLoopTests`, `EventLoopBatchTests` and `EventLoopGuaranteeTests`, on kqueue here and epoll in CI. `AllocationTests` and `AppAllocationTests` have EventLoop rows
+`EventLoopTests`, `EventLoopBatchTests`, `EventLoopGuaranteeTests` and `LoopPoolTests`, on kqueue here and epoll in CI. `AllocationTests` and `AppAllocationTests` have EventLoop rows
 (0.004 to 0.05 B/request, as Sockets). `TestTransport` makes every server the tests start use the transport that
 `CODEFUSION_HTTP_TRANSPORT` names, and CI runs `CodeFusion.Http.Tests` a second time with `EventLoop`. Debug builds count
 every receive call (`HttpServer.SocketReceives`): `EachKeepAliveRequestCostsThisManyReceives` asserts 1 per request on

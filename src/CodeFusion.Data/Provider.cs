@@ -145,6 +145,10 @@ public interface IDataProvider<TSelf, TStatement, TCommand> : IDataProvider
     /// <summary>A statement of <paramref name="sql"/> taking <paramref name="parameters"/>, made once (a static field).</summary>
     static abstract TStatement Statement(string sql, params ReadOnlySpan<DataType> parameters);
 
+    /// <summary>The statement of a query marked <see cref="RunsAloneAttribute"/>: its commands run apart from any group.
+    /// By default the statement as it is; the generated code calls it only on a provider that declares it.</summary>
+    static virtual TStatement Alone(TStatement statement) => statement;
+
     /// <summary>A command that only reads, on <paramref name="context"/>'s source.</summary>
     static abstract TCommand Read(DataContext context, TStatement statement);
 

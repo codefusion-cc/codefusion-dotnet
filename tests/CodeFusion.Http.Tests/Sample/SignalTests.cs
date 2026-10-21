@@ -11,7 +11,7 @@ namespace CodeFusion.Http.Tests;
 /// <summary>Run() in a process of its own: SIGTERM lets the request in flight finish, then the app stops.</summary>
 public class SignalTests
 {
-    static string SampleApp()
+    internal static string SampleApp()
     {
         // tests/CodeFusion.Http.Tests/bin/<Configuration>/net10.0 -> tests/CodeFusion.Http.SampleApp/bin/<Configuration>/net10.0
         string here = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
@@ -39,7 +39,8 @@ public class SignalTests
 
             using Client slow = await Client.ConnectAsync(ep);
             await slow.SendAsync("GET /slow HTTP/1.1\r\nHost: x\r\n\r\n");
-            await Task.Delay(100, TestContext.Current.CancellationToken); // the handler is waiting now
+            // the handler is running; it answers only after the SIGTERM, so the stop begins with it in flight
+            Assert.Equal("slow started", await app.StandardOutput.ReadLineAsync(TestContext.Current.CancellationToken));
             using (Process kill = Process.Start("kill", ["-TERM", app.Id.ToString(System.Globalization.CultureInfo.InvariantCulture)])!)
                 await kill.WaitForExitAsync(TestContext.Current.CancellationToken);
 

@@ -16,8 +16,9 @@ sealed class PgConnection : IDisposable
 {
     /// <summary>The largest message accepted (Postgres's own limit for a value is 1 GB).</summary>
     internal const int MaxMessage = 1 << 30;
-    /// <summary>A batch up to this size goes out in one blocking send: it fits the socket buffers, so it can't wait
-    /// on Postgres. A larger one is sent so that the replies are taken in whenever the socket takes no more.</summary>
+    /// <summary>A batch up to this size, with nothing else in flight, goes out in one blocking send: it fits the socket
+    /// buffers, so it can't wait on Postgres. A larger one, or any sent while an earlier batch is still answered, is
+    /// sent so that the replies are taken in whenever the socket takes no more.</summary>
     const int SendPiece = 64 << 10;
     /// <summary>Receive buffers grown past this for a huge row go back to the normal size afterwards.</summary>
     const int MaxKeptReceive = 8 << 20;
@@ -33,12 +34,20 @@ sealed class PgConnection : IDisposable
     byte[] _recv;
     int _rpos, _rend, _need;
 
-    /// <summary>By statement id: 0 not parsed here, 1 Parse sent in this batch, 2 parsed.</summary>
+    /// <summary>By statement id: 0 not parsed here, 1 Parse sent and not answered yet, 2 parsed.</summary>
     byte[] _prepared = new byte[64];
     /// <summary>By statement id: its columns' types (pg_type OIDs), from the RowDescription that answered its Describe.</summary>
     uint[]?[] _columns = new uint[]?[64];
+    /// <summary>The steps of the batch whose replies are being read.</summary>
     Step[] _steps = new Step[64];
     int _stepCount;
+    /// <summary>The steps of the batch being built (Begin to Flush).</summary>
+    Step[] _build = new Step[64];
+    int _buildCount;
+    /// <summary>The batches sent and not yet read, oldest first: Postgres answers them in order.</summary>
+    Step[][] _sent = [new Step[64], new Step[64], new Step[64], new Step[64]];
+    int[] _sentCounts = new int[4];
+    int _sentHead, _sentCount;
     /// <summary>Jobs whose statement ended in the current receive buffer, answered before the next receive.</summary>
     int[] _answered = new int[32];
     int _answeredCount;
@@ -348,7 +357,24 @@ sealed class PgConnection : IDisposable
     internal void Begin()
     {
         _sendLen = 0;
-        _stepCount = 0;
+        _buildCount = 0;
+    }
+
+    /// <summary>Batches sent whose replies haven't been read: more than one when groups are pipelined.</summary>
+    internal int InFlight => _sentCount;
+
+    /// <summary>Whether a job of the group binds a statement whose Parse went out in a batch not answered yet. Postgres
+    /// skips that Parse if a statement before it in its batch fails, so a batch binding it must not go out before
+    /// that batch's replies are read.</summary>
+    internal bool BindsPendingParse(PgJob?[] group, int from, int to)
+    {
+        for (int j = from; j < to; j++)
+        {
+            var job = group[j]!;
+            for (int i = 0; i < job.Count; i++)
+                if (job.Statements[i].Id < _prepared.Length && _prepared[job.Statements[i].Id] == 1) return true;
+        }
+        return false;
     }
 
     /// <summary>Adds the job in group slot <paramref name="slot"/>: a Parse for each statement new to this connection,
@@ -371,8 +397,8 @@ sealed class PgConnection : IDisposable
             }
             int start = job.Start(i);
             Append(job.Buf.AsSpan(start, job.Ends[i] - start));
-            if (_stepCount == _steps.Length) Array.Resize(ref _steps, _stepCount * 2);
-            _steps[_stepCount++] = new Step { Slot = slot, StatementId = s.Id, Parse = parse, Last = i == job.Count - 1 };
+            if (_buildCount == _build.Length) Array.Resize(ref _build, _buildCount * 2);
+            _build[_buildCount++] = new Step { Slot = slot, StatementId = s.Id, Parse = parse, Last = i == job.Count - 1 };
         }
     }
 
@@ -380,8 +406,30 @@ sealed class PgConnection : IDisposable
     internal void Flush()
     {
         Append([(byte)'S', 0, 0, 0, 4]);
-        _t.Send(_send.AsSpan(0, _sendLen), _sendLen > SendPiece ? _takeIn : null);
+        // A batch that may not fit the socket buffers, or one sent while another is still answered (its replies can
+        // fill ours while Postgres waits for us to read them), takes replies in whenever the socket is full
+        _t.Send(_send.AsSpan(0, _sendLen), _sendLen > SendPiece || _sentCount > 0 ? _takeIn : null);
         if (_send.Length > 1 << 20) _send = new byte[16 << 10];
+        // in line behind the batches before it: its steps take a free slot's place, that slot's array is the next build's
+        if (_sentCount == _sent.Length)
+        {
+            var grown = new Step[_sent.Length * 2][];
+            var counts = new int[grown.Length];
+            for (int i = 0; i < _sentCount; i++)
+            {
+                grown[i] = _sent[(_sentHead + i) % _sent.Length];
+                counts[i] = _sentCounts[(_sentHead + i) % _sent.Length];
+            }
+            for (int i = _sentCount; i < grown.Length; i++) grown[i] = new Step[64];
+            _sent = grown;
+            _sentCounts = counts;
+            _sentHead = 0;
+        }
+        int tail = (_sentHead + _sentCount) % _sent.Length;
+        (_sent[tail], _build) = (_build, _sent[tail]);
+        _sentCounts[tail] = _buildCount;
+        _sentCount++;
+        _buildCount = 0;
     }
 
     void Append(ReadOnlySpan<byte> b)
@@ -403,6 +451,12 @@ sealed class PgConnection : IDisposable
     /// </summary>
     internal int ReadReplies(PgJob?[] group, bool keep, out PgException? error)
     {
+        if (_sentCount == 0) throw new InvalidOperationException("no batch to read the replies of");
+        // the oldest batch sent: its steps are read now, its slot free for the next Flush
+        (_steps, _sent[_sentHead]) = (_sent[_sentHead], _steps);
+        _stepCount = _sentCounts[_sentHead];
+        _sentHead = (_sentHead + 1) % _sent.Length;
+        _sentCount--;
         error = null;
         int failed = -1;
         int step = 0;

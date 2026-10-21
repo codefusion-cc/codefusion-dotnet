@@ -14,17 +14,22 @@ public sealed class PgWriter : PgLoops
     /// <summary>The most writes in one transaction.</summary>
     public const int MaxGroup = 128;
 
-    /// <summary>The most writes waiting for a loop; more are refused at once (<see cref="PgStatus.Busy"/>), so a
-    /// stalled database can't pile up requests and their bodies. Under the workload's closed loop of users the
-    /// writes in flight stay in the tens; this many only queue when commits have stopped.</summary>
-    public const int MaxQueued = 4096;
+    /// <summary>The most writes waiting for a loop by default; more are refused at once (<see cref="PgStatus.Busy"/>),
+    /// so a stalled database can't pile up requests and their bodies. As many as the reader's: a request may start
+    /// all its writes at once (TechEmpower's updates test queues 512 times 20), and only a database whose commits have
+    /// stopped fills it.</summary>
+    public const int MaxQueued = 65536;
 
     /// <summary>How often a write that lost a deadlock or a serialization check runs again alone.</summary>
     const int Retries = 3;
 
     /// <param name="settings">With lock_timeout among its parameters: past it only the blocked write fails, and the
     /// rest of its group commits without it, instead of all waiting for the statement timeout.</param>
-    public PgWriter(PgSettings settings) : base(settings, MaxGroup, MaxQueued, "pg writer") { }
+    public PgWriter(PgSettings settings) : this(settings, MaxQueued) { }
+
+    /// <summary>A writer whose queue holds at most <paramref name="maxQueued"/> writes waiting for a loop; more are
+    /// refused at once (<see cref="PgStatus.Busy"/>).</summary>
+    public PgWriter(PgSettings settings, int maxQueued) : base(settings, MaxGroup, maxQueued > 0 ? maxQueued : throw new ArgumentOutOfRangeException(nameof(maxQueued)), "pg writer") { }
 
     /// <summary>
     /// Commits the group with the outcome of running its writes one by one in order. A failing statement rolls back
