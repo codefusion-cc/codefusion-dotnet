@@ -12,7 +12,7 @@ sealed class Known
     public readonly INamedTypeSymbol Utf8, Timestamp, RawJson, DataContext, DataContextOf, Many, One, Page, WriteOf, Write;
     public readonly INamedTypeSymbol Query, OrderedQuery, Table, PageQuery, DeleteQuery, WriteQuery, UpdateQuery, Insert, SqlQuery, SqlString, FoundQuery;
     public readonly INamedTypeSymbol QueryOperators, QueryDefinition, SqlTemplate, JoinTable, JsonList, SqlDialect, Provider, SqlFunctions, Utf8Operators, Utf8ListOperators;
-    public readonly INamedTypeSymbol? JsonEnvelope, JsonPropertyName, JsonIgnore, TableAttribute, ColumnAttribute, KeyAttribute, ForeignKey, InverseProperty, NotMapped;
+    public readonly INamedTypeSymbol? JsonEnvelope, JsonPropertyName, JsonIgnore, TableAttribute, ColumnAttribute, KeyAttribute, ForeignKey, InverseProperty, NotMapped, Required;
 
     Known(Compilation c)
     {
@@ -58,6 +58,7 @@ sealed class Known
         ForeignKey = c.GetTypeByMetadataName("System.ComponentModel.DataAnnotations.Schema.ForeignKeyAttribute");
         InverseProperty = c.GetTypeByMetadataName("System.ComponentModel.DataAnnotations.Schema.InversePropertyAttribute");
         NotMapped = c.GetTypeByMetadataName("System.ComponentModel.DataAnnotations.Schema.NotMappedAttribute");
+        Required = c.GetTypeByMetadataName("System.ComponentModel.DataAnnotations.RequiredAttribute");
     }
 
     /// <summary>The symbols, or null when the compilation doesn't reference CodeFusion.Data.</summary>
@@ -234,8 +235,9 @@ sealed class ViewInfo
 /// <summary>A mapped column of an entity.</summary>
 sealed record ColumnInfo(IPropertySymbol Property, string Name, ValueKind Kind);
 
-/// <summary>A one-navigation: <c>User Author</c> with its foreign key <c>AuthorId</c>.</summary>
-sealed record OneNav(IPropertySymbol Property, INamedTypeSymbol Target, ColumnInfo ForeignKey);
+/// <summary>A one-navigation: <c>User Author</c> with its foreign key <c>AuthorId</c>. <see cref="Required"/>: <c>[Required]</c> on the
+/// navigation or its key, the model's word that the row it leads to is there.</summary>
+sealed record OneNav(IPropertySymbol Property, INamedTypeSymbol Target, ColumnInfo ForeignKey, bool Required = false);
 
 /// <summary>A many-navigation: children holding this entity's key, or rows through a join table.</summary>
 sealed record ManyNav(IPropertySymbol Property, INamedTypeSymbol Target, string? InverseNavigation, string? JoinTable, string? ThisColumn, string? OtherColumn)
@@ -326,7 +328,7 @@ sealed class EntityInfo
                 problems.Add($"{p.Name}: no foreign key {fkName} for the navigation");
                 continue;
             }
-            e.Ones[p.Name] = new OneNav(p, target, fk);
+            e.Ones[p.Name] = new OneNav(p, target, fk, Known.Attribute(p, k.Required) is not null || Known.Attribute(fk.Property, k.Required) is not null);
         }
         return e;
     }

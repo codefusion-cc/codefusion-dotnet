@@ -53,9 +53,10 @@ public sealed class GroupPageTests(OpsFixture fixture)
     [Fact]
     public async Task EachGroupsNewestAsFarAsThePageReaches()
     {
-        Assert.Equal("WITH c AS (SELECT count(*) AS n FROM (SELECT 1 FROM person_labels pl CROSS JOIN LATERAL (SELECT p4.id AS id FROM pets p4 WHERE p4.owner_id = pl.person_id) x " +
+        // PersonLabel.Person isn't declared [Required]: its join stays, and drops a link whose person is missing
+        Assert.Equal("WITH c AS (SELECT count(*) AS n FROM (SELECT 1 FROM person_labels pl JOIN people p3 ON p3.id = pl.person_id CROSS JOIN LATERAL (SELECT p4.id AS id FROM pets p4 WHERE p4.owner_id = pl.person_id) x " +
             "WHERE pl.label_id = $1 LIMIT 5) s) SELECT p.*, c.n FROM c LEFT JOIN LATERAL (SELECT x3.name AS c0, x3.owner_id AS c1, p7.name AS c2, x3.id AS k FROM (SELECT id FROM (" +
-            "SELECT x2.id AS id FROM person_labels pl2 CROSS JOIN LATERAL (SELECT p6.id AS id FROM pets p6 WHERE p6.owner_id = pl2.person_id ORDER BY p6.id DESC LIMIT $2) x2 " +
+            "SELECT x2.id AS id FROM person_labels pl2 JOIN people p5 ON p5.id = pl2.person_id CROSS JOIN LATERAL (SELECT p6.id AS id FROM pets p6 WHERE p6.owner_id = pl2.person_id ORDER BY p6.id DESC LIMIT $2) x2 " +
             "WHERE pl2.label_id = $1 ORDER BY x2.id DESC LIMIT 3 OFFSET $3) b ORDER BY id DESC LIMIT $4) p2 JOIN pets x3 ON x3.id = p2.id JOIN people p7 ON p7.id = x3.owner_id ORDER BY x3.id DESC) p ON true ORDER BY p.k DESC",
             Q.PetsOfLabel);
         var db = await Db();
@@ -91,5 +92,30 @@ public sealed class GroupPageTests(OpsFixture fixture)
         Assert.Equal("9901/1", await Page(db.MembersOf(977, 30, new Paging(10, 0))));
         Assert.Equal("9902/2", await Page(db.MembersOf(977, 0, new Paging(10, 1))));
         Assert.Equal("/0", await Page(db.MembersOf(978, 0, new Paging(10, 0))));
+    }
+
+    [Fact]
+    public async Task WithoutForeignKeysARowWhoseParentIsMissingIsLeftOutAsTheJoinLeavesIt()
+    {
+        TestDb.Require();
+        // the tables without their foreign keys, and a link row whose person is missing, with a pet: the model doesn't
+        // declare the navigation required, so its join stays, and drops the link as LINQ's inner join does
+        const string schema = "cfdata_ghosts";
+        await using var admin = TestDb.Admin();
+        await admin.Execute($"DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; SET search_path = {schema}; {OpsFixture.Schema}; {OpsFixture.Seed}; " +
+            "ALTER TABLE person_labels DROP CONSTRAINT person_labels_person_id_fkey; ALTER TABLE pets DROP CONSTRAINT pets_owner_id_fkey; " +
+            "INSERT INTO person_labels VALUES (9999, 3); INSERT INTO pets VALUES (99991, 9999, 'ghost', 4)");
+        var source = TestDb.Open(schema, readers: 1, writers: 1);
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            // label 3 is cid's (pet nemo) and the missing 9999's
+            Assert.Equal("nemo/1", await Page(db.PetsOfLabel(3, new Paging(3, 0))));
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
     }
 }

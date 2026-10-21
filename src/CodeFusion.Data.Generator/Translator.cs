@@ -229,6 +229,8 @@ sealed class Row(EntityInfo entity, string? alias, Select? owner, RowMode mode =
     public string? KeyViaForeignKey;
     /// <summary>The join that reached it, as written into its owner's select.</summary>
     public string? JoinSql;
+    /// <summary>Reached by a navigation the model declares required ([Required]): the row is there.</summary>
+    public bool Required;
     /// <summary>Reached through a left join (here or before): every column may be NULL.</summary>
     public bool Optional;
     /// <summary>Through: the scalar subquery written for each column, so a column used twice is the same SQL.</summary>
@@ -679,7 +681,7 @@ sealed partial class Translator
         string join = $"{(optional ? "LEFT JOIN" : "JOIN")} {TableSql(target)} {alias} ON {alias}.{D.Quote(KeyOf(target, at).Name)} = {fk}";
         owner.Joins.Add(join);
         // equal under an inner join; a left join's NULL row would have a NULL key where the foreign key isn't
-        var r = new Row(target, alias, owner) { KeyViaForeignKey = optional ? null : fk, Optional = optional, JoinSql = join };
+        var r = new Row(target, alias, owner) { KeyViaForeignKey = optional ? null : fk, Optional = optional, JoinSql = join, Required = nav.Required && !optional };
         row.Joins[nav.Property.Name] = r;
         return r;
     }

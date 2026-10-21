@@ -32,7 +32,8 @@ public sealed class Follow
     [Key] public long FollowerId { get; init; }
     public User Follower { get; init; } = null!;
     [Key] public long FolloweeId { get; init; }
-    public User Followee { get; init; } = null!;
+    /// <summary>Required: a follow's followee is there (the foreign key says so), so a lateral join from follows needs no join of users.</summary>
+    [Required] public User Followee { get; init; } = null!;
     public Timestamp CreatedAt { get; init; }
 }
 

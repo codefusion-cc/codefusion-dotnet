@@ -71,7 +71,7 @@ sealed partial class Translator
         foreach (var joined in row.Joins.Values)
         {
             Prune(s, joined);
-            if (joined.JoinSql is not { } join || joined.Owner != s || joined.Optional) continue;
+            if (joined.JoinSql is not { } join || joined.Owner != s || !joined.Required) continue;
             int i = s.Joins.IndexOf(join);
             if (i < 0) continue;
             s.Joins.RemoveAt(i);

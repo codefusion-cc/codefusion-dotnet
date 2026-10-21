@@ -329,6 +329,47 @@ public sealed class ShapeGeneratorTests
         Assert.Contains("> global::System.Int64.MaxValue - global::System.Math.Min(", r.Generated, System.StringComparison.Ordinal);
     }
 
+    const string Links = """
+        public sealed class Person { public long Id { get; init; } public Utf8 Name { get; init; } public Many<Pet> Pets { get; init; } }
+        public sealed class Pet { public long Id { get; init; } public long OwnerId { get; init; } public Person Owner { get; init; } = null!; public Utf8 Name { get; init; } }
+        public sealed class Link
+        {
+            [System.ComponentModel.DataAnnotations.Key] public long PersonId { get; init; }
+            REQUIRED public Person Person { get; init; } = null!;
+            [System.ComponentModel.DataAnnotations.Key] public long LabelId { get; init; }
+        }
+        public readonly record struct Name(long Id, Utf8 Text);
+        public sealed partial class Db : DataContext<Postgres>
+        {
+            public Table<Link> Links => Table<Link>();
+            public Page<Name> Pets(long label, Paging page) =>
+                Links.Where(l => l.LabelId == label).SelectMany(l => l.Person.Pets, (l, x) => x).OrderByDescending(x => x.Id).Page(page, 10).Select(x => new Name(x.Id, x.Name));
+            public Page<Name> ByPerson(Paging page) => Links.OrderByDescending(l => l.PersonId).Page(page, 10).Select(l => new Name(l.PersonId, l.Person.Name));
+        }
+        """;
+
+    [Fact]
+    public void ANavigationsJoinIsLeftOutOnlyWhereTheModelDeclaresItRequired()
+    {
+        // [Required]: the person is there for every link, so its key is the link's column and the join reads nothing
+        var required = Run(Links.Replace("REQUIRED", "[System.ComponentModel.DataAnnotations.Required]"));
+        Assert.DoesNotContain("JOIN persons", required.Sql("Pets"), System.StringComparison.Ordinal);
+        // without it a link may have no person (no foreign key, or one row security hides): the join stays and drops it
+        var plain = Run(Links.Replace("REQUIRED", ""));
+        Assert.Matches(@"FROM links l JOIN persons (\w+) ON \1\.id = l\.person_id CROSS JOIN LATERAL", plain.Sql("Pets"));
+    }
+
+    [Fact]
+    public void APageByAColumnOfAKeyOfSeveralIsAPageOfTheRowItsForeignKeyLeadsTo()
+    {
+        // a link table's key column that is a foreign key: the page shows the person it leads to, as a link table of
+        // no key does (FavoritedBy); one that is no foreign key identifies nothing and is refused
+        var r = Run(Links.Replace("REQUIRED", "").Replace("public Page<Name> ByPerson", "public Page<Name> ByLabel(Paging page) => Links.OrderBy(l => l.LabelId).Page(page, 10).Select(l => new Name(l.LabelId, l.Person.Name));\n    public Page<Name> ByPerson"));
+        Assert.Contains(" JOIN persons p3 ON p3.id = p2.id", r.Sql("ByPerson"), System.StringComparison.Ordinal);
+        var d = Assert.Single(r.Generator, x => x.Id == "CFDATA001");
+        Assert.Contains("a page key that is neither the row's key nor a foreign key", Message(d), System.StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("""People.SelectMany(p => p.Pets, (p, x) => p).OrderByDescending(p => p.Id)""", "(p, x) => p", "isn't the child itself")]
     [InlineData("""People.SelectMany(p => p.Pets, (p, x) => x).OrderByDescending(x => x.OwnerId)""", "x => x.OwnerId", "ordered by something other than their key")]
