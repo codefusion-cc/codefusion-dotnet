@@ -147,6 +147,7 @@ public sealed class PgAllocationTests
         // TechEmpower's queries test with each request's reads started together: 512 times 20 in flight at once. The
         // threads' job caches are off: which jobs a burst finds in them depends on which loop thread ran which
         // continuation, so with them on a burst could make a few jobs the one before it left in another cache
+        PgJob.ClearPool(); // what earlier tests left in the pool isn't this test's
         var reader = new PgReader(Settings());
         reader.Start(4);
         bool caches = PgJob.UseThreadCaches;
@@ -183,6 +184,7 @@ public sealed class PgAllocationTests
         // As the test above, with the caches as production has them: which jobs a burst finds in them depends on
         // which loop thread ran which continuation, so a burst can make a few jobs another thread's cache holds, a
         // kilobyte each. At most the caches' worth (5 threads of 32 here), far below one per read.
+        PgJob.ClearPool();
         var reader = new PgReader(Settings());
         reader.Start(4);
         try

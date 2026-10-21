@@ -857,12 +857,17 @@ What was decided:
   first such command. Each runs one command in its own transaction, and the next goes to a free one.
 - **The job pool is bounded**:
   - by bytes: 32 MB for the shared pool, each job counted whole (about 512 B of its own and its buffers). Past that
-    a returning job's buffers shrink back (a job grown for one large command keeps its buffers through every small
-    one after it), then the least recently used jobs go, from the bottom of a ring;
+    a returning job grown past 4 KB goes (a job grown for one large command keeps its buffers through every small one
+    after it; shrinking them instead would allocate on a return), and a smaller one takes the place of the least
+    recently used jobs, from the bottom of a ring;
   - by count: what the started loops can hold (their queues and groups, given back when they complete), at most
     16,384;
   - a buffer past 64 KB is never kept;
-  - a thread's cache holds up to 32 jobs whose buffers are 4 KB or less, and goes back from its finalizer.
+  - a thread's cache holds up to 32 jobs whose buffers are 4 KB or less, and goes back from its finalizer;
+  - each loop that starts makes the jobs its groups and its thread's cache can hold (the first loop also a cache's
+    worth for each core's callers), so the shared pool is never empty while other threads' caches hold jobs. Without
+    it, `AllocationTests.QueriesAllocateNothingOnceWarm` failed about one run in three in the full suite: the shared
+    pool held 0 jobs at the end, and 10 to 16 were made in the measured runs.
 
 The review's findings, each test red on the code before its fix:
 

@@ -102,6 +102,7 @@ public abstract class PgLoops
     }
 
     int _reserved;
+    static int s_prewarmed;
 
     /// <summary>Room in the job pool for what these loops can hold at once, given back when they complete.</summary>
     void Reserve(int jobs)
@@ -132,6 +133,10 @@ public abstract class PgLoops
         {
             int n = Interlocked.Increment(ref _started);
             Reserve(GroupsInFlight * _maxGroup);
+            // its groups' jobs and its thread's cache, and the first loop of the process a cache for each core's
+            // callers, made now: steady load then makes none
+            PgJob.Prewarm(GroupsInFlight * _maxGroup + PgJob.CachedPerThread
+                + (Interlocked.Exchange(ref s_prewarmed, 1) == 0 ? Environment.ProcessorCount * PgJob.CachedPerThread : 0));
             var t = new Thread(Loop) { IsBackground = true, Name = $"{_name} {n}" };
             lock (_threads) _threads.Add(t);
             t.Start();
