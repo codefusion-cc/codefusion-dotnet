@@ -109,6 +109,7 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
         server.HandlerDone = static x => (x.State as RequestContext)?.HandlerDone();
         server.ConnectionIdle = static x => (x.State as RequestContext)?.ConnectionIdle();
         server.BatchActions = _batch;
+        server.LoopPools = [ArenaChunks];
         _server = server;
         server.Start();
     }

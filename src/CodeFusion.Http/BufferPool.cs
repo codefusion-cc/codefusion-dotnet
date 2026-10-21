@@ -11,24 +11,55 @@ namespace CodeFusion.Http;
 /// allocates past that, which thousands of requests in flight at once would do on every request. Arrays of another
 /// size (a request or response grown past it) come from and go back to ArrayPool.Shared through it, cleared, since
 /// other code in the process rents from there. Its own arrays go back as they are: only this server rents them.
+/// On a server's event loops each loop also keeps a few arrays of its own, which only its thread touches, so a request
+/// handled there rents and returns without a lock (<see cref="AttachLoops"/>).
 /// </summary>
 internal sealed class BufferPool
 {
     readonly Shard[] _shards;
+    readonly int _capacity;
     public readonly int Size;
     int _created, _dropped;
     int _sharedOut; // Debug builds count the larger arrays out here; Release ones don't
+    // The event loops': one stack per loop of the server they belong to, at most capacity / (2 x loops) arrays each, so
+    // together half the capacity again however many loops there are. Only the loop's own thread touches its stack; a
+    // rent or return on any other thread goes to the shards, as does what a full stack can't take.
+    HttpServer? _server;
+    LoopStack[] _loops = [];
+    int _loopRents, _loopReturns, _sharedReturns; // Debug builds count here; Release ones don't
 
     public BufferPool(int size, int capacity)
     {
         Size = size;
+        _capacity = capacity;
         int n = Math.Max(1, Math.Min(Environment.ProcessorCount, 64));
         _shards = new Shard[n];
         for (int i = 0; i < n; i++) _shards[i] = new Shard((capacity + n - 1) / n);
     }
 
+    /// <summary>Gives each of <paramref name="server"/>'s <paramref name="loops"/> event loops a stack of its own. Before
+    /// the loops start.</summary>
+    public void AttachLoops(HttpServer server, int loops)
+    {
+        int each = _capacity / (2 * loops);
+        if (each == 0) return;
+        var stacks = new LoopStack[loops];
+        for (int i = 0; i < loops; i++) stacks[i] = new LoopStack(each);
+        _loops = stacks;
+        _server = server;
+    }
+
+    /// <summary>The stack of the loop whose thread this is, if it is one of this pool's server.</summary>
+    LoopStack? Local() => _server is { } s && EventLoop.Current is { } loop && loop.Server == s ? _loops[loop.Index] : null;
+
     public byte[] Rent()
     {
+        if (Local()?.TryPop() is { } own)
+        {
+            Count(ref _loopRents);
+            PoolCheck.Rented(own, filled: true);
+            return own;
+        }
         int home = Thread.GetCurrentProcessorId() % _shards.Length;
         for (int i = 0; i < _shards.Length; i++)
         {
@@ -61,6 +92,7 @@ internal sealed class BufferPool
         {
             int n = 0;
             foreach (var s in _shards) n += s.Count;
+            foreach (var l in _loops) n += l.Count;
             return n;
         }
     }
@@ -84,6 +116,12 @@ internal sealed class BufferPool
             ArrayPool<byte>.Shared.Return(a, clearArray: !PoolCheck.Fills);
             return;
         }
+        if (Local() is { } own && own.TryPush(a))
+        {
+            Count(ref _loopReturns);
+            return;
+        }
+        Count(ref _sharedReturns);
         int home = Thread.GetCurrentProcessorId() % _shards.Length;
         for (int i = 0; i < _shards.Length; i++)
             if (_shards[(home + i) % _shards.Length].TryPush(a)) return;
@@ -92,6 +130,45 @@ internal sealed class BufferPool
 
     [Conditional("DEBUG")]
     void SharedRented(int n) => Interlocked.Add(ref _sharedOut, n);
+
+    [Conditional("DEBUG")]
+    static void Count(ref int counter) => Interlocked.Increment(ref counter);
+
+    /// <summary>Debug builds: rents served by a loop's own stack, returns it took, and returns of this size that went
+    /// to the shards. For tests.</summary>
+    internal int LoopRents => Volatile.Read(ref _loopRents);
+    internal int LoopReturns => Volatile.Read(ref _loopReturns);
+    internal int SharedReturns => Volatile.Read(ref _sharedReturns);
+
+    /// <summary>What loop <paramref name="loop"/>'s own stack holds now. For tests.</summary>
+    internal int LoopAvailable(int loop) => loop < _loops.Length ? _loops[loop].Count : 0;
+
+    /// <summary>One loop's arrays: no lock, since only that loop's thread pushes and pops. The count is published for
+    /// tests that read it from elsewhere.</summary>
+    sealed class LoopStack(int capacity)
+    {
+        readonly byte[]?[] _items = new byte[capacity][];
+        int _count;
+
+        public int Count => Volatile.Read(ref _count);
+
+        public byte[]? TryPop()
+        {
+            if (_count == 0) return null;
+            byte[]? a = _items[--_count];
+            _items[_count] = null;
+            Volatile.Write(ref _count, _count);
+            return a;
+        }
+
+        public bool TryPush(byte[] a)
+        {
+            if (_count == _items.Length) return false;
+            _items[_count] = a;
+            Volatile.Write(ref _count, _count + 1);
+            return true;
+        }
+    }
 
     sealed class Shard(int capacity)
     {

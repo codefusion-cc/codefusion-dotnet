@@ -77,6 +77,10 @@ internal abstract unsafe class EventLoop
         _thread = new Thread(Run) { IsBackground = true, Name = $"http event loop {index}" };
     }
 
+    /// <summary>The server this loop serves, and its index among that server's loops.</summary>
+    public HttpServer Server => _server;
+    public int Index => _index;
+
     public static EventLoop Create(HttpServer server, int index) =>
         OperatingSystem.IsLinux() ? new Epoll(server, index) : new Kqueue(server, index);
 

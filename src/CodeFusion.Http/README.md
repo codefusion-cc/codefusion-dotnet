@@ -157,7 +157,7 @@ off its loop (it awaited work another thread completed) and then writes doesn't 
 once the database commits that write by itself, as with sockets (CodeFusion.Data.Sqlite's writer thread commits such
 writes in groups), which is correct but later than the loop's batch. On Linux every loop listens
 on the port itself (SO_REUSEPORT) and accepts its own connections, unless `ListenerPerLoop` is off. Idle connections
-still hold no buffer.
+still hold no buffer, and each loop keeps a few of its own, so a request on it rents and returns them without a lock.
 
 The loop's thread is shared, so choose `Transport = HttpTransport.Sockets` when handlers block before their first
 await (one that blocks holds up every connection on its loop), or when the p99 under a mixed load matters more than
