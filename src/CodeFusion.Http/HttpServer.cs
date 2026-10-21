@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -107,6 +108,18 @@ public sealed class HttpServer : IAsyncDisposable
     /// fail as a broken descriptor would. Release builds make no such calls.</summary>
     internal Func<int, bool>? LoopWaitHook;
 
+    /// <summary>Debug builds call it on an event loop's thread, with its index, before each accept4 on its own
+    /// listener (Linux); a non-zero errno is taken as that accept's failure. Release builds make no such calls.</summary>
+    internal Func<int, int>? AcceptHook;
+
+    /// <summary>Debug builds call it on a loop's thread once it has turned its listener off for lack of descriptors,
+    /// before it says so: where a heartbeat's resume could land. Release builds make no such calls.</summary>
+    internal Action<EventLoop>? PauseHook;
+
+    /// <summary>Debug builds call it as a connection is admitted, before its connection object is rented: where
+    /// another loop's admission could land. Release builds make no such calls.</summary>
+    internal Action<EventLoop?>? AdmitHook;
+
     readonly Lock _lock = new();
     HttpExchange?[] _slots = new HttpExchange?[256];
     int _slotCount;            // slots in use or freed, high-water mark
@@ -120,7 +133,8 @@ public sealed class HttpServer : IAsyncDisposable
     EventLoop[]? _loops;
 
     Socket? _listener;
-    Task? _accepting;
+    // The runtime's accept loops: the one listener's, and those of loops that failed and handed theirs over.
+    readonly List<Task> _accepting = [];
     Thread? _heartbeat;
     readonly ManualResetEventSlim _wake = new();
     volatile bool _stopping, _stopped;
@@ -180,7 +194,7 @@ public sealed class HttpServer : IAsyncDisposable
         IPEndPoint ep = Options.EndPoint;
         // Linux event loops each listen on the port themselves (SO_REUSEPORT): the kernel spreads new connections
         // over them, and each loop accepts its own on its thread. Otherwise one listener and the runtime's accepts.
-        bool own = Options.Transport == HttpTransport.EventLoop && OperatingSystem.IsLinux();
+        bool own = Options.Transport == HttpTransport.EventLoop && Options.ListenerPerLoop && OperatingSystem.IsLinux();
         _batchReported = new int[BatchActions.Length + 1];
         var listeners = new Socket[own ? Options.EventLoops : 1];
         try
@@ -206,7 +220,7 @@ public sealed class HttpServer : IAsyncDisposable
         _heartbeat.Start();
         // Disposing the listener is what ends the accept loop; the stop awaits the loop right after.
 #pragma warning disable CA2025
-        if (!own) _accepting = AcceptAsync(_listener);
+        if (!own) _accepting.Add(AcceptAsync(_listener));
 #pragma warning restore CA2025
     }
 
@@ -292,7 +306,10 @@ public sealed class HttpServer : IAsyncDisposable
                 continue;
             }
             AcceptWorks();
-            if (Admit(s, null) is { } c) ThreadPool.UnsafeQueueUserWorkItem(c, preferLocal: false);
+            if (Admit(s, null) is not { } c) continue;
+            // on its loop's thread, so its first request is handled in a batch as every later one is
+            if (c.Loop is { } loop) loop.Post(c);
+            else ThreadPool.UnsafeQueueUserWorkItem(c, preferLocal: false);
         }
     }
 
@@ -311,9 +328,9 @@ public sealed class HttpServer : IAsyncDisposable
     /// server stops, or is at its limit). <paramref name="loop"/>: the event loop that accepted it.</summary>
     internal HttpExchange? Admit(Socket s, EventLoop? loop)
     {
-        if (_stopping || Connections >= _maxConnections)
+        if (_stopping)
         {
-            s.Dispose(); // past the limit: closed at once, before it costs a connection object
+            s.Dispose();
             return null;
         }
         try
@@ -326,15 +343,26 @@ public sealed class HttpServer : IAsyncDisposable
             s.Dispose();
             return null;
         }
-        HttpExchange c = Rent(loop);
+        Admitting(loop);
+        // the limit is checked where the count goes up, under the lock: loops admit at once
+        if (Rent(loop) is not { } c)
+        {
+            s.Dispose(); // past the limit: closed at once, before it costs a connection object
+            return null;
+        }
         c.Attach(s);
         return c;
     }
 
-    HttpExchange Rent(EventLoop? loop)
+    [Conditional("DEBUG")]
+    void Admitting(EventLoop? loop) => AdmitHook?.Invoke(loop);
+
+    /// <summary>A connection object for a new connection, or null at <see cref="HttpServerOptions.MaxConnections"/>.</summary>
+    HttpExchange? Rent(EventLoop? loop)
     {
         lock (_lock)
         {
+            if (_active >= _maxConnections) return null;
             HttpExchange c = _poolCount > 0 ? _pool[--_poolCount] : new HttpExchange(this);
             c.CheckPooled();
             int slot;
@@ -369,6 +397,20 @@ public sealed class HttpServer : IAsyncDisposable
             if (!l.Failed) return l;
         }
         return null;
+    }
+
+    /// <summary>A loop whose wait failed hands its listener over: closing it would reset the connections queued on it,
+    /// and the kernel keeps sending it its share. The runtime accepts them from now on and gives them to the loops
+    /// still running, or, with none left, to Sockets' waits.</summary>
+    internal void TakeOver(Socket listener)
+    {
+        lock (_lock)
+        {
+            if (_stopping) return; // the stop closes it
+#pragma warning disable CA2025 // the stop disposes the listener and awaits the loop
+            _accepting.Add(AcceptAsync(listener));
+#pragma warning restore CA2025
+        }
     }
 
     /// <summary>A loop whose wait failed: nothing will wake its connections again, so they are closed.</summary>
@@ -449,7 +491,9 @@ public sealed class HttpServer : IAsyncDisposable
         _stopping = true;
         _listener!.Dispose();
         foreach (Socket l in _loopListeners ?? []) l.Dispose();
-        if (_accepting is not null) await _accepting.ConfigureAwait(false);
+        Task[] accepting;
+        lock (_lock) accepting = [.. _accepting];
+        await Task.WhenAll(accepting).ConfigureAwait(false);
         long until = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
         while (Connections > 0 && Environment.TickCount64 < until)
         {

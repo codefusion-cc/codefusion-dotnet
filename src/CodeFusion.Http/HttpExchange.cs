@@ -68,9 +68,11 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     internal uint ConnectionId;
     const int NoEdge = 0, Edge = 1, Hangup = 2, EdgeState = 3, EdgeCount = 4;
     int _armed, _edge;
-    // A connection always readable again could hold its loop's thread: the reads it starts there in one wake-up.
-    const int ReadsPerWake = 16;
-    int _reads, _readsWake;
+    // A connection always readable again, or with requests piled in its buffer, could hold its loop's thread: the
+    // reads and the handlers it starts there in one wake-up. Past either share it waits for the loop's next round.
+    const int ReadsPerWake = 16, HandlersPerWake = 16;
+    int _reads, _readsWake, _handlers, _handlersWake;
+    readonly SendTurn _parked = new();
     readonly Kicker _kicker;
     readonly SendTurn _sendTurn = new();
     // A send waiting for room on its event loop: armed until the loop's writable edge (or a Kick) takes it.
@@ -279,8 +281,10 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
 
     internal void Attach(Socket socket)
     {
-        // bytes may have come before the loop watches the socket: the first wait reads at once
-        _edge = Edge; // its count starts again: only Kick and the loop's own events read it
+        // No edge yet: bytes that came before the loop watches the socket are reported when it adds it (epoll's ADD
+        // and kqueue's EV_ADD both report readiness already there), so even the first request is read on the loop,
+        // in a batch, wherever the connection was started
+        _edge = NoEdge;
         Volatile.Write(ref _socket, socket);
     }
 
@@ -370,7 +374,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
                     int n = Receive(_in.AsSpan(_end), out SocketError err);
                     if (err == SocketError.WouldBlock) continue;
                     if (err != SocketError.Success || n == 0) return;
-                    if (n == _in!.Length - _end) MoreMayWait();
+                    MoreMayWait(n, _in!.Length - _end);
                     if (idle && !first) _headDeadline = Environment.TickCount64 + _requestMs;
                     _end += n;
                     CheckInvariants();
@@ -393,6 +397,11 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
                     break; // to the linger: the rest of the refused request is likely still coming
                 }
 
+                if (Loop is { } loop && EventLoop.Current == loop)
+                {
+                    if (!TakeHandlerTurn(loop)) await loop.Park(this).ConfigureAwait(false);
+                    loop.HandlerStarts();
+                }
                 bool persistent = _req.Persistent;
                 BeginResponse();
                 Volatile.Write(ref _handler, unchecked(_handler + NextHandler) | Running);
@@ -483,7 +492,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
                 int n = Receive(_in, out SocketError err);
                 if (err == SocketError.WouldBlock) continue;
                 if (err != SocketError.Success || n == 0) return;
-                if (n == _in!.Length) MoreMayWait();
+                MoreMayWait(n, _in!.Length);
                 left -= n;
             }
         }
@@ -865,6 +874,43 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         return !Disarm();
     }
 
+    bool TakeHandlerTurn(EventLoop loop)
+    {
+        if (_handlersWake != loop.Wakes)
+        {
+            _handlersWake = loop.Wakes;
+            _handlers = 0;
+        }
+        return ++_handlers <= HandlersPerWake;
+    }
+
+    internal ValueTask WaitParked() => _parked.Wait();
+
+    /// <summary>The loop's next round: a connection that used its share of handlers goes on.</summary>
+    internal void TakeParkedTurn() => _parked.Complete();
+
+    /// <summary>The loop sends what this connection holds while it waits for its turn, before any connection goes on:
+    /// what the socket doesn't take now, the connection's own send (FlushAsync) handles when it does go on.</summary>
+    internal void SendHeld()
+    {
+        if (_sendStart >= _sendEnd || Volatile.Read(ref _socket) is not { } s) return;
+        int n;
+        try
+        {
+            n = Send(s, _out.AsSpan(_sendStart, _sendEnd - _sendStart), out SocketError err);
+            if (err != SocketError.Success) return;
+        }
+        catch (ObjectDisposedException)
+        {
+            return; // closed under it: FlushAsync finds that out
+        }
+        _sendStart += n;
+        _sentTotal += n;
+        _sendTaken += n;
+        if (_sendStart == _sendEnd) _sendStart = _sendEnd = 0;
+        CheckInvariants();
+    }
+
     bool TakeRead(EventLoop loop)
     {
         if (_readsWake != loop.Wakes)
@@ -912,10 +958,12 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         }
     }
 
-    /// <summary>A receive filled the buffer: more may wait in the kernel, which an edge-triggered loop won't announce.</summary>
-    void MoreMayWait()
+    /// <summary>After a receive of <paramref name="n"/> bytes into <paramref name="space"/>: one that filled the buffer,
+    /// or took the most a direct call takes, may have left bytes in the kernel, which an edge-triggered loop won't
+    /// announce again.</summary>
+    void MoreMayWait(int n, int space)
     {
-        if (Loop is not null) SetEdge(NoEdge, Edge, count: false);
+        if (Loop is not null && (n == space || n == DirectSocket.MaxPerCall)) SetEdge(NoEdge, Edge, count: false);
     }
 
     /// <summary>A receive found nothing: a hang-up seen before it began, and no edge since, was not the client's.</summary>
@@ -974,7 +1022,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     /// <summary>Before a send: on its loop's thread in a wake-up, the answers wait until the batch's hook has run, then
     /// go out together. Awaited in RunAsync, whose box lives as long as the connection, so a held send allocates
     /// nothing (a FlushAsync suspended per answer took a new box whenever several were held at once).</summary>
-    ValueTask TurnToSend() => Loop is { } loop && EventLoop.Batching == loop ? loop.WaitToSend(this) : default;
+    ValueTask TurnToSend() => Loop is { } loop && EventLoop.Current == loop ? loop.WaitToSend(this) : default;
 
     internal ValueTask WaitForSendTurn() => _sendTurn.Wait();
 

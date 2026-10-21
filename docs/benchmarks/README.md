@@ -45,6 +45,8 @@ is the GC collections and allocation rate of the CodeFusion process during a sus
 | 2026-10-21 | [direct-calls-and-batched-sends](2026-10-21-direct-calls-and-batched-sends.md) | Event loop with direct recv/send and per-wake-up sends, against the event loop before them | health +17 to 25%, post +21%, feed +8%, mix +26% |
 | 2026-10-21 | [listener-per-loop-and-loop-count](2026-10-21-listener-per-loop-and-loop-count.md) | SO_REUSEPORT listener per loop on one CPU; Sockets and 1 to 3 loops on two CPUs | one CPU: health +7%, mix level; two CPUs: inconclusive (25% swings), loop p99 higher on the mix |
 | 2026-10-21 | [review-fixes-and-batch-size](2026-10-21-review-fixes-and-batch-size.md) | Review fixes on one CPU; Sockets, batches of 512 and of 64 on two CPUs | one CPU: -2.5% health, -6% mix (one round); two CPUs: loop +22% over Sockets, p99 16-19 vs 10-11 ms; batches of 64 worse |
+| 2026-10-21 | [second-review-fixes-send-and-listeners](2026-10-21-second-review-fixes-send-and-listeners.md) | 00cc86e against 805f8d9; send with and without its GC transition; listener per loop against one on two CPUs | health level or better, mix -6% on the loop (not syscalls, not the edge word); keep the transition; listeners level |
+| 2026-10-21 | [mix-bisect](2026-10-21-mix-bisect.md) | The mix at five commits from 805f8d9 to 00cc86e, two rounds, profiles of both ends | no commit costs the mix: +4% in round 1, -5% in round 2, by position in the run; profiles alike |
 
 ## Template
 
@@ -57,7 +59,9 @@ Name the file `YYYY-MM-DD-<short-slug>.md` and add a row to the table above.
 - **Code:** the commit or branch of each side (and of codefusion-dotnet, for a contest entry).
 - **Machine:** the hardware or VM shape, OS, .NET SDK, Postgres or SQLite version, and what else was running.
 - **Method:** the tool and its settings (BenchmarkDotNet job, load generator and users, the contest's scoring steps),
-  the rounds and their order, and how the result was picked (best of, median of).
+  the rounds and their order, and how the result was picked (best of, median of). Alternate the order (A B B A, or
+  rotate it each round): on a shared VM a build's place in the run moved results by ±5%, more than the change measured
+  (2026-10-21-mix-bisect.md).
 
 | Case | Before | After | Change |
 |---|---|---|---|

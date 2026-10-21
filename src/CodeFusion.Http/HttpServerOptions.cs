@@ -14,7 +14,7 @@ public sealed class HttpServerOptions
     public IPEndPoint EndPoint { get; set; } = new(IPAddress.Loopback, 3000);
 
     /// <summary>The default 512 overflows while tens of thousands of clients connect at once; the kernel caps it
-    /// at net.core.somaxconn.</summary>
+    /// at net.core.somaxconn. With <see cref="ListenerPerLoop"/> it applies to each loop's listener.</summary>
     public int Backlog { get; set; } = 65535;
 
     /// <summary>How long a connection may wait for the first byte of its next request. Browsers keep an idle
@@ -83,6 +83,13 @@ public sealed class HttpServerOptions
     /// <summary>How many threads <see cref="HttpTransport.EventLoop"/> runs, each with its share of the connections
     /// and their handlers until they wait: one per core by default.</summary>
     public int EventLoops { get; set; } = Environment.ProcessorCount;
+
+    /// <summary>Linux, with <see cref="HttpTransport.EventLoop"/>: each loop listens on the port itself (SO_REUSEPORT)
+    /// and accepts its own connections, with no handoff between threads. The kernel spreads them by a hash of their
+    /// addresses, with no balance: a few long-lived connections (a proxy's pool) may share a loop while another idles.
+    /// False: one listener, the runtime's accepts, and connections given to the loops in turn. True by default; macOS
+    /// always has one listener.</summary>
+    public bool ListenerPerLoop { get; set; } = true;
 
     /// <summary>Called on an event loop's thread with its index (0 to <see cref="EventLoops"/> - 1) once the loop has
     /// handled every connection that one wake-up found ready, before it sends their answers: a database provider

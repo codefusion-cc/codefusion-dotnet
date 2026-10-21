@@ -455,3 +455,5 @@ CodeFusion.Http.HttpTransport.Sockets = 0 -> CodeFusion.Http.HttpTransport
 CodeFusion.Http.HttpServerOptions.OnEventLoopBatch.get -> System.Action<int>?
 CodeFusion.Http.HttpServerOptions.OnEventLoopBatch.set -> void
 CodeFusion.Http.HttpAppBuilder.OnEventLoopBatch(System.Action<int>! onBatch) -> void
+CodeFusion.Http.HttpServerOptions.ListenerPerLoop.get -> bool
+CodeFusion.Http.HttpServerOptions.ListenerPerLoop.set -> void
