@@ -57,7 +57,7 @@ internal static partial class Deploy
         Ssh.Check(vm.ExternalIp, $"cd {dest}/app && bash install.sh > {dest}/install.log 2>&1 || {{ tail -40 {dest}/install.log; exit 1; }}",
             timeout: TimeSpan.FromMinutes(30));
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] build.sh (user challenge)");
-        Ssh.Check(vm.ExternalIp, $"cd {dest}/app && runuser -u challenge -- env HOME=/home/challenge bash build.sh > {dest}/build.log 2>&1 || {{ tail -60 {dest}/build.log; exit 1; }}",
+        Ssh.Check(vm.ExternalIp, $"cd {dest}/app && runuser -u challenge -- env -u XDG_RUNTIME_DIR HOME=/home/challenge bash build.sh > {dest}/build.log 2>&1 || {{ tail -60 {dest}/build.log; exit 1; }}",
             timeout: TimeSpan.FromMinutes(40));
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] built {name}; `search {c.Key} {name}` scores it");
     }

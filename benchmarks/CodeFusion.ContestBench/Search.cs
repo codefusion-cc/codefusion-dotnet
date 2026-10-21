@@ -119,7 +119,9 @@ internal static class Search
         (int warmRamp, int warm, int probeRamp, int probe, int holdRamp, int hold, int step) = o.Quick
             ? (20, 40, 20, 40, 20, 60, 500) : (60, 120, 60, 120, 60, 300, 250);
         Log($"=== search {label}: {entry} on {target.InternalIp}, k6 boxes {string.Join(", ", loads.Select(l => l.Name))}" + (o.Quick ? " (quick: not a score)" : ""));
-        if (!o.NoSwitch && !File.Exists(Path.Combine(dir, "switch.ok")))
+        // a search resumed after another entry's ran on the box switches back, though its first switch is done
+        string live = Ssh.Run(target.ExternalIp, "basename $(dirname $(readlink -f /opt/challenge/current))").Out.Trim();
+        if (!o.NoSwitch && (!File.Exists(Path.Combine(dir, "switch.ok")) || live != entry))
         {
             var sw = Ssh.Run(target.ExternalIp, $"/opt/conduit-tools/cbench agent switch {Shell.Q(entry)} 2>&1", timeout: TimeSpan.FromMinutes(5));
             File.WriteAllText(Path.Combine(dir, "switch.log"), sw.Out);
@@ -234,6 +236,20 @@ internal static class Search
             boxes[i] = o;
         });
         File.WriteAllText(Path.Combine(pdir, "monitor.csv"), Ssh.Check(target.ExternalIp, StopMonitor()));
+        // An entry that died during the phase fails it, and is started again on a fresh copy of the database (the
+        // switch), so the phases after it measure the entry rather than a dead port
+        bool crashed = !Ssh.Run(target.ExternalIp, "systemctl is-active --quiet challenge").Ok;
+        if (crashed)
+        {
+            string why = Ssh.Run(target.ExternalIp, "systemctl show challenge -p Result -p ExecMainStatus -p ExecMainCode --value | tr '\\n' ' '; " +
+                "journalctl -u challenge --no-pager -n 60").Out;
+            File.WriteAllText(Path.Combine(pdir, "crash.log"), why);
+            log($"  CRASHED during {name}: {Shell.Tail(why.Split('\n')[0], 200)}");
+            string entry = Ssh.Check(target.ExternalIp, "basename $(dirname $(readlink -f /opt/challenge/current))").Trim();
+            var sw = Ssh.Run(target.ExternalIp, $"/opt/conduit-tools/cbench agent switch {Shell.Q(entry)} 2>&1", timeout: TimeSpan.FromMinutes(5));
+            File.WriteAllText(Path.Combine(pdir, "restart.log"), sw.Out);
+            log(sw.Ok ? "  restarted on a fresh database" : $"  restart failed: {Shell.Tail(sw.Out, 300)}");
+        }
 
         var all = new Hist();
         foreach (var b in boxes) all.Merge(Hist.FromJson(b));
@@ -249,8 +265,10 @@ internal static class Search
         if (p95 >= 500) reasons.Add($"p95 {p95:0} ms");
         if (p99 >= 1000) reasons.Add($"p99 {p99:0} ms");
         if (errRate >= 0.01) reasons.Add($"errors {100 * errRate:0.00}%");
+        if (crashed) reasons.Add("the entry crashed");
         var r = new JsonObject
         {
+            ["crashed"] = crashed,
             ["phase"] = name, ["users"] = users, ["pass"] = reasons.Count == 0, ["lg_limited"] = lgReasons.Count > 0 && name != "warmup",
             ["fail_reasons"] = new JsonArray(reasons.Select(x => (JsonNode)x).ToArray()),
             ["lg_reasons"] = new JsonArray(lgReasons.Select(x => (JsonNode)x!).ToArray()),
@@ -269,7 +287,8 @@ internal static class Search
 
     static string OneLine(JsonObject r) => string.Create(CultureInfo.InvariantCulture,
         $"{((bool)r["pass"]! ? "PASS" : "FAIL")}{((bool)r["lg_limited"]! ? " LG" : "")} {(double)r["rps"]!:0} req/s p50 {(double)r["p50_ms"]!:0.0} p95 {(double)r["p95_ms"]!:0.0} p99 {(double)r["p99_ms"]!:0.0} ms err {(double)r["error_pct"]!:0.00}% " +
-        $"cpu {(double)(r["target"]?["cpu%"] ?? 0):0}% app {(double)(r["target"]?["app%"] ?? 0):0}% rss {(double)(r["target"]?["app_rss_mb_max"] ?? 0):0} MB");
+        // a crashed entry's phase may have no target samples: a missing figure is 0
+        $"cpu {(double?)r["target"]?["cpu%"] ?? 0:0}% app {(double?)r["target"]?["app%"] ?? 0:0}% rss {(double?)r["target"]?["app_rss_mb_max"] ?? 0:0} MB");
 
     /// <summary>As loadgen's search does between phases: at least 5 s, then until the target's CPU is under 15% (90 s at most).</summary>
     static void WaitIdle(string ip, Action<string> log)
