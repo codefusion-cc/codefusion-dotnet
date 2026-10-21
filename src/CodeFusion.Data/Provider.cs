@@ -145,6 +145,15 @@ public interface IDataProvider<TSelf, TStatement, TCommand> : IDataProvider
     /// <summary>A statement of <paramref name="sql"/> taking <paramref name="parameters"/>, made once (a static field).</summary>
     static abstract TStatement Statement(string sql, params ReadOnlySpan<DataType> parameters);
 
+    /// <summary>
+    /// The statement of an update of one row by its key, <c>UPDATE table SET columns[i] = $(columnParameters[i] + 1)
+    /// WHERE key = $(keyParameter + 1)</c>, with the names as <paramref name="sql"/> has them: a provider that can may
+    /// run a group commit's run of them as one statement, with the same outcome as running them in order. By default
+    /// it is <see cref="Statement"/>'s; the generated code calls it only on a provider that declares it.
+    /// </summary>
+    static virtual TStatement KeyedUpdate(string sql, string table, string key, int keyParameter, string[] columns, int[] columnParameters,
+        params ReadOnlySpan<DataType> parameters) => TSelf.Statement(sql, parameters);
+
     /// <summary>The statement of a query marked <see cref="RunsAloneAttribute"/>: its commands run apart from any group.
     /// By default the statement as it is; the generated code calls it only on a provider that declares it.</summary>
     static virtual TStatement Alone(TStatement statement) => statement;

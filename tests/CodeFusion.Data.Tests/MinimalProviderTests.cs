@@ -87,5 +87,22 @@ public sealed class MinimalProviderTests
         Assert.Contains("ItemAlone", result.Generated);
         Assert.Contains("SetCount", result.Generated);
         Assert.DoesNotContain("Mini.Alone(", result.Generated);
+        Assert.DoesNotContain("Mini.KeyedUpdate(", result.Generated);
+    }
+
+    [Fact]
+    public void AKeyedUpdateThatRunsAloneIsNeverMadeAKeyedUpdateStatement()
+    {
+        var result = GeneratorHarness.Run(GeneratorHarness.Context("""
+                [RunsAlone]
+                public Write SetAgeAlone(long id, int age) => People.Where(p => p.Id == id).Update(p => new Person { Age = age });
+
+                public Write SetAge(long id, int age) => People.Where(p => p.Id == id).Update(p => new Person { Age = age });
+            """));
+        Assert.True(result.Generator.IsEmpty && result.Errors.IsEmpty, string.Join("\n", result.Generator.Concat(result.Errors).Take(10)));
+        var lines = result.Generated.Split('\n');
+        Assert.Contains(lines, l => l.Contains("KeyedUpdate(", System.StringComparison.Ordinal) && l.Contains("QuerySql.SetAge,", System.StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("KeyedUpdate(", System.StringComparison.Ordinal) && l.Contains("SetAgeAlone", System.StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.Contains("Alone(", System.StringComparison.Ordinal) && l.Contains("SetAgeAlone", System.StringComparison.Ordinal));
     }
 }

@@ -47,6 +47,18 @@ public sealed class PgStatement
     internal readonly byte[] Parse;
     /// <summary>The Bind message's head up to the parameter values: portal, statement name, formats, count.</summary>
     internal readonly byte[] BindHead;
+    /// <summary>For an update of one row by its key (<see cref="Postgres.KeyedUpdate"/>): the statement that runs a
+    /// group's run of them at once, each parameter an array of theirs.</summary>
+    internal PgStatement? Batch;
+    /// <summary>On a <see cref="Batch"/>: each array parameter's element type.</summary>
+    internal uint[]? ElementTypes;
+    /// <summary>On a <see cref="Batch"/>: which parameter is the key (an int or a bigint).</summary>
+    internal int KeyParameter;
+    /// <summary>On a <see cref="Batch"/>: the check of its table, run before it (see <see cref="Postgres.KeyedUpdate"/>).</summary>
+    internal PgStatement? Check;
+    /// <summary>A keyed update's statement: not merged until then (a <see cref="System.Diagnostics.Stopwatch"/>
+    /// timestamp), after its table refused merging or a merged run failed with no write at fault.</summary>
+    internal long UnmergedUntil;
 
     /// <summary>
     /// Commands of this statement run alone: on a connection of their own, each in a transaction of its own, never in

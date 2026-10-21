@@ -9,6 +9,18 @@ batch; a `PgWriter`'s loops commit whatever writes have queued in one transactio
 commits them all. Requests never hold a connection, and a refused or failed command comes back as a status, not an
 exception.
 
+An update of one row by its key whose values are all parameters (`Where(w => w.Id == id).Update(w => new World {
+RandomNumber = n })`) goes further: a group commit's run of them becomes one statement, each parameter an array of
+theirs unnested. A run ends at any other statement and before a key comes twice, so the group's order holds and every
+write is checked as it would be alone. If the merged statement fails, the writes go again unmerged, each in a
+savepoint of its own, in one transaction per 64 writes: the writes in one round trip and the commit in another. Each
+gets its own outcome, only a write at fault gets an error, and the rest commit together. If the commit itself fails
+(a deferred constraint), nothing of it committed and each write runs again alone. A table with a trigger or a rule, partitions or inheritance children, or a
+unique index on a column the update sets never takes merged updates: a check of the table runs first, as its own
+statement in the same transaction, and the update is skipped. Such a statement goes unmerged for five minutes, then
+is tried again; `PgCounters.Unmerged` counts each time. So does one whose merged run failed with no write at fault,
+unless another transaction failed it (a deadlock, a serialization failure, a lock timeout).
+
 A read loop keeps up to two groups in flight on its connection (`PgReader.MaxInFlight`): it sends what has queued
 while Postgres still answers the group before, so the backend never sits a round trip without work. A burst that
 arrives while other read loops sleep is shared out among them, so its reads run on several backends at once.

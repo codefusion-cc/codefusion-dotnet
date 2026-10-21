@@ -169,6 +169,8 @@ static CodeFusion.Data.Postgres.PostgresServices.AddDatabase<TContext>(this Code
 static CodeFusion.Data.Postgres.PostgresServices.AddDatabase<TContext>(this CodeFusion.IServiceRegistry! services, CodeFusion.Data.Postgres.PostgresDatabase! database, int readers, int writers) -> CodeFusion.Data.Postgres.PgDataSource!
 virtual CodeFusion.Data.Postgres.PgRowHandler.Invoke(in CodeFusion.Data.Postgres.PgRow row, object? state) -> long
 virtual CodeFusion.Data.Postgres.PgTransport.Started() -> void
+CodeFusion.Data.Postgres.PgCounters.Merged -> long
+static CodeFusion.Data.Postgres.Postgres.KeyedUpdate(string! sql, string! table, string! key, int keyParameter, string![]! columns, int[]! columnParameters, params System.ReadOnlySpan<CodeFusion.Data.DataType> parameters) -> CodeFusion.Data.Postgres.PgStatement!
 CodeFusion.Data.Postgres.PgCounters.Pipelined -> long
 const CodeFusion.Data.Postgres.PgReader.MaxInFlight = 2 -> int
 CodeFusion.Data.Postgres.PgCounters.Alone -> long
@@ -177,3 +179,5 @@ CodeFusion.Data.Postgres.PgStatement.RunsAlone.init -> void
 static CodeFusion.Data.Postgres.Postgres.Alone(CodeFusion.Data.Postgres.PgStatement! statement) -> CodeFusion.Data.Postgres.PgStatement!
 CodeFusion.Data.Postgres.PgWriter.PgWriter(CodeFusion.Data.Postgres.PgSettings! settings, int maxQueued) -> void
 CodeFusion.Data.Postgres.PgSettings.AloneConnections -> int
+CodeFusion.Data.Postgres.PgCounters.Unmerged -> long
+CodeFusion.Data.Postgres.PgCounters.Commits -> long

@@ -36,6 +36,81 @@ public readonly struct Postgres : IDataProvider<Postgres, PgStatement, PgCommand
         return new PgStatement(sql, types);
     }
 
+    /// <summary>
+    /// The update's statement, and the one that runs a group commit's run of them as one: its parameters as arrays,
+    /// unnested, one row each. A run never holds two writes to one key (the writer starts another run there), so each
+    /// write updates its row once and is checked as running the updates one by one would. Only an integer key is
+    /// merged, whose values are equal exactly when their bytes are. That holds only while each row's update sees
+    /// nothing of the others', so a check of the table runs first, as a statement of its own in the same transaction:
+    /// a trigger or rule (which would see one statement, or the rows in another order), partitions or inheritance
+    /// children (whose own triggers and indexes it doesn't see), or a unique or exclusion index on a column the update
+    /// sets (which would judge the rows against each other at once, not one write after another) make it fail with
+    /// "CodeFusion: no merged updates on" and the table, and the update never runs. An update that sets its own key
+    /// isn't merged: the rows it finds would depend on the writes before it.
+    /// </summary>
+    public static PgStatement KeyedUpdate(string sql, string table, string key, int keyParameter, string[] columns, int[] columnParameters,
+        params ReadOnlySpan<DataType> parameters)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(columns);
+        ArgumentNullException.ThrowIfNull(columnParameters);
+        var statement = Statement(sql, parameters);
+        int n = parameters.Length;
+        if (columns.Length == 0 || columns.Length != columnParameters.Length || (uint)keyParameter >= (uint)n || Array.IndexOf(columns, key) >= 0
+            || parameters[keyParameter] is not (DataType.Int32 or DataType.Int64))
+            return statement;
+        var arrays = new PgType[n];
+        var elements = new uint[n];
+        for (int i = 0; i < n; i++)
+        {
+            if (parameters[i] == DataType.TextArray) return statement;
+            elements[i] = (uint)TypeOf(parameters[i]);
+            arrays[i] = ArrayOf(parameters[i]);
+        }
+        var b = new System.Text.StringBuilder("UPDATE ").Append(table).Append(" AS t0 SET ");
+        for (int c = 0; c < columns.Length; c++)
+        {
+            if ((uint)columnParameters[c] >= (uint)n) return statement;
+            b.Append(c == 0 ? "" : ", ").Append(columns[c]).Append(" = v.p").Append(columnParameters[c] + 1);
+        }
+        b.Append(" FROM unnest(");
+        for (int i = 0; i < n; i++) b.Append(i == 0 ? "$" : ", $").Append(i + 1);
+        b.Append(") AS v(");
+        for (int i = 0; i < n; i++) b.Append(i == 0 ? "p" : ", p").Append(i + 1);
+        b.Append(") WHERE t0.").Append(key).Append(" = v.p").Append(keyParameter + 1);
+        // The table's check: a statement of its own, run first in the same transaction, so a refusal skips the update
+        var g = new System.Text.StringBuilder("SELECT 1 FROM pg_class c WHERE c.oid = '").Append(table.Replace("'", "''", StringComparison.Ordinal))
+            .Append("'::regclass AND CASE WHEN c.relhasrules OR c.relkind = 'p' OR c.relhassubclass")
+            .Append(" OR EXISTS (SELECT 1 FROM pg_trigger tr WHERE tr.tgrelid = c.oid AND NOT tr.tgisinternal)")
+            .Append(" OR EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = c.oid AND (i.indisunique OR i.indisexclusion)")
+            .Append(" AND (i.indexprs IS NOT NULL OR i.indpred IS NOT NULL OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid")
+            .Append(" AND a.attnum = ANY (i.indkey) AND a.attname IN (");
+        for (int c = 0; c < columns.Length; c++) g.Append(c == 0 ? "'" : ", '").Append(Unquoted(columns[c]).Replace("'", "''", StringComparison.Ordinal)).Append('\'');
+        g.Append(")))) THEN ('").Append(NotMergedMarker).Append(" ' || c.relname)::int ELSE 0 END = 1");
+        statement.Batch = new PgStatement(b.ToString(), arrays) { ElementTypes = elements, KeyParameter = keyParameter, Check = new PgStatement(g.ToString()) };
+        return statement;
+    }
+
+    /// <summary>The start of the error a merged update fails with when its table can't take merged updates.</summary>
+    internal const string NotMergedMarker = "CodeFusion: no merged updates on";
+
+    /// <summary>A column's name as the catalog has it: a quoted identifier without its quotes, a plain one as it is
+    /// (the generator writes it unquoted only when it is lower case already).</summary>
+    static string Unquoted(string column) =>
+        column.Length >= 2 && column[0] == '"' && column[^1] == '"' ? column[1..^1].Replace("\"\"", "\"", StringComparison.Ordinal) : column;
+
+    static PgType ArrayOf(DataType type) => type switch
+    {
+        DataType.Int64 => (PgType)1016,
+        DataType.Int32 => (PgType)1007,
+        DataType.Boolean => (PgType)1000,
+        DataType.Double => (PgType)1022,
+        DataType.Text => (PgType)1009,
+        DataType.Timestamp => (PgType)1185,
+        _ => throw new ArgumentOutOfRangeException(nameof(type)),
+    };
+
     /// <inheritdoc/>
     public static PgStatement Alone(PgStatement statement)
     {
