@@ -26,6 +26,7 @@ public static class SampleApp
     {
         var builder = HttpApp.CreateBuilder([]);
         builder.Options.EndPoint = new IPEndPoint(IPAddress.Loopback, 0);
+        TestTransport.Apply(builder.Options);
         builder.Options.HeartbeatInterval = TimeSpan.FromMilliseconds(50);
         builder.Errors.Log = null;
         builder.AddJwtAuth(Secret);

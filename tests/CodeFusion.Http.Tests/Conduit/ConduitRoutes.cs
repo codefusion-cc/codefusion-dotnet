@@ -18,6 +18,7 @@ public static class ConduitRoutes
     {
         var builder = HttpApp.CreateBuilder([]);
         builder.Options.EndPoint = new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0);
+        TestTransport.Apply(builder.Options);
         builder.AddJwtAuth(Secret);
         HttpApp app = builder.Build();
         var ids = new Dictionary<Endpoint, RouteId>();

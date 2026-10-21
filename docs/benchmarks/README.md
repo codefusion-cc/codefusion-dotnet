@@ -32,12 +32,18 @@ is the GC collections and allocation rate of the CodeFusion process during a sus
 | 2026-10-20 | [sqlite-leader-commit](2026-10-20-sqlite-leader-commit.md) | A lone write committed on its caller's thread | 400 transactions for 400 writes vs 4; not used |
 | 2026-10-20 | [twelve-entry-saturation](2026-10-20-twelve-entry-saturation.md) | The $12 entry against #74 and #82 at saturation, 1 CPU | mix 34,218 vs 57,458 (C#) and 89,297 (Rust) req/s |
 | 2026-10-20 | [twelve-entry-tried-not-kept](2026-10-20-twelve-entry-tried-not-kept.md) | Native AOT, range-scan like counts, leader commit, checkpoint interval | none faster; none kept |
+| 2026-10-20 | [one-receive-per-request](2026-10-20-one-receive-per-request.md) | System calls per response, Sockets against EventLoop (epoll), $12 entry, one CPU | 1 recvfrom + 1 sendto per response, down from 2 + 1 |
+| 2026-10-20 | [event-loop-vs-sockets-linux](2026-10-20-event-loop-vs-sockets-linux.md) | Throughput of the $12 entry, Sockets against EventLoop, against #74 | health +21%, post +14%, feed +10%, mix +5%; #74 still 26% ahead on health |
+| 2026-10-20 | [event-loop-allocations-macos](2026-10-20-event-loop-allocations-macos.md) | Allocations per request, kqueue against Sockets, Release | ≤ 0.07 B/request on both; zero kept |
 | 2026-10-21 | [sqlite-provider-allocation](2026-10-21-sqlite-provider-allocation.md) | CodeFusion.Data.Sqlite's allocations per query, whole process | 0 B per extra query (Postgres too) |
 | 2026-10-21 | [sqlite-exclusive-first-try](2026-10-21-sqlite-exclusive-first-try.md) | One connection for reads and writes, a read transaction per read | 1 vCPU mix 317 to 437 k vs 33 to 55 k ops/s; reads slower |
 | 2026-10-21 | [sqlite-exclusive-kept-read](2026-10-21-sqlite-exclusive-kept-read.md) | The same with a read transaction kept between groups | reads back to par; mix 374 to 431 k ops/s |
 | 2026-10-21 | [sqlite-exclusive-turns](2026-10-21-sqlite-exclusive-turns.md) | Reads and the writer taking turns on the one connection | 200 writes beside scans: 21.9 s to 0.3 to 0.4 s |
 | 2026-10-21 | [sqlite-exclusive-after-turns](2026-10-21-sqlite-exclusive-after-turns.md) | Exclusive against readers of their own after turn-taking | 1 vCPU mix 388 to 486 k vs 50 to 77 k ops/s |
 | 2026-10-21 | [twelve-entry-linq-exclusive](2026-10-21-twelve-entry-linq-exclusive.md) | The $12 entry on LINQ, DLLs and Exclusive mode, against the baseline | mix 37,143 to 41,091 vs 32,459 to 34,564 req/s; p99 longer |
+| 2026-10-21 | [direct-calls-and-batched-sends](2026-10-21-direct-calls-and-batched-sends.md) | Event loop with direct recv/send and per-wake-up sends, against the event loop before them | health +17 to 25%, post +21%, feed +8%, mix +26% |
+| 2026-10-21 | [listener-per-loop-and-loop-count](2026-10-21-listener-per-loop-and-loop-count.md) | SO_REUSEPORT listener per loop on one CPU; Sockets and 1 to 3 loops on two CPUs | one CPU: health +7%, mix level; two CPUs: inconclusive (25% swings), loop p99 higher on the mix |
+| 2026-10-21 | [review-fixes-and-batch-size](2026-10-21-review-fixes-and-batch-size.md) | Review fixes on one CPU; Sockets, batches of 512 and of 64 on two CPUs | one CPU: -2.5% health, -6% mix (one round); two CPUs: loop +22% over Sockets, p99 16-19 vs 10-11 ms; batches of 64 worse |
 
 ## Template
 

@@ -104,6 +104,18 @@ public sealed class SlowClientTests
         await drip;
     }
 
+    // Each receive's bytes add to what the body has paid for. Before, the sum was cut to whole milliseconds on every
+    // receive, so bytes worth less than one each earned nothing: 1000 one-byte receives at 0.5 ms a byte paid for 0.
+    [Fact]
+    public void BytesWorthLessThanAMillisecondEachStillAddUp()
+    {
+        var paid = HttpExchange.Paid(0, 0, 0.5, long.MaxValue / 2);
+        for (int i = 0; i < 1000; i++) paid = HttpExchange.Paid(paid, 1, 0.5, long.MaxValue / 2);
+        Assert.Equal(500, paid);
+        // and the cap still holds
+        Assert.Equal(100, HttpExchange.Paid(paid, 1000, 0.5, 100));
+    }
+
     // A rate so low a byte would pay for more milliseconds than a long holds made the deadline wrap negative, which
     // reads as no deadline: not even the request timeout ended the wait.
     [Theory(Timeout = 20_000)]
@@ -429,7 +441,8 @@ public sealed class SlowClientTests
 
     // Each acknowledged byte pays for 1/rate seconds of waiting, but no more than the request timeout (or the grace
     // period) ahead. Before, the rate was the run's average: 8 MB read at once bought 8 s at 1 MB/s, and a client then
-    // reading 16 KB every 30 ms (about half the rate) kept the connection for over 15 s.
+    // reading 16 KB every 30 ms (about half the rate) kept the connection until its response ended, over 14 s. The 3 s
+    // timeout lets the fast part pause (a GC, a starved thread pool) without being cut.
     [Fact(Timeout = 30_000)]
     public async Task AResponseReadFastAtFirstDoesNotBuyALongCrawl()
     {
@@ -437,7 +450,7 @@ public sealed class SlowClientTests
         await using var t = TestServer.Start(Sized(Size), o =>
         {
             o.MinResponseDataRate = new MinDataRate(1_000_000, TimeSpan.FromMilliseconds(500));
-            o.RequestTimeout = TimeSpan.FromSeconds(1);
+            o.RequestTimeout = TimeSpan.FromSeconds(3);
         });
         using var s = new Socket(t.EndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { ReceiveBufferSize = 65536 };
         await s.ConnectAsync(t.EndPoint);
@@ -460,8 +473,9 @@ public sealed class SlowClientTests
             }
             catch (Exception e) when (e is SocketException or ObjectDisposedException) { }
         });
-        // about 2 s: the credit is the 1 s timeout, and the crawl pays back half of what passes
-        Assert.InRange(await MillisecondsUntilClosed(t, 6000, slow), 0, 6000);
+        // about 7 s: the credit is the 3 s timeout, and the crawl pays back half of what passes (less on a busy machine,
+        // which only cuts it sooner); the 8 MB left take the crawl over 14 s
+        Assert.InRange(await MillisecondsUntilClosed(t, 11_000, slow), 0, 11_000);
         stop.Cancel();
         s.Dispose();
         await crawl;
@@ -556,6 +570,6 @@ public sealed class SlowClientTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new MinDataRate(double.PositiveInfinity, TimeSpan.Zero));
         Assert.Throws<ArgumentOutOfRangeException>(() => new MinDataRate(1, TimeSpan.FromTicks(-1)));
         Assert.Throws<ArgumentException>(() => new HttpServer(new HttpServerOptions { MaxConnections = 0 }, TestServer.Echo));
-        await using var off = new HttpServer(new HttpServerOptions { MaxConnections = 1, MinRequestBodyDataRate = null, MinResponseDataRate = null }, TestServer.Echo);
+        await using var off = new HttpServer(TestTransport.Apply(new HttpServerOptions { MaxConnections = 1, MinRequestBodyDataRate = null, MinResponseDataRate = null }), TestServer.Echo);
     }
 }

@@ -23,6 +23,16 @@ public interface IServiceRegistry
     /// <summary>Runs <paramref name="onStopping"/> once the app has stopped taking requests, in the reverse order of
     /// registration: to drain queues and close connections.</summary>
     void OnStopping(Action onStopping);
+
+    /// <summary>
+    /// Runs <paramref name="onBatch"/> with the loop's index (<see cref="EventLoopThread.Current"/>) each time an event
+    /// loop has handled the connections one wake-up found ready, before it sends their answers: a database commits the
+    /// batch's writes here, and a handler waiting for that commit, completed here, answers in the same batch. Actions
+    /// run in the order they were registered, on the loop's thread, which every connection on that loop shares: one
+    /// must not block. One that throws is counted and reported once, and the loop goes on. Only a server on event
+    /// loops calls them; with sockets they never run.
+    /// </summary>
+    void OnEventLoopBatch(Action<int> onBatch);
 }
 
 /// <summary>

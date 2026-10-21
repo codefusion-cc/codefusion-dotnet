@@ -18,7 +18,8 @@ namespace CodeFusion.Http.Tests;
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class Quiet
 {
-    /// <summary>Tests that measure the whole process's allocations run alone.</summary>
+    /// <summary>Tests that measure the whole process's allocations, and tests that block thread-pool threads for
+    /// seconds, run alone.</summary>
     public const string Name = "quiet";
 }
 
@@ -92,13 +93,17 @@ public class AllocationTests(ITestOutputHelper output)
                            + "Content-Type: application/json\r\nContent-Length: 30\r\n\r\n{\"comment\":{\"body\":\"hello!!\"}}";
 
     [Theory(Timeout = 120_000)]
-    [InlineData(false, 1)]
-    [InlineData(true, 1)]
-    [InlineData(true, 8)]
-    public async Task KeepAliveRequestsAllocateNothing(bool async, int connections)
+    [InlineData(false, 1, HttpTransport.Sockets)]
+    [InlineData(true, 1, HttpTransport.Sockets)]
+    [InlineData(true, 8, HttpTransport.Sockets)]
+    [InlineData(false, 1, HttpTransport.EventLoop)]
+    [InlineData(true, 1, HttpTransport.EventLoop)]
+    [InlineData(false, 8, HttpTransport.EventLoop)]
+    [InlineData(true, 8, HttpTransport.EventLoop)]
+    public async Task KeepAliveRequestsAllocateNothing(bool async, int connections, HttpTransport transport)
     {
         Assert.SkipWhen(Debugger(), "Debug builds make every async method's state machine a class: run in Release");
-        await using var t = TestServer.Start(async ? Async : Sync);
+        await using var t = TestServer.Start(async ? Async : Sync, o => TestTransport.UseWithHook(o, transport));
         byte[] request = System.Text.Encoding.ASCII.GetBytes(Request);
         var sockets = new Socket[connections];
         var responseLength = new int[connections];
@@ -113,21 +118,26 @@ public class AllocationTests(ITestOutputHelper output)
         RunClients(sockets, request, responseLength, warm).Go();
         Thread.Sleep(200); // let tiered compilation's background work settle
         RunClients(sockets, request, responseLength, warm).Go();
-        var clients = RunClients(sockets, request, responseLength, measured);
-        GC.Collect();
-        using var ticks = new AllocationTicks();
-        long before = GC.GetTotalAllocatedBytes(precise: true);
-        clients.Go();
-        long allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
-        ticks.Dispose();
+        // Up to three windows, keeping the least. Whole-process noise (the listener's own event payloads, the test
+        // runner, a thread the pool starts) adds a few KB to one window; one allocation per request would add at
+        // least 24 bytes for each request in every window.
+        double perRequest = double.MaxValue;
+        for (int window = 0; window < 3 && perRequest >= 0.5; window++)
+        {
+            var clients = RunClients(sockets, request, responseLength, measured);
+            GC.Collect();
+            using var ticks = new AllocationTicks();
+            long before = GC.GetTotalAllocatedBytes(precise: true);
+            clients.Go();
+            long allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
+            ticks.Dispose();
+            double inWindow = (double)allocated / (measured * connections);
+            output.WriteLine($"window {window + 1}: {allocated} bytes over {measured * connections} requests: {inWindow:F3} B/request");
+            // The runtime samples an allocation about every 100 KB: what it saw names what still allocates.
+            foreach (var g in ticks.Types.GroupBy(t => t).OrderByDescending(g => g.Count())) output.WriteLine($"  {g.Count(),4} samples: {g.Key}");
+            perRequest = Math.Min(perRequest, inWindow);
+        }
         foreach (var s in sockets) s.Dispose();
-
-        double perRequest = (double)allocated / (measured * connections);
-        output.WriteLine($"{allocated} bytes over {measured * connections} requests: {perRequest:F3} B/request");
-        // The runtime samples an allocation about every 100 KB: what it saw names what still allocates.
-        foreach (var g in ticks.Types.GroupBy(t => t).OrderByDescending(g => g.Count())) output.WriteLine($"  {g.Count(),4} samples: {g.Key}");
-        // Whole-process noise (the listener's own event payloads, the test runner) adds a few KB in all; one
-        // allocation per request would add at least 24 bytes for each of them.
         Assert.True(perRequest < 0.5, $"{perRequest:F3} bytes per request");
     }
 

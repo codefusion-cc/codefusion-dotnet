@@ -31,6 +31,7 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
     readonly Dictionary<Type, int> _perConnectionSlots;
     readonly Func<object>[] _perConnection;
     readonly Action[] _onStopping;
+    readonly Action<int>[] _batch;
     readonly Jwt? _jwt;
     readonly Router _router = new();
     HttpServer? _server;
@@ -47,6 +48,7 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
         int slot = 0;
         foreach (Type t in builder.PerConnection.Keys) _perConnectionSlots[t] = slot++;
         _onStopping = [.. builder.Stopping];
+        _batch = [.. builder.Batch];
         _jwt = builder.JwtPrototype;
         ArenaChunks = new BufferPool(4096, _options.MaxPooledBuffers);
     }
@@ -106,6 +108,7 @@ public sealed class HttpApp : IEndpointRouteBuilder, IAsyncDisposable
         var server = new HttpServer(_options, Dispatch);
         server.HandlerDone = static x => (x.State as RequestContext)?.HandlerDone();
         server.ConnectionIdle = static x => (x.State as RequestContext)?.ConnectionIdle();
+        server.BatchActions = _batch;
         _server = server;
         server.Start();
     }
@@ -206,6 +209,7 @@ public sealed class HttpAppBuilder : IServiceRegistry
     internal readonly Dictionary<Type, object> Singletons = [];
     internal readonly Dictionary<Type, Func<object>> PerConnection = [];
     internal readonly List<Action> Stopping = [];
+    internal readonly List<Action<int>> Batch = [];
     internal Jwt? JwtPrototype;
     bool _built;
 
@@ -259,6 +263,14 @@ public sealed class HttpAppBuilder : IServiceRegistry
         Stopping.Add(onStopping);
     }
 
+    /// <inheritdoc/>
+    public void OnEventLoopBatch(Action<int> onBatch)
+    {
+        ArgumentNullException.ThrowIfNull(onBatch);
+        ThrowIfBuilt();
+        Batch.Add(onBatch);
+    }
+
     /// <summary>
     /// Verifies <c>Authorization: Token &lt;jwt&gt;</c> headers signed with <paramref name="secret"/> (HS256) for
     /// handlers that take a <see cref="Viewer"/> and endpoints marked with an auth mode, and registers a
@@ -267,10 +279,15 @@ public sealed class HttpAppBuilder : IServiceRegistry
     public HttpAppBuilder AddJwtAuth(string secret) => AddJwtAuth(secret, TimeSpan.FromDays(30));
 
     /// <summary><see cref="AddJwtAuth(string)"/>, with tokens issued for <paramref name="lifetime"/> instead of 30 days.</summary>
-    public HttpAppBuilder AddJwtAuth(string secret, TimeSpan lifetime)
+    public HttpAppBuilder AddJwtAuth(string secret, TimeSpan lifetime) => AddJwtAuth(secret, lifetime, false);
+
+    /// <summary><see cref="AddJwtAuth(string, TimeSpan)"/>, and with <paramref name="allowShortSecret"/> a secret
+    /// shorter than <see cref="Jwt.MinSecretBytes"/> too, for a deployment handed a fixed one: see
+    /// <see cref="Jwt.Jwt(string, TimeSpan, bool)"/> for the risk.</summary>
+    public HttpAppBuilder AddJwtAuth(string secret, TimeSpan lifetime, bool allowShortSecret)
     {
         if (JwtPrototype is not null) throw new InvalidOperationException("AddJwtAuth was called already");
-        var jwt = new Jwt(secret, lifetime);
+        var jwt = new Jwt(secret, lifetime, allowShortSecret);
         AddPerConnection(jwt.Copy);
         JwtPrototype = jwt;
         return this;

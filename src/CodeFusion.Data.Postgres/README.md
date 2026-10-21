@@ -11,7 +11,8 @@ exception.
 
 It is also CodeFusion.Data's Postgres provider: a context deriving from `DataContext<Postgres>` has its LINQ
 compiled to Postgres's SQL at build time and run on these loops, registered with
-`services.AddDatabase<ConduitDb>(Postgres.FromUrl(url), readers, writers)`.
+`services.AddDatabase<ConduitDb>(Postgres.FromUrl(url), readers, writers)`, or `services.AddDatabase<ConduitDb>(source)`
+with a `PgDataSource` the app built itself (its own loops, error replies or failure log, its loops started).
 
 ```bash
 dotnet add package CodeFusion.Data.Postgres

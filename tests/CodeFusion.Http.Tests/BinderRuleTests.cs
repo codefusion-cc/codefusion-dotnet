@@ -5,15 +5,17 @@ using Xunit;
 
 namespace CodeFusion.Http.Tests;
 
-// The CS0649s: the binder no longer sets these members, which is what the tests check (and why the project lets
-// CFH0109 pass).
+// The CS0649s: the binder no longer sets these members, which is what the tests check (and the CFH0109s say so at
+// each member).
 #pragma warning disable CS0649
 
 /// <summary>A body with members a client must not reach (over-posting), and numbers with [Range].</summary>
 public partial struct Signup
 {
     public Utf8 Name;
+#pragma warning disable CFH0109
     internal bool IsAdmin;
+#pragma warning restore CFH0109
     public long Role { get; private set; }
     public long Level { get; internal set; }
     long _id;
@@ -34,6 +36,7 @@ public partial struct Rated
 public partial struct Search
 {
     public Utf8 Tag;
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("CodeFusion", "CFH0109", Justification = "the test checks the binder leaves it")]
     internal Utf8 Admin;
     [Range(typeof(long), "1", "50")] public long? Limit;
     static ErrorReply Invalid => BinderRuleTests.Bad;
@@ -55,6 +58,7 @@ public class BinderRuleTests
     {
         var builder = HttpApp.CreateBuilder([]);
         builder.Options.EndPoint = new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0);
+        TestTransport.Apply(builder.Options);
         HttpApp app = builder.Build();
         IEndpointRouteBuilder? maybe = app;
         app.MapPost("/signup", static (Signup s) => Reply.NoContent());

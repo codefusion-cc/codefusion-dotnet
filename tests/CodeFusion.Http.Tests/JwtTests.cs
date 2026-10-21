@@ -31,6 +31,59 @@ public sealed class JwtTests
         Assert.Throws<ArgumentNullException>(() => new Jwt(null!));
     }
 
+    // Some deployments are handed a shorter fixed secret (the Conduit contest's is 26 bytes): taken only when asked for.
+    [Theory]
+    [InlineData(1)]
+    [InlineData(26)]
+    [InlineData(31)]
+    public void AShortSecretIsTakenOnlyWhenAllowed(int bytes)
+    {
+        string secret = new('k', bytes);
+        Assert.Throws<ArgumentException>(() => new Jwt(secret));
+        Assert.Throws<ArgumentException>(() => new Jwt(secret, TimeSpan.FromHours(1), allowShortSecret: false));
+        Assert.Throws<ArgumentException>(() => HttpApp.CreateBuilder([]).AddJwtAuth(secret, TimeSpan.FromHours(1), allowShortSecret: false));
+        var jwt = new Jwt(secret, TimeSpan.FromHours(1), allowShortSecret: true);
+        Assert.Equal(42, jwt.Verify(Issue(jwt), Now * 1000));
+        HttpAppBuilder builder = HttpApp.CreateBuilder([]).AddJwtAuth(secret, TimeSpan.FromHours(1), allowShortSecret: true);
+        Assert.Equal(42, builder.JwtPrototype!.Verify(Issue(jwt), Now * 1000));
+    }
+
+    [Fact]
+    public void NoSecretIsTakenEmptyEvenWhenShortOnesAreAllowed()
+    {
+        Assert.Throws<ArgumentException>(() => new Jwt("", TimeSpan.FromHours(1), allowShortSecret: true));
+        Assert.Throws<ArgumentException>(() => HttpApp.CreateBuilder([]).AddJwtAuth("", TimeSpan.FromHours(1), allowShortSecret: true));
+        Assert.Throws<ArgumentNullException>(() => new Jwt(null!, TimeSpan.FromHours(1), allowShortSecret: true));
+    }
+
+    // RFC 2104 pads a key shorter than SHA-256's 64-byte block with zeros and hashes a longer one first: every length
+    // signs as .NET's own HMACSHA256 does with the same key, and a token verifies only under its own key.
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(26, true)]
+    [InlineData(31, true)]
+    [InlineData(32, false)]
+    [InlineData(63, false)]
+    [InlineData(64, false)]
+    [InlineData(65, false)]
+    [InlineData(200, false)]
+    public void EveryKeyLengthSignsAsTheStandardHmac(int bytes, bool shortSecret)
+    {
+        string secret = string.Create(bytes, 0, static (s, _) =>
+        {
+            for (int i = 0; i < s.Length; i++) s[i] = (char)('!' + i % 90);
+        });
+        var jwt = new Jwt(secret, TimeSpan.FromHours(1), allowShortSecret: shortSecret);
+        byte[] token = Issue(jwt);
+        int dot = Array.LastIndexOf(token, (byte)'.');
+        byte[] expected = System.Security.Cryptography.HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), token.AsSpan(0, dot));
+        Assert.Equal(System.Buffers.Text.Base64Url.EncodeToString(expected), Encoding.ASCII.GetString(token, dot + 1, token.Length - dot - 1));
+        Assert.Equal(42, jwt.Verify(token, Now * 1000));
+        // one byte more or less of the same key is another key
+        var other = new Jwt(secret[..^1] + "#", TimeSpan.FromHours(1), allowShortSecret: true);
+        Assert.Equal(0, other.Verify(token, Now * 1000));
+    }
+
     /// <summary>43 base64url characters carry the 32-byte MAC with 2 bits to spare in the last one: a token whose
     /// last character differs only there would be a second spelling of the same signature.</summary>
     [Fact]

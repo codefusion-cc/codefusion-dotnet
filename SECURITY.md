@@ -35,6 +35,15 @@ Fixes go into the latest release only.
   behind such a request is seen on Linux and macOS only), so a handler that passes the token on stops work nobody
   waits for, behind a proxy too. The cancel's callbacks never run on the heartbeat's thread, so a handler can't stall
   the timeouts above. After a close the answer is still sent if the handler finishes; after a reset it is dropped.
+- **Event loops** (`HttpTransport.EventLoop`, Linux and macOS). Connections share their loop's thread.
+  - A handler that blocks before its first await holds every connection on its loop until it returns.
+  - A client that keeps every read full gets 16 reads per wake-up, then waits until the loop has served the others.
+  - The cancel of `Aborted` runs on the thread pool, never on a loop.
+  - A stop waits at most a second more for a loop a handler holds. It returns after that and leaves the loop's thread
+    to end with the handler.
+  - On Linux each loop has its own listening socket (SO_REUSEPORT). Only a process of the same user can join that
+    port, but a second server of that user started on it by mistake shares its connections instead of failing to
+    bind.
 - **Memory.** A request's buffer starts at 4 KB and doubles as its bytes arrive, up to the whole request, so a
   connection holds at most about twice what it has sent, whatever its Content-Length declares. A response is built
   whole in memory and kept until the socket has taken it: a client reading at 240 B/s holds a 1 MB response for up to
@@ -46,7 +55,14 @@ Fixes go into the latest release only.
 - **Tokens** (`AddJwtAuth`, `Jwt`) are HS256 only, signed with a secret of at least 32 bytes, and carry only `sub`,
   `iat` and `exp`: no `iss`, `aud` or `jti`, so any app sharing the secret accepts them. Nothing revokes one before
   its `exp` except changing the secret, which ends every session. They live 30 days unless `AddJwtAuth(secret,
-  lifetime)` says otherwise. A signature has one spelling: base64url with nonzero spare bits is refused.
+  lifetime)` says otherwise. A signature has one spelling: base64url with nonzero spare bits is refused, and it is
+  compared in constant time.
+- **A short secret** is refused unless the app passes `allowShortSecret: true` (`AddJwtAuth(secret, lifetime, true)`
+  or the `Jwt` constructor), for a deployment handed a fixed one, such as the Conduit contest's 26 bytes. An empty
+  one is refused even then. The tokens are standard HMAC-SHA256 (a key shorter than the 64-byte block is padded with
+  zeros, RFC 2104), so they verify anywhere, but every token is an offline test of a guess: a secret short or
+  guessable enough to be found lets whoever finds it sign a token for any user, and no rate limit sees the guessing.
+  Use it only when the secret isn't yours to choose, and rotate it to 32 random bytes or more when it is.
 - **Buffers.** The server's own pooled request and response buffers are reused within the process without being
   wiped, for speed: a request's bytes (a token, a password) stay in memory until a later request overwrites them.
   Arrays that go back to `ArrayPool<byte>.Shared` (buffers grown past their pool's size, the arena's large chunks)

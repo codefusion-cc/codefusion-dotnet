@@ -255,6 +255,8 @@ public sealed partial class OpsDb
 
     public One<RawJson> NamesAsJson() => People.OrderBy(p => p.Name).Select(p => p.Name).AsJson();
 
+    public One<RawJson> NamesOverAgeAsJson(int age) => People.Where(p => p.Age > age).OrderBy(p => p.Name).Select(p => p.Name).AsJson();
+
     public One<int> AgeOf(long id) => People.Where(p => p.Id == id).Select(p => p.Age).One();
 
     public One<Utf8> NickOf(long id) => People.Where(p => p.Id == id).Select(p => p.Nick ?? p.Name).One();

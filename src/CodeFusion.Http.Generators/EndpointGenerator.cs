@@ -29,17 +29,36 @@ public sealed class EndpointGenerator : IIncrementalGenerator
                 static (ctx, ct) => Analysis.Endpoint(ctx.SemanticModel, (InvocationExpressionSyntax)ctx.Node, ct))
             .Where(static r => r is not null)!;
 
-        context.RegisterSourceOutput(results.Collect(), static (spc, all) => Emit(spc, all));
+        IncrementalValueProvider<ImmutableArray<EndpointResult>> all = results.Collect();
+        context.RegisterSourceOutput(all, static (spc, all) => Emit(spc, all));
+
+        // The diagnostics are reported at their place in the compilation's own trees, so a #pragma at the member
+        // reaches them (a location outside the trees can't be). Apart from the sources, so the compilation, which
+        // changes with every edit, doesn't make them written again.
+        IncrementalValueProvider<EquatableArray<DiagnosticInfo>> diagnostics = all.Select(static (all, _) =>
+        {
+            // once each: a struct's member is reported at the member by every Map call that binds the struct
+            var reported = new HashSet<DiagnosticInfo>();
+            var list = new List<DiagnosticInfo>();
+            foreach (EndpointResult r in all)
+                foreach (DiagnosticInfo d in r.Diagnostics)
+                    if (!Diagnostics.IsAnalyzerRule(d.Id) && reported.Add(d)) list.Add(d);
+            return list.ToEquatable();
+        });
+        context.RegisterSourceOutput(diagnostics.Combine(context.CompilationProvider), static (spc, pair) => Report(spc, pair.Left, pair.Right));
+    }
+
+    static void Report(SourceProductionContext spc, EquatableArray<DiagnosticInfo> diagnostics, Compilation compilation)
+    {
+        if (diagnostics.Count == 0) return;
+        var trees = new Dictionary<string, SyntaxTree>(System.StringComparer.Ordinal);
+        foreach (SyntaxTree tree in compilation.SyntaxTrees)
+            if (!trees.ContainsKey(tree.FilePath)) trees.Add(tree.FilePath, tree);
+        foreach (DiagnosticInfo d in diagnostics) spc.ReportDiagnostic(d.ToDiagnostic(trees));
     }
 
     static void Emit(SourceProductionContext spc, ImmutableArray<EndpointResult> results)
     {
-        // once each: a struct's member is reported at the member by every Map call that binds the struct
-        var reported = new HashSet<DiagnosticInfo>();
-        foreach (EndpointResult r in results)
-            foreach (DiagnosticInfo d in r.Diagnostics)
-                if (!Diagnostics.IsAnalyzerRule(d.Id) && reported.Add(d)) spc.ReportDiagnostic(d.ToDiagnostic());
-
         // in source order, so the output is the same from build to build
         List<EndpointModel> endpoints = results.Where(r => r.Model is not null).Select(r => r.Model!)
             .OrderBy(e => e.File, System.StringComparer.Ordinal).ThenBy(e => e.Position).ToList();

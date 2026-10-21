@@ -76,6 +76,23 @@ public sealed class HttpServerOptions
     /// reuse after their socket closes.</summary>
     public int MaxPooledConnections { get; set; } = 4096;
 
+    /// <summary>How connections wait for their requests: <see cref="HttpTransport.Sockets"/> (the default), or the
+    /// server's own event loops on Linux and macOS, which cost less per request.</summary>
+    public HttpTransport Transport { get; set; } = HttpTransport.Sockets;
+
+    /// <summary>How many threads <see cref="HttpTransport.EventLoop"/> runs, each with its share of the connections
+    /// and their handlers until they wait: one per core by default.</summary>
+    public int EventLoops { get; set; } = Environment.ProcessorCount;
+
+    /// <summary>Called on an event loop's thread with its index (0 to <see cref="EventLoops"/> - 1) once the loop has
+    /// handled every connection that one wake-up found ready, before it sends their answers: a database provider
+    /// commits the batch's writes here, and a handler waiting for that commit, completed here, answers in the same
+    /// batch. It runs on the loop's thread, which every connection on that loop shares: it must not block. What it
+    /// throws is counted, reported the first time, and the answers go out anyway. Only
+    /// <see cref="HttpTransport.EventLoop"/> calls it; an answer finished on another thread is sent at once. An app
+    /// registers its actions with <see cref="IServiceRegistry.OnEventLoopBatch"/>, which run after this one.</summary>
+    public Action<int>? OnEventLoopBatch { get; set; }
+
     /// <summary>How often the Date header is refreshed, timeouts are checked, and a reset is looked for that only the
     /// socket's error shows (<see cref="HttpExchange.Aborted"/>).</summary>
     public TimeSpan HeartbeatInterval { get; set; } = TimeSpan.FromSeconds(1);
@@ -107,8 +124,10 @@ public sealed class HttpServerOptions
         if (Backlog < 1 || MaxRequestLineSize < 16 || MaxRequestHeadersTotalSize < 2 || MaxRequestHeaderCount < 0
             || MaxRequestBodySize < 0 || RequestBufferSize < 256 || ResponseBufferSize < 1024 || MaxPooledBuffers < 0
             || MaxPooledConnections < 0 || KeepAliveTimeout <= TimeSpan.Zero || RequestTimeout <= TimeSpan.Zero
-            || HeartbeatInterval <= TimeSpan.Zero || MaxConnections < 1)
+            || HeartbeatInterval <= TimeSpan.Zero || MaxConnections < 1 || !Enum.IsDefined(Transport) || EventLoops < 1)
             throw new ArgumentException("an HttpServerOptions value is out of range");
+        if (Transport == HttpTransport.EventLoop && !EventLoop.Supported)
+            throw new PlatformNotSupportedException("HttpTransport.EventLoop runs on Linux and macOS");
     }
 }
 
