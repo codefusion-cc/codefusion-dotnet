@@ -1,0 +1,129 @@
+using System;
+using Xunit;
+
+namespace CodeFusion.Data.Sqlite.Tests;
+
+/// <summary>
+/// The SQLite build the provider loads is checked once, before the first connection: a build too old, single-threaded
+/// or without what the generated SQL uses is refused with why. The package's own build passes, and its memory
+/// statistics are off (on Apple's arm64 through the variadic call that needs its own ABI).
+/// </summary>
+public sealed class BuildCheckTests
+{
+    const int Current = 3_050_004;
+    const string Tested = SqliteConn.TestedSourceId;
+
+    /// <summary>The library is judged by what it says it is, wherever it was loaded from (a portable app's runtimes/
+    /// folder, or the app's own directory, where a RID-specific, self-contained or AOT publish puts it): the build tested
+    /// passes, any other is refused unless the app says it ships its own.</summary>
+    [Fact]
+    public void AnotherBuildIsRefusedUnlessTheAppSaysItShipsItsOwn()
+    {
+        string? why = SqliteConn.Unfit(Current, "2025-07-30 19:33:53 00000000", otherBuildAllowed: false, 2, _ => false);
+        Assert.NotNull(why);
+        Assert.Contains("2025-07-30 19:33:53 00000000", why, StringComparison.Ordinal);
+        Assert.Contains(SqliteConn.OtherBuildSwitch, why, StringComparison.Ordinal);
+        Assert.NotNull(SqliteConn.Unfit(3_050_005, Tested, otherBuildAllowed: false, 2, _ => false));
+        Assert.Null(SqliteConn.Unfit(Current, Tested, otherBuildAllowed: false, 2, _ => false));
+    }
+
+    /// <summary>The check the first open makes, with the library's source id given: the AppContext switch, not where
+    /// the library was loaded from, decides whether another build may run.</summary>
+    [Fact]
+    public void TheSwitchAloneLetsAnotherBuildIn()
+    {
+        try
+        {
+            AppContext.SetSwitch(SqliteConn.OtherBuildSwitch, false);
+            string? refused = SqliteConn.CheckLoaded("2026-01-01 00:00:00 another");
+            Assert.NotNull(refused);
+            Assert.Contains("pin", refused, StringComparison.Ordinal);
+            Assert.Null(SqliteConn.CheckLoaded(Tested));
+            AppContext.SetSwitch(SqliteConn.OtherBuildSwitch, true);
+            Assert.Null(SqliteConn.CheckLoaded("2026-01-01 00:00:00 another"));
+        }
+        finally
+        {
+            AppContext.SetSwitch(SqliteConn.OtherBuildSwitch, false);
+        }
+    }
+
+    [Fact]
+    public void AnAppsOwnBuildMayBeAnotherOne() =>
+        Assert.Null(SqliteConn.Unfit(3_054_001, "2026-01-01 00:00:00 any", otherBuildAllowed: true, 2, _ => false));
+
+    [Fact]
+    public void TheBuildTestedPassesWithOrWithoutTheSwitch()
+    {
+        Assert.Null(SqliteConn.Unfit(Current, Tested, otherBuildAllowed: true, 2, _ => false));
+        Assert.Null(SqliteConn.Unfit(Current, Tested, otherBuildAllowed: false, 2, _ => false));
+    }
+
+    [Fact]
+    public void ABuildThatCantSayItsOptionsIsRefused()
+    {
+        string? why = SqliteConn.Unfit(Current, Tested, otherBuildAllowed: true, 2, used: null);
+        Assert.NotNull(why);
+        Assert.Contains("SQLITE_OMIT_COMPILEOPTION_DIAGS", why, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ASingleThreadedBuildIsRefused()
+    {
+        string? why = SqliteConn.Unfit(Current, Tested, otherBuildAllowed: true, 0, _ => false);
+        Assert.NotNull(why);
+        Assert.Contains("SQLITE_THREADSAFE=0", why, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void AThreadSafeBuildOfEitherModePasses(int mode) => Assert.Null(SqliteConn.Unfit(Current, Tested, otherBuildAllowed: true, mode, _ => false));
+
+    [Theory]
+    [InlineData("OMIT_JSON")]
+    [InlineData("OMIT_CTE")]
+    [InlineData("OMIT_UPSERT")]
+    [InlineData("OMIT_WAL")]
+    [InlineData("OMIT_SUBQUERY")]
+    public void ABuildWithoutWhatTheSqlUsesIsRefused(string omitted)
+    {
+        string? why = SqliteConn.Unfit(Current, Tested, otherBuildAllowed: true, 2, o => o == omitted);
+        Assert.NotNull(why);
+        Assert.Contains("SQLITE_" + omitted, why, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OtherOptionsDontMatter() => Assert.Null(SqliteConn.Unfit(Current, Tested, otherBuildAllowed: true, 2, o => o is "OMIT_DEPRECATED" or "OMIT_LOAD_EXTENSION"));
+
+    [Theory]
+    [InlineData(Sqlite3.MinVersion - 1, false)]
+    [InlineData(Sqlite3.MinVersion, true)]
+    public void TheOldestVersionIsTheOneThatOrdersInsideAggregates(int version, bool fit) =>
+        Assert.Equal(fit, SqliteConn.Unfit(version, Tested, otherBuildAllowed: true, 2, _ => false) is null);
+
+    [Fact]
+    public void ThePackagesBuildIsFit()
+    {
+        SqliteConn.InitializeOnce();
+        Assert.InRange(Sqlite3.ThreadSafe(), 1, 2);
+        var used = Sqlite3.CompileOptions();
+        Assert.NotNull(used);
+        Assert.False(used("OMIT_JSON"));
+        Assert.True(used("THREADSAFE=" + Sqlite3.ThreadSafe()));
+        Assert.Equal(SqliteConn.TestedSourceId, Sqlite3.SourceId());
+        Assert.Null(SqliteConn.Unfit(Sqlite3.LibVersionNumber(), Sqlite3.SourceId(), otherBuildAllowed: false, Sqlite3.ThreadSafe(), Sqlite3.CompileOptions()));
+    }
+
+    [Fact]
+    public async System.Threading.Tasks.Task MemoryStatisticsAreOff()
+    {
+        using var db = new TempDb();
+        var s = db.Open(new SqliteDatabase(db.File()) { Readers = 1, Migrations = ["CREATE TABLE kv (k TEXT PRIMARY KEY, v INTEGER NOT NULL) WITHOUT ROWID"] });
+        Assert.True((await Kv.Write(s, "a", 1)).IsOk);
+        Assert.Equal(1, Kv.Read(s, "a").Rows);
+        Assert.True(SqliteConn.MemoryStatusOff);
+        // statistics on would count what the connections hold; off, SQLite counts nothing
+        Assert.Equal(0, Sqlite3.MemoryUsed());
+    }
+}

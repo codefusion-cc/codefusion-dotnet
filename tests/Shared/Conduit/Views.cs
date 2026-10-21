@@ -66,5 +66,7 @@ public static class Slugs
 {
     /// <summary>The title as a slug, then "-" and the article's id: unique, as the id is.</summary>
     [SqlTemplate("trim(both '-' from lower(regexp_replace({0}, '[^A-Za-z0-9]+', '-', 'g'))) || '-' || {1}")]
+    // SQLite has no regexp_replace: spaces become dashes, which the tests' titles need
+    [SqlTemplate("lower(replace(trim({0}), ' ', '-')) || '-' || {1}", Dialect = "sqlite")]
     public static Utf8 WithId(Utf8 title, long id) => throw new NotSupportedException();
 }

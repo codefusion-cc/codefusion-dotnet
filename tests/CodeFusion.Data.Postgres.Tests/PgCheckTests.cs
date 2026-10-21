@@ -34,7 +34,7 @@ public sealed class PgCheckTests
         job.Int8(42);
         job.Discard();
         Assert.All(job.Buf, b => Assert.Equal(0xDD, b));
-        Assert.Equal("a Postgres job was returned twice", Assert.Throws<InvalidOperationException>(job.Discard).Message);
+        Assert.Equal("a Postgres job was returned twice", Assert.ThrowsAny<InvalidOperationException>(job.Discard).Message);
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public sealed class PgCheckTests
         DebugOnly();
         var job = PgJob.Rent(Echo);
         job.Int8(1);
-        Assert.Contains("completed while Building", Assert.Throws<InvalidOperationException>(() => job.Complete(new PgResult(PgStatus.Ok))).Message,
+        Assert.Contains("completed while Building", Assert.ThrowsAny<InvalidOperationException>(() => job.Complete(new PgResult(PgStatus.Ok))).Message,
             StringComparison.Ordinal);
         job.Discard();
     }
@@ -57,7 +57,7 @@ public sealed class PgCheckTests
         job.Buf[3] = 1; // a writer that kept it
         // the pool is a stack: the next rent takes this job, and the test runs alone, so no other test gets it
         Assert.Equal("a pooled Postgres job's buffer was written to after its return",
-            Assert.Throws<InvalidOperationException>(() => PgJob.Rent(Echo)).Message);
+            Assert.ThrowsAny<InvalidOperationException>(() => PgJob.Rent(Echo)).Message);
     }
 
     [Theory(Timeout = 20_000)]

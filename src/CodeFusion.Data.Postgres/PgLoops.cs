@@ -82,7 +82,10 @@ public abstract class PgLoops
 
     /// <summary>Debug builds count the jobs rented for these loops and not yet back in the pool (Release ones
     /// don't): 0 once every command's task was read. For tests.</summary>
-    internal int JobsOut;
+    internal readonly JobCounter Jobs = new();
+
+    /// <summary><see cref="Jobs"/>' count, read now.</summary>
+    internal int JobsOut => Volatile.Read(ref Jobs.Out);
 
     /// <summary>The loops asleep, waiting for commands: a connection is then idle, and the next group checks it first.
     /// For tests.</summary>
@@ -237,7 +240,7 @@ public abstract class PgLoops
             return Queueing.Canceled;
         }
         job.Submitted = true;
-        job.To(PgJob.Life.Queued);
+        job.To(JobStep.Queued);
         job.Handler = handler;
         job.State = state;
         job.Aborted = aborted;

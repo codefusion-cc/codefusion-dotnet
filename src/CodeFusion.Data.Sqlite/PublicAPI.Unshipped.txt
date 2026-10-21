@@ -1,0 +1,102 @@
+#nullable enable
+CodeFusion.Data.Sqlite.Sqlite
+CodeFusion.Data.Sqlite.Sqlite.Sqlite() -> void
+CodeFusion.Data.Sqlite.SqliteCommand
+CodeFusion.Data.Sqlite.SqliteCommand.BeginTextArray() -> void
+CodeFusion.Data.Sqlite.SqliteCommand.Boolean(bool value) -> void
+CodeFusion.Data.Sqlite.SqliteCommand.Discard() -> void
+CodeFusion.Data.Sqlite.SqliteCommand.Double(double value) -> void
+CodeFusion.Data.Sqlite.SqliteCommand.Element(System.ReadOnlySpan<byte> utf8) -> void
+CodeFusion.Data.Sqlite.SqliteCommand.EndTextArray() -> void
+CodeFusion.Data.Sqlite.SqliteCommand.Hold() -> CodeFusion.Data.PendingCommand
+CodeFusion.Data.Sqlite.SqliteCommand.Int32(int value) -> void
+CodeFusion.Data.Sqlite.SqliteCommand.Int64(long value) -> void
+CodeFusion.Data.Sqlite.SqliteCommand.Null() -> void
+CodeFusion.Data.Sqlite.SqliteCommand.SqliteCommand() -> void
+CodeFusion.Data.Sqlite.SqliteCommand.Text(System.ReadOnlySpan<byte> utf8) -> void
+CodeFusion.Data.Sqlite.SqliteCommand.Text(System.ReadOnlySpan<char> text) -> void
+CodeFusion.Data.Sqlite.SqliteCommand.Then(CodeFusion.Data.Sqlite.SqliteStatement! statement) -> void
+CodeFusion.Data.Sqlite.SqliteCommand.Timestamp(CodeFusion.Timestamp value) -> void
+CodeFusion.Data.Sqlite.SqliteDataSource
+CodeFusion.Data.Sqlite.SqliteDataSource.Dispose() -> void
+CodeFusion.Data.Sqlite.SqliteDataSource.EndEventLoopBatch(int loop) -> void
+CodeFusion.Data.Sqlite.SqliteDataSource.Interrupted.get -> long
+CodeFusion.Data.Sqlite.SqliteDataSource.Read(CodeFusion.Data.Sqlite.SqliteStatement! statement) -> CodeFusion.Data.Sqlite.SqliteCommand
+CodeFusion.Data.Sqlite.SqliteDataSource.Write(CodeFusion.Data.Sqlite.SqliteStatement! statement) -> CodeFusion.Data.Sqlite.SqliteCommand
+CodeFusion.Data.Sqlite.SqliteDataSource.Writer.get -> CodeFusion.Data.Sqlite.SqliteWriter!
+CodeFusion.Data.Sqlite.SqliteDatabase
+CodeFusion.Data.Sqlite.SqliteDatabase.BusyTimeout.get -> System.TimeSpan
+CodeFusion.Data.Sqlite.SqliteDatabase.BusyTimeout.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.CacheKiB.get -> int
+CodeFusion.Data.Sqlite.SqliteDatabase.CacheKiB.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.CheckpointFrames.get -> int
+CodeFusion.Data.Sqlite.SqliteDatabase.CheckpointFrames.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.CompleteOnWriterThread.get -> bool
+CodeFusion.Data.Sqlite.SqliteDatabase.CompleteOnWriterThread.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.Exclusive.get -> bool
+CodeFusion.Data.Sqlite.SqliteDatabase.Exclusive.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.EventLoopBatches.get -> bool
+CodeFusion.Data.Sqlite.SqliteDatabase.EventLoopBatches.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.Errors.get -> CodeFusion.Data.DataErrors!
+CodeFusion.Data.Sqlite.SqliteDatabase.Errors.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.ForeignKeys.get -> bool
+CodeFusion.Data.Sqlite.SqliteDatabase.ForeignKeys.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.LeaderCommit.get -> bool
+CodeFusion.Data.Sqlite.SqliteDatabase.LeaderCommit.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.MaxGroup.get -> int
+CodeFusion.Data.Sqlite.SqliteDatabase.MaxGroup.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.MaxQueued.get -> int
+CodeFusion.Data.Sqlite.SqliteDatabase.MaxQueued.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.Migrations.get -> System.Collections.Generic.IReadOnlyList<string!>!
+CodeFusion.Data.Sqlite.SqliteDatabase.Migrations.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.MmapSize.get -> long
+CodeFusion.Data.Sqlite.SqliteDatabase.MmapSize.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.OnFailure.get -> System.Action<string!, CodeFusion.Data.DataResult>?
+CodeFusion.Data.Sqlite.SqliteDatabase.OnFailure.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.OpenSource() -> CodeFusion.Data.Sqlite.SqliteDataSource!
+CodeFusion.Data.Sqlite.SqliteDatabase.Path.get -> string!
+CodeFusion.Data.Sqlite.SqliteDatabase.Readers.get -> int
+CodeFusion.Data.Sqlite.SqliteDatabase.Readers.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.SqliteDatabase(string! path) -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.StatementTimeout.get -> System.TimeSpan
+CodeFusion.Data.Sqlite.SqliteDatabase.StatementTimeout.init -> void
+CodeFusion.Data.Sqlite.SqliteDatabase.Synchronous.get -> CodeFusion.Data.Sqlite.SqliteSync
+CodeFusion.Data.Sqlite.SqliteDatabase.Synchronous.init -> void
+CodeFusion.Data.Sqlite.SqliteException
+CodeFusion.Data.Sqlite.SqliteException.Code.get -> int
+CodeFusion.Data.Sqlite.SqliteException.Name.get -> string!
+CodeFusion.Data.Sqlite.SqliteException.Primary.get -> int
+CodeFusion.Data.Sqlite.SqliteException.SqliteException() -> void
+CodeFusion.Data.Sqlite.SqliteException.SqliteException(string! message) -> void
+CodeFusion.Data.Sqlite.SqliteException.SqliteException(string! message, System.Exception! inner) -> void
+CodeFusion.Data.Sqlite.SqliteException.SqliteException(string! message, int code) -> void
+CodeFusion.Data.Sqlite.SqliteServices
+CodeFusion.Data.Sqlite.SqliteStatement
+CodeFusion.Data.Sqlite.SqliteStatement.ParamCount.get -> int
+CodeFusion.Data.Sqlite.SqliteStatement.Sql.get -> string!
+CodeFusion.Data.Sqlite.SqliteStatement.SqliteStatement(string! sql, params System.ReadOnlySpan<CodeFusion.Data.DataType> types) -> void
+CodeFusion.Data.Sqlite.SqliteSync
+CodeFusion.Data.Sqlite.SqliteSync.Full = 2 -> CodeFusion.Data.Sqlite.SqliteSync
+CodeFusion.Data.Sqlite.SqliteSync.Normal = 1 -> CodeFusion.Data.Sqlite.SqliteSync
+CodeFusion.Data.Sqlite.SqliteWriter
+CodeFusion.Data.Sqlite.SqliteWriter.Counters.get -> CodeFusion.Data.Sqlite.SqliteWriterCounters!
+CodeFusion.Data.Sqlite.SqliteWriter.Queued.get -> int
+CodeFusion.Data.Sqlite.SqliteWriterCounters
+CodeFusion.Data.Sqlite.SqliteWriterCounters.Checkpoints -> long
+CodeFusion.Data.Sqlite.SqliteWriterCounters.Commits -> long
+CodeFusion.Data.Sqlite.SqliteWriterCounters.FailedAlone -> long
+CodeFusion.Data.Sqlite.SqliteWriterCounters.FailedGroups -> long
+CodeFusion.Data.Sqlite.SqliteWriterCounters.FirstUnexpected -> System.Exception?
+CodeFusion.Data.Sqlite.SqliteWriterCounters.Reruns -> long
+CodeFusion.Data.Sqlite.SqliteWriterCounters.SqliteWriterCounters() -> void
+CodeFusion.Data.Sqlite.SqliteWriterCounters.Unexpected -> long
+CodeFusion.Data.Sqlite.SqliteWriterCounters.Writes -> long
+override CodeFusion.Data.Sqlite.SqliteDataSource.Stop() -> void
+override CodeFusion.Data.Sqlite.SqliteStatement.ToString() -> string!
+static CodeFusion.Data.Sqlite.Sqlite.Discard(in CodeFusion.Data.PendingCommand command) -> void
+static CodeFusion.Data.Sqlite.Sqlite.Open(string! path) -> CodeFusion.Data.Sqlite.SqliteDatabase!
+static CodeFusion.Data.Sqlite.Sqlite.Read(CodeFusion.Data.DataContext! context, CodeFusion.Data.Sqlite.SqliteStatement! statement) -> CodeFusion.Data.Sqlite.SqliteCommand
+static CodeFusion.Data.Sqlite.Sqlite.Run<TReader>(in CodeFusion.Data.PendingCommand command, object? state, System.Threading.CancellationToken aborted) -> System.Threading.Tasks.ValueTask<CodeFusion.Data.DataResult>
+static CodeFusion.Data.Sqlite.Sqlite.Statement(string! sql, params System.ReadOnlySpan<CodeFusion.Data.DataType> parameters) -> CodeFusion.Data.Sqlite.SqliteStatement!
+static CodeFusion.Data.Sqlite.Sqlite.Write(CodeFusion.Data.DataContext! context, CodeFusion.Data.Sqlite.SqliteStatement! statement) -> CodeFusion.Data.Sqlite.SqliteCommand
+static CodeFusion.Data.Sqlite.SqliteServices.AddDatabase<TContext>(this CodeFusion.IServiceRegistry! services, CodeFusion.Data.Sqlite.SqliteDatabase! database) -> CodeFusion.Data.Sqlite.SqliteDataSource!

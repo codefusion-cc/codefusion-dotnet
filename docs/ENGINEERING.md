@@ -963,6 +963,223 @@ ran first in every Postgres tried, so no test tells them apart. Also not
 red on demand: CHECK and NOT NULL blame, two faulty writes, the FOR UPDATE lock and the missing key. Their tests
 pass on both the old fallback and the new one; each fails when the fallback blames the run's first write.
 
+## The SQLite provider (tests/CodeFusion.Data.Sqlite.Tests)
+
+232 tests, nothing to set up. 47 are CodeFusion.Data.Tests' execution tests and 1 its allocation test, linked unchanged:
+the same Conduit queries, seed and expected replies as on Postgres. 51 are the operator tests ported: each query's SQL
+in SQLite's dialect, checked as text, and the same results on the same seed. 5 are the conditional-write tests both
+providers run (`tests/Shared/Ops/ConditionalWriteTests.cs`). The rest are the provider's own: group commit (9), reads
+and snapshots (8), migrations (4), the one-connection `Exclusive` mode (10), one transaction per event-loop wake-up (14,
+12 on which reads join a batch and how SQLite reports a statement's tables, and 1 under HttpServer's real event loop),
+durability when SQLite rolls back, a statement can't be prepared, a COMMIT fails or the source stops (14), the SQLite
+build loaded and where from (17 and 4), its keywords (1), the CodeFusion versions loaded (5), allocations and spinning
+(7, in a collection that runs alone), races and faults only Debug hooks make certain (5, alone too), and crash recovery
+(14: a child process killed mid-group and after a commit, and a batching event loop killed 0, 1, 3 or 10 ms into a
+wake-up or at its first answer, each with `synchronous` NORMAL and FULL). Every test that stops a source checks that the
+writer caught nothing unexpected and, in Debug builds, that every job it rented is back in the pool (`SqliteChecks`).
+
+The schema and LINQ queries both providers run live in `tests/Shared/Conduit` and `tests/Shared/Ops`; each provider's
+part of a context (`ConduitDb.Sqlite.cs`, `OpsDb.Sqlite.cs`) names the provider and holds the queries written in its
+SQL.
+
+### Proven red (each broken on purpose in this worktree, seen failing, restored from git)
+
+| Broken | Caught by |
+|---|---|
+| the writer doesn't sweep idle readers' snapshots | `IdleReadersDontKeepTheWalFromBeingCheckpointed` (the WAL grows past 2 MiB) |
+| the commit clock doesn't move after a commit | `AReadAfterItsWriteSeesIt`, `AReadNeverSeesHalfOfAUnit` |
+| a reader never starts a new snapshot | the same two |
+| a unit's failed statement isn't rolled back to its savepoint | `AUnitWhoseSecondStatementFailsIsUndoneWhole` |
+| a group SQLite rolled back isn't run again | `ATransactionSqliteRollsBackRunsAgainWithoutTheWriteThatFailed` |
+| a cancelled write runs anyway | `ACancelledWriteIsCanceledAndWritesNothing` |
+| a held command can be claimed twice | `AHeldCommandRunsOnceAndAStaleCopyIsRefused` |
+| the watchdog never interrupts a read | `AReadPastTheTimeoutIsInterruptedAndTheConnectionReadsOnAfter` (its 20 s timeout) |
+| migrations ignore `user_version` | all 4 `MigrationTests` |
+| a child row of `SelectMany` joins without LEFT | `CommentsNewestFirstAndAnEmptyListAndAMissingArticle` (shared) |
+| `IS` written as `=` for nullable equality | `EqualityOfTwoNullablesHoldsForTwoNulls` |
+| a key read from `sqlite_sequence` by the quoted table name | `AnInsertedKeyOfATableNeedingQuotes` |
+| Exclusive: the writer runs a group without taking the connection from the reads | `AReadSeesEveryWriteThatCompletedBeforeItAndNoUnitHalfDone` and the watchdog test, then the run died |
+| Exclusive: the writer gives the connection back after completing the group | the run hung, with no summary |
+| Exclusive: the writer doesn't end the reads' transaction before its BEGIN | 5 of the 7 `ExclusiveTests` |
+| Exclusive: the writer waits while any read waits | both `ReadsAndWritesThatNeverStopTakeTurns` tests (hung till their 60 s timeout) |
+| Exclusive: reads stop only once the writer says so, not once one has gone after it came | both turn tests in Debug under the full suite on cf-bench, at 4 CPUs and at 1: 3 to 7 reads started while one write waited, where 2 may (4 of 4 runs) |
+| Exclusive: waiters spin and never park, without that rule (as at 6384f10, which parked only for a loop's batch) | the same two (4 to 10 reads, 4 of 4 runs), and `NothingSpinsWhileALoopsBatchHoldsTheConnection` |
+| Exclusive: two takers at once (the writer's group and a loop's batch) raise and clear one set of marks, with no turnstile | `TwoTakersWaitingAtOnceEachKeepTheirTurn` (2 to 29 reads where 1 may, 6 of 6 runs) and `TheWriterAndALoopsBatchWaitingBesideReadsEachKeepTheirTurn` (3 to 14 reads started where 1 may, 6 of 6), Debug; both count from once the taker's marks are visible (`SqliteReaders.MarksRaised`), so a taker preempted before raising them can't make legal reads count |
+| Exclusive: takers served in whatever order wins a CAS, not by ticket | `TwoTakersWaitingAtOnceEachKeepTheirTurn` (9 to 12 reads, 3 of 3 runs) |
+| Exclusive: the next taker raises its own marks once woken, not as the one before hands over | `TwoTakersWaitingAtOnceEachKeepTheirTurn` (6 reads, 1 of 3 runs) |
+| Exclusive: a read keeps the last group's time for `cf_now()` | `NowInAReadIsTheTimeOfTheRead` |
+| Exclusive: Stop closes the writer before the reads stop | the run hung or crashed, with no summary |
+| a cancelled write completed inside the transaction | `AContinuationOnTheWritersThreadReadsAndWrites` (with `CompleteOnWriterThread`, its continuation read on the held connection) |
+| Batches: a write completed before the batch's COMMIT | `AWakeUpsWritesCommitTogetherAndCompleteOnlyAfterTheCommit` |
+| Batches: a failed write not rolled back to its savepoint | `AFailingWriteFailsAloneAndAUnitIsUndoneWhole` |
+| Batches: the end commits one batch, not those its completions open | `AWriteMadeByACompletionIsCommittedBeforeTheBatchEnds` |
+| Batches: the batch doesn't take the connection from other threads | `AnotherThreadsReadWaitsForTheBatchAndThenSeesAllOfIt`, `AWriteOffTheLoopGoesToTheWriterAndWaitsForTheBatch` |
+| Batches: a read on the loop waits for the connection its own batch holds | `AReadOnTheLoopSeesItsBatchsWritesAndAnswersAfterTheirCommit` (its 30 s timeout) |
+| Batches: AddDatabase doesn't register the batch's end | `AddDatabaseHandsTheServerTheBatchsEnd` |
+| Batches: allowed without Exclusive | `BatchesNeedExclusiveMode` |
+| Batches: a write answered before the COMMIT | `AKilledEventLoopLosesNoAnsweredWriteAndLeavesNoWakeUpHalfDone` (an answered write missing after the kill, 6 of 6 cases) |
+| Batches: each write committed on its own, not the wake-up together | the same test (a wake-up half there, 3 to 6 of 6 cases) |
+
+The writer-thread crash tests can't be made red by breaking the provider: what they check (nothing of an open group
+survives, every completed write does) is SQLite's WAL recovery, which a kill can't get past. They check that the
+provider keeps to it: a write completes only after its COMMIT, and the file opens again. The event-loop one can: its
+child answers each write the moment it completes, so an answer before the COMMIT, or a wake-up committed in pieces,
+shows after the kill.
+
+### Review fixes (SQLite, review of bdfb8e9)
+
+An Opus review found 15 problems: 3 high, 5 medium, 7 low. Each fix's test was written first and seen failing, or the
+finding was refuted by breaking the code that already handled it.
+
+| # | Finding | Fix | Tests |
+|---|---|---|---|
+| 1 | A rollback SQLite does outside a write went unnoticed in a batch, and its writes were answered Ok | After any error the transaction's real state is read (`sqlite3_get_autocommit`); a read on the loop runs in the batch and completes with it (second review, 2) | `AReadOnTheLoopThatRollsBackLosesNoAnsweredWrite` |
+| 2 | A second rollback in `Rerun` left rerun writes Ok and the batch in autocommit | One `Run(attempts)` for groups and batches; RELEASE and COMMIT always checked | `AGroupRolledBackTwiceAnswersNoneOfItsWritesOk`, `ABatchRolledBackTwiceAnswersNoneOfItsWritesOkAndGoesOn` |
+| 3 | An exception inside a transaction left it open | Rolled back in a `finally`; a statement that can't be prepared fails alone | `AStatementThatCantBePreparedFailsAloneAndTheWriterGoesOn`, `AUnitThatCantBePreparedLeavesNothing…` (2), `AReadThatCantBePreparedFailsAndGivesItsCommandBack` |
+| 4 | SQL of several statements had no savepoint on the writer thread | A savepoint per write in every mode | `SqlOfSeveralStatementsIsUndoneWholeWhenOneFails` |
+| 5 | SQLite's own keywords weren't quoted | The dialect's `Keywords`, checked against `sqlite3_keyword_name` | `TheDialectQuotesEveryKeywordOfTheLibrary`, `AColumnNamedAfterAKeywordIsQuotedAndItsQueryRuns` |
+| 6 | A batch opened after its source's end ran waited for the next wake-up, and the waiters spun | A batch asks its loop for another round (`EventLoopThread.RequestBatchEnd`); waiters park while a batch holds the connection | `AWriteMadeAfterItsSourcesEndRanEndsInTheSameWakeUp`, `NothingSpinsWhileALoopsBatchHoldsTheConnection` |
+| 7 | Reads in a batch saw uncommitted writes and were answered even when the COMMIT failed | First, a read on the loop committed the batch before it ran; that cost a COMMIT per read after a write (second review, 2). Now a read the batch's writes could affect runs in the batch's transaction and completes with it, after the one COMMIT or failed with it | `AReadOfAWakeUpWhoseCommitFailsFailsWithIt`, `AWakeUpOfReadsAndWritesCommitsOnce`, `AReadOnTheLoopSeesItsBatchsWritesAndAnswersAfterTheirCommit` |
+| 8 | Stop could close the connection under a batch, or hang | Stop waits 2 s for a batch, then the batch's end closes it; with writes queued it still hung (second review, 3) | `StopEndsInTimeWhileALoopHoldsABatch`, `StopDuringBatchesEndsCleanlyAndAnswersEveryWrite` |
+| 9 | A negative Take or Skip meant no limit | Refuted: the generated binder clamps it at 0 | `ANegativeTakeOrSkipIsNoneOrAll` red without the clamp |
+| 10 | Conditional writes gave a written row back twice when the SET broke the condition | The refused rows are read before the write; the reader takes the first written row | 5 shared `ConditionalWriteTests` on both providers, `AConditionalWritesStatementsGiveEachRowFoundOnce` |
+| 11 | The crash test left the wake-up in flight unchecked | The child waits for the parent's word after READY and stops at its first answer; every wake-up that opened is checked | `AKilledEventLoopLosesNoAnsweredWriteAndLeavesNoWakeUpHalfDone` (10 cases) |
+| 12 | The native library's origin and build weren't checked | Its version is pinned exactly and its package file's SHA-512 checked at build (a lock file first; second review, 5: it broke on an SDK patch); at first use the package's library must be the build tested, and any library must have what's used | `BuildCheckTests` (16) |
+| 13 | Refused writes allocated an exception each | A unique violation, busy or a timeout carries no exception; README and SECURITY.md say what the claim covers | `UniqueViolationsAllocateNothingOnceWarm` |
+| 14 | The job pool and life cycle were copied from Postgres | `JobLife` and `JobPool<T>` in CodeFusion.Data, held by both providers' jobs | `JobLifeTests` (11), the Postgres suite and its allocation tests |
+| 15 | The watchdog could interrupt the statement after the slow one | It interrupts only if the statement it timed still runs | `AFailedStatementLeavesNothingForTheWatchdogToInterrupt` |
+
+Proven red for this round (broken on purpose, seen failing, restored):
+
+| Broken | Caught by |
+|---|---|
+| the fixes for 1 to 4, 7, 8 and 15 not there yet (584b71f's parent) | 9 of the 13 `DurabilityTests` |
+| the refused SELECT after the write | `AConditionalWritesStatementsGiveEachRowFoundOnce` |
+| the reader takes the first row, written or refused | `TheReplyIsTheWrittenRowWithTheSmallestKey`, `ARowItsOwnSetMakesFailTheConditionIsWrittenNotRefused` (SQLite) |
+| a batch's jobs completed before its COMMIT | the crash test's -1 and 10 ms cases, 5 runs of 5, NORMAL and FULL |
+| no `sqlite3_threadsafe` check; `OMIT_JSON` not checked | `ASingleThreadedBuildIsRefused`; `ABuildWithoutWhatTheSqlUsesIsRefused(OMIT_JSON)` |
+| memory statistics turned on, the Apple arm64 value passed in a register, the result ignored | `MemoryStatisticsAreOff` (each) |
+| a wrong pinned SHA-512 for the native package | the build: `CheckSqliteNativePackage` names both hashes |
+| a unique violation builds a `SqliteException` | `UniqueViolationsAllocateNothingOnceWarm` (720 KB more for 2,000 more refused writes) |
+| a hold stored without the + 1; a returned job's hold kept; an unheld job queued where a hold is needed | `JobLifeTests` (4, 1 and 1 tests) |
+| no `RequestBatchEnd` | `AWriteMadeAfterItsSourcesEndRanEndsInTheSameWakeUp` |
+| waiters spin while a batch holds the connection; `Exit` doesn't wake them | `NothingSpinsWhileALoopsBatchHoldsTheConnection` (1,039 ms of CPU in 500 ms; woken by the 1 s fallback) |
+| no clamp on Take | `ANegativeTakeOrSkipIsNoneOrAll` |
+
+Not provable by a test: a parked waiter that misses its wake-up (the check under the monitor) only waits for its 1 s
+fallback, and the race is too narrow to hit on purpose. A real `SQLITE_THREADSAFE=0` build wasn't made; the check is
+tested with the values such a build reports.
+
+### Second review fixes (SQLite, review of 13890fe)
+
+The second review found 8 more: 1 high, 3 medium, 4 low. Fixes 1 to 4 of the first round held on the paths it
+checked; the third review found one they missed (third review, 1).
+
+| # | Finding | Fix | Tests |
+|---|---|---|---|
+| 1 | A loop completed its finished batch from the list the next batch, any loop's, writes into: writes lost, another loop's answered before their COMMIT | The batch's jobs are copied to the loop thread's own list before the connection goes. The writer thread's group list was checked: its busy flag keeps the next group out until its completions ran | `ABatchsCompletionsStayItsOwnWhileAnotherLoopBatches` |
+| 2 | Finding 7's early commit made a COMMIT per read after a write | A read on the loop of a table the batch wrote and hasn't committed runs in its transaction, keeps its rows, and completes after the one COMMIT or fails with it; a read of tables the batch hasn't written answers at once (the tables as SQLite reports them while preparing: triggers, foreign-key actions, views, raw SQL). A handler that reads then writes costs one more COMMIT a wake-up, not one per request | `AWakeUpOfReadsAndWritesCommitsOnce`, `AReadOfAWakeUpWhoseCommitFailsFailsWithIt`, `AReadOnTheLoopSeesItsBatchsWritesAndAnswersAfterTheirCommit`, `BatchedReadsAndWritesAllocateNothingOnceWarm`, the 5 `BatchReadTests`, `BatchedReadsOfUntouchedTablesAllocateNothingOnceWarm` |
+| 3 | Stop hung with writes queued while a loop held a batch; a read could take the close; the WAL count was read after free | After a stop a wait for the connection gives up at the stop's deadline; whoever gives the connection back last closes it; the WAL hook's counters are pinned GC memory | `StopEndsInTimeWhileALoopHoldsABatchAndWritesAreQueued`, `AReadAsTheBatchGivesTheConnectionBackDoesntKeepItOpen` (Debug hooks) |
+| 4 | Packages shared internals with "x or newer" dependencies | Exact `[x.y.z]` dependencies between CodeFusion packages and on the SQLite build (shared build target, `scripts/CheckPackages.cs` in CI); each package but Core checks the CodeFusion versions it loads | `PackageVersionsTests`, `scripts/CheckPackages.cs` |
+| 5 | The lock file broke on an SDK patch and covered less than SECURITY.md said | Version pinned exactly, package hash checked at build, the package's library checked at open for the tested build; SECURITY.md exact | `BuildCheckTests` |
+| 6 | An unexpected exception left the batch's transaction open, then committed; Debug life checks were swallowed | The batch rolls back, fails what it held and rethrows; statements reset in a finally (a running one blocked ROLLBACK, on the group path too); life checks throw `JobLifeException`; a write transaction is never committed by the next group | `AnExceptionInABatchUndoesItsTransactionAndAnswersNothingOkThatIsntThere` (Debug hook) |
+| 7 | The watchdog could still interrupt the statement after the slow one | It claims the statement's number with a compare-exchange before interrupting; an interrupt counts as a timeout only for that statement | `TheWatchdogInterruptsOnlyTheStatementItTimed` (Debug hook) |
+| 8 | Docs and tests that claimed more than they showed | Parking measured with batches on (the throughput tool's `batches` mode); the round test runs under HttpServer's real event loop; the unreachable branch of the batch commit is deleted (the third review found it reachable again, and it is back: third review, 1) | `ABatchOpenedAfterItsEndRanStillEndsInItsWakeUp` |
+
+Proven red (broken on purpose, or the test written before the fix and seen failing):
+
+| Broken | Caught by |
+|---|---|
+| the swapped completion list (before the fix) | `ABatchsCompletionsStayItsOwnWhileAnotherLoopBatches`: another loop's writes completed before their COMMIT |
+| the early commit before a loop read (before the fix) | `AWakeUpOfReadsAndWritesCommitsOnce` (9 commits, not 2), `AReadOfAWakeUpWhoseCommitFailsFailsWithIt`, the loop-read test |
+| no deadline on the writer's wait after a stop (before the fix) | the queued-write Stop test: no end within 8 s |
+| a close tried once (before the fix) | the close-race test: SQLITE_BUSY reopening the file |
+| `PackageVersions.Mismatch` passing other versions | 4 `PackageVersionsTests` |
+| "x or newer" dependencies (before the fix) | `scripts/CheckPackages.cs`: all four, and SourceGear.sqlite3 |
+| no tested-build check; a wrong pinned SHA-512 | `ThePackagesLibraryMustBeTheBuildTested`; the build names both hashes |
+| no rollback on an exception in a batch (before the fix) | the hooked test: the half-run unit committed |
+| the watchdog's double read (before the fix) | the hooked watchdog test, 3 runs of 3 |
+| no `RequestBatchEnd`, under the real loop | `ABatchOpenedAfterItsEndRanStillEndsInItsWakeUp` |
+| reads joining the batch by table: a trigger's writes, all but a statement's first written table, count(*) reads, or the batch's writes not tracked | `ATriggersTableCountsAsWritten`, `ACascadesTableCountsAsWritten`, `AReadOfAnUntouchedTableIsAnsweredThoughTheCommitFails` (each mutant 1 to 3 red) |
+| waiters that never park; `Exit` that doesn't wake them | `NothingSpinsWhileALoopsBatchHoldsTheConnection` |
+
+Not provable by a test: removing the null check for a build that can't say its options doesn't compile (nullability
+forces it). The AfterGroup read after a close was undefined behaviour that never showed; the counters are now GC memory,
+so it can't be freed under the read.
+
+### Third review fixes (SQLite, review of ee13691)
+
+The third review found 10: 0 high, 2 medium, 8 low.
+
+| # | Finding | Fix | Tests |
+|---|---|---|---|
+| 1 | A loop read that doesn't join the batch runs in its transaction; if its error rolled that back, the next write committed on its own and was answered Failed | The batch checks its transaction after a loop read fails, before each write and before its COMMIT; a lost one fails what it held | `AReadOnTheLoopThatRollsBackLosesNoAnsweredWrite`: a read of a table the batch didn't write fails with an I/O error, which rolls the transaction back on the pinned 3.50.4 too (a statement that reads no table never does, so the first version of this test couldn't fail) |
+| 2 | A row kept till the COMMIT converted nothing (NULL as a number threw), so a joined read answered differently from a live one | Each kept column holds what SQLite's column calls return (type, integer, double, text), so SavedRow answers as SqliteRow | `AJoinedReadAnswersExactlyAsItWouldAlone` |
+| 3 | Setting the authorizer around each prepare expired every other statement | Set once, on the batching writer's connection after the migrations; records only while preparing | `PreparingAStatementLeavesTheOthersPrepared` |
+| 4 | Tables SQLite doesn't report | sqlite_sequence, `last_insert_rowid()`/`changes()`, pragmas, virtual tables, DDL, and any re-prepare count as every table; views tested | `WhatSqliteDoesntReportWaits`, `AVirtualTablesWritesCountAsEverything`, `AfterTheSchemaChangesEveryReadWaits`, `AViewOfAWrittenTableWaits` |
+| 5 | The tested-build check was skipped in RID-specific, self-contained and AOT publishes | The library is judged by its version and source id wherever it was loaded from; an app with its own build sets `CodeFusion.Data.Sqlite.OwnSqliteBuild` | `AnotherBuildIsRefusedUnlessTheAppSaysItShipsItsOwn`, `TheBuildTestedPassesWithOrWithoutTheSwitch` |
+| 6 | A joined read over 64 KB allocated about 2.6 times its size per query | Past 64 KB the kept rows go in buffers rented from the shared array pool | `LargeJoinedReadsAllocateNothingOnceWarm` (26 MB more for 100 more reads before) |
+| 7 | A timed-out statement could answer Failed while the watchdog still held its claim | The check compares with the statement's own job | `AnInterruptedStatementIsATimeoutWhileTheWatchdogStillHoldsIt` (Debug hook) |
+| 8 | The authorizer callback had no calling convention | Cdecl, as every other callback | `EveryCallbackGivenToSqliteIsCdecl` |
+| 9 | Two timing-fragile tests, two that couldn't fail | The watchdog test holds its statements on events; the close test waits for Stop; the version tests check the real assemblies and each package's initializer | `TheWatchdogInterruptsOnlyTheStatementItTimed`, `PackageVersionTests` (both suites) |
+| 10 | Claims past the code | `PackageVersions` says what each kind of mix shows; NU1608 in SECURITY.md; the parking run's FULL cost is about 8% | |
+
+Proven red: each test above failed before its fix, or with the code broken on purpose: the guard off ("b was answered Failed and has 1 rows"); a NULL as a number in a joined read; one re-prepare per new statement; the sequence, state-function and pragma rules each off; the claim on whatever runs, not the statement timed; Data.Sqlite at another version; its version initializer left out.
+
+Not provable by a test: the virtual-table rule, DDL marking and finalizing at the watch's start each have a net under them that catches the same case first (FTS5 and DDL make SQLite compile outside a prepare, which marks the schema changed; no statement prepared before the watch is used after it), so their mutants stay green. They stay as defence in depth.
+
+### Check of the third-review fixes (310b512 and eafbbd8)
+
+A short check found the 10 fixes right, and 6 more, all low, plus 2 untested spots:
+
+- **N2:** finding 1's tests couldn't fail. The read, `SELECT cf_ioerr()`, read no table, and SQLite rolls back only for
+  a statement that reads one; the Debug hook rolled back from the fix's own call site. The test now reads a table the
+  batch didn't write, and fails with the guard off on the pinned 3.50.4 (`AReadOnTheLoopThatRollsBackLosesNoAnsweredWrite`).
+- **N1:** a write after the batch's transaction was lost failed unrun, and the job's tables were learned after the
+  check. Now: tables, then the check, then the job joins and runs in a new transaction
+  (`AWriteAfterTheBatchsTransactionWasLostRunsInANewOne`, red on the old order).
+- **N3, N4, N5:** a real column whose text SQLite can't give (out of memory) no longer copies from address 0;
+  `IsSequence` reads the name to its NUL; `Prepare` keeps and puts back a running prepare's state. None can be driven
+  from a test (out of memory inside one call, an out-of-bounds read with no visible effect, no nested prepare today).
+- **N6:** a compile outside a prepare turns by-table reads off for the process; the README says so and what triggers it.
+- **Finding 8's second half:** an exception in the authorizer is caught, recorded, and fails that prepare with it as the
+  cause (`AnExceptionInTheTableTrackingFailsThatPrepareOnly`; without the catch the test process dies).
+- **Finding 5:** the open's check goes through `CheckLoaded`, which the switch alone decides
+  (`TheSwitchAloneLetsAnotherBuildIn`, red with the switch ignored); the refusal also says to pin a reference the app
+  didn't mean to make.
+
+### Found on the way
+
+- Keys of a table whose name needs quotes: `sqlite_sequence` holds the bare name, and the generator gave the key
+  templates only the quoted one, so the insert's row was never found again (404). The templates now get the bare name
+  too (`{2}`); Postgres's SQL is unchanged. Found by the operator tests.
+- CodeFusion.Data.Tests' allocation test raced with itself: its two writing callers toggle one favorite that the
+  reads count, and each started reading while the other still toggled (a count of 3, not 2, now and then, on Postgres
+  too). The writes now run before the reads.
+- The same test's warm-up left some reader connections unused: on SQLite each connection prepares a statement the
+  first time it runs it, and its first statement grows its statement table (two arrays indexed by a statement's
+  process-wide number: 21.5 KB once there were many statements). Measured as the queries' about one run in five. The
+  warm-up now runs 16 callers at once, more than any provider's connections.
+- `WritesPastAFullQueueAreBusyAtOnce` assumed the writer took the long write alone; it takes whatever has queued as
+  one group, which freed the queue. The test now holds the file's write lock from another connection and waits until
+  the writer took its first write (`SqliteWriter.Queued`).
+- Three tests failed on a busy machine (cf-bench, 4 CPUs beside 8 busy loops, or 1 beside 16;
+  docs/benchmarks/2026-10-21-sqlite-flaky-tests.md). `AWriteOffTheLoopGoesToTheWriterAndWaitsForTheBatch` and
+  `ABatchsCompletionsStayItsOwnWhileAnotherLoopBatches` slept 100 ms for a loop to make its writes, then checked they
+  hadn't completed; a write not made yet is a default `ValueTask`, which is complete. They now wait until the writes
+  are made. `ABatchOpenedAfterItsEndRanStillEndsInItsWakeUp` gave each request 2 s, and one took 2.6 s; the first is now a
+  warm-up, the bound is 30 s, and the heartbeat a batch left open would wait for is 120 s.
+  `ATransactionSqliteRollsBackRunsAgainWithoutTheWriteThatFailed` queued its group behind a 100,000-row write, which
+  the 500 ms timeout meant for its slow write interrupted too (6 of 6 runs at 1 CPU); another connection's write lock
+  now holds the writer instead. Each old test failed with the machine's delay put in on purpose (300 ms before the
+  writes, 3 s in the first request), or under the load; the new ones passed both.
+
+### Not done here
+
+- Power loss: `synchronous=FULL` against NORMAL needs a machine that loses power, not a killed process.
+- Many processes writing one file: SQLite makes them wait for each other; the tests hold the lock from one other
+  connection only (`AConditionalDeleteSeesTheRowAsAnotherConnectionsWriteLeftIt`, `WritesPastAFullQueueAreBusyAtOnce`).
+
 ## Options for an app's own spec (the feed API)
 
 The $12 contest's feed API couldn't be written with the library: it kept a hand-written auth layer and parsed its
@@ -1081,8 +1298,9 @@ except where the row says the test is a guard.
 
 ## Fuzzing (tests/CodeFusion.Fuzz)
 
-Coverage-guided fuzzing of everything that reads network bytes: 13 SharpFuzz targets (the table is in
-`tests/CodeFusion.Fuzz/README.md`). Each throws when an invariant breaks, and the same `Run` serves three engines:
+Coverage-guided fuzzing of everything that reads network bytes, and of the SQLite provider's encodings: 13 SharpFuzz
+targets (the table is in `tests/CodeFusion.Fuzz/README.md`). Each throws when an invariant breaks, and the same `Run`
+serves three engines:
 
 - `dotnet test`: `Corpus/<target>/` (551 seeds taken from the existing tests' inputs, plus the regressions below) and a
   fixed number of mutations from a seed fixed per target, about 50,000 inputs in 1.2 to 2 s. In the CI test loop.
@@ -1096,8 +1314,8 @@ transport), not only `HttpParser`: where a request ends is decided in Kestrel's 
 input tells "waits for more" from "refused". Both taking a request and disagreeing on method, decoded path, query,
 body or end byte fails, as does one ending a request where the other waits. One side refusing is recorded.
 
-Outside the project: `InternalsVisibleTo CodeFusion.Fuzz` in the Http and Data.Postgres csproj files (the parsers are
-internal), the project in `CodeFusion.slnx`, and `.github/workflows/ci.yml` (the replay in the test loop, the `fuzz`
+Outside the project: `InternalsVisibleTo CodeFusion.Fuzz` in the Http, Data.Postgres and Data.Sqlite csproj files (the
+parsers are internal), the project in `CodeFusion.slnx`, and `.github/workflows/ci.yml` (the replay in the test loop, the `fuzz`
 job, the test job skipped on the nightly schedule). SharpFuzz's version is in the project file, not
 Directory.Packages.props: nothing else uses it.
 
@@ -1164,6 +1382,8 @@ Each break on its own, then its target on the seeds (the lone surrogate one need
 - DataRow trailing bytes ignored: pg-row. An ErrorResponse field without its NUL: pg-error.
 - Any SCRAM server signature accepted: pg-scram-final. The iteration count unchecked: pg-scram-first.
 - Settings without a user: pg-settings.
+- A text array's `"` left unescaped: sqlite-json-array (an element became two; valid UTF-8 refused as malformed JSON).
+- A write's kept doubles narrowed to float: sqlite-saved-row (GetDouble and GetInt64 differ from the row in place).
 
 ### Not done here
 

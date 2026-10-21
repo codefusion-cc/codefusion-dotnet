@@ -1,7 +1,7 @@
 # CodeFusion.Fuzz
 
-Coverage-guided fuzzing of the code that reads bytes from the network. Each target takes bytes and throws when an
-invariant breaks; the same targets run under libFuzzer and in the test suite.
+Coverage-guided fuzzing of the code that reads bytes from the network, and of what the SQLite provider encodes. Each
+target takes bytes and throws when an invariant breaks; the same targets run under libFuzzer and in the test suite.
 
 | Target | What it runs | What must hold |
 | --- | --- | --- |
@@ -17,6 +17,8 @@ invariant breaks; the same targets run under libFuzzer and in the test suite.
 | `pg-startup` | `PgConnection.Open` against a transport that replies with the bytes | only `PgConnectionException` or the server's `PgException`; no more memory than the bytes justify |
 | `pg-scram-first`, `pg-scram-final` | `PgScram.ClientFinal`, `VerifyServerFinal` (RFC 7677's vector) | only `PgConnectionException`; only the right signature verifies |
 | `pg-settings` | `PgSettings.Parse` | only `FormatException` or `ArgumentException`; what parses keeps its own rules |
+| `sqlite-json-array` | a text array as `CodeFusion.Data.Sqlite` binds it (one JSON text), read back with `json_each` | valid UTF-8 comes back element for element, as text; invalid UTF-8 never adds or drops an element |
+| `sqlite-saved-row` | a write's rows as the SQLite writer keeps them until its group commits, against the same rows read in place | the same NULLs; wherever a kept row's getter answers, the same answer as in place |
 
 The sample app is `tests/CodeFusion.Http.Tests/Sample/SampleApp.cs`, compiled here by the endpoint generator.
 

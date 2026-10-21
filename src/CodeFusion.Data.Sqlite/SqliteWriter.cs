@@ -1,0 +1,834 @@
+using System;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace CodeFusion.Data.Sqlite;
+
+/// <summary>
+/// Group commit on one thread and one connection. Writes queue up; the writer takes what has queued (up to
+/// <see cref="SqliteDatabase.MaxGroup"/>), runs them in one transaction and commits once, so the group shares one WAL
+/// append and, with synchronous=FULL, one sync. A write of several statements runs inside a savepoint; when one of its
+/// statements fails only that write is undone (a single statement SQLite undoes itself) and the rest of the group
+/// commits, so nothing reruns: of two writes that conflict, the first queued wins. A write's rows are kept until the
+/// commit, then handed to its reader, then it completes, on this thread.
+/// </summary>
+public sealed unsafe class SqliteWriter
+{
+    readonly SqliteConn _conn;
+    readonly SqliteDatabase _options;
+    readonly Thread _thread;
+    readonly Lock _lock = new();
+    readonly SqliteJob?[] _ring;
+    int _head, _count;
+    bool _stopped, _sleeping;
+    /// <summary>A group is running, on the writer's thread or a leader's: the connection is taken.</summary>
+    bool _busy;
+    readonly SqliteJob?[] _group;
+    readonly SqliteStatement _beginGroup = new("BEGIN IMMEDIATE"), _commit = new("COMMIT"), _rollback = new("ROLLBACK"),
+        _savepoint = new("SAVEPOINT w"), _release = new("RELEASE w"), _rollbackTo = new("ROLLBACK TO w");
+
+    /// <summary>The writer's counters.</summary>
+    public SqliteWriterCounters Counters { get; } = new();
+
+    /// <summary>Writes waiting for the writer, not counting the group it runs: up to <see cref="SqliteDatabase.MaxQueued"/>,
+    /// past which a write is refused as busy at once. A measure of load, for shedding it before the queue is full.</summary>
+    public int Queued => Volatile.Read(ref _count);
+
+    /// <summary>Moves after each commit, before the group's writes complete; the readers compare their snapshots with it.</summary>
+    internal readonly CommitClock Clock = new();
+    internal SqliteReaders? Readers;
+    internal SqliteConn Connection => _conn;
+
+    [ThreadStatic] static SqliteWriter? t_writer;
+
+    /// <summary>A completion's continuation threw: counted against this writer.</summary>
+    internal void Unexpected(Exception e) => Record(e);
+
+    /// <summary>Whether a completion runs its continuation here: on a leader's thread always (it is the caller's own), on
+    /// the writer's only when <see cref="SqliteDatabase.CompleteOnWriterThread"/> says so.</summary>
+    bool Inline => _options.CompleteOnWriterThread || Thread.CurrentThread != _thread;
+
+    void Record(Exception e)
+    {
+        Interlocked.CompareExchange(ref Counters.FirstUnexpected, e, null);
+        Interlocked.Increment(ref Counters.Unexpected);
+    }
+
+    internal SqliteWriter(SqliteConn conn, SqliteDatabase options, string name)
+    {
+        _conn = conn;
+        _options = options;
+        _ring = new SqliteJob?[options.MaxQueued];
+        _group = new SqliteJob?[options.MaxGroup];
+        _thread = new Thread(Loop) { IsBackground = true, Name = "sqlite writer " + name };
+    }
+
+    bool _started;
+
+    internal void Start()
+    {
+        _started = true;
+        _thread.Start();
+    }
+
+    internal ValueTask<DataResult> Submit<TReader>(SqliteJob job, object? state, CancellationToken aborted) where TReader : IRowReader
+    {
+        job.Reader = &Rows<TReader>.Read;
+        job.Writer = this;
+        job.State = state;
+        job.Aborted = aborted;
+        var task = job.Task;
+        if (_options.EventLoopBatches && EventLoopThread.Current >= 0 && Batch(job)) return task;
+        bool wake = false, lead = false;
+        lock (_lock)
+        {
+            if (_stopped || _count == _ring.Length)
+            {
+                var status = _stopped ? DataStatus.Stopped : DataStatus.Busy;
+                job.Return();
+                return new ValueTask<DataResult>(DataResult.Of(status));
+            }
+            job.Queued();
+            if (_options.LeaderCommit && _count == 0 && !_busy)
+            {
+                _busy = true;
+                lead = true;
+            }
+            else
+            {
+                _ring[(_head + _count) % _ring.Length] = job;
+                _count++;
+                wake = _sleeping && !_busy; // while a leader commits, it wakes the writer when it is done
+                if (wake) _sleeping = false;
+            }
+        }
+        if (lead) Lead(job);
+        else if (wake)
+            lock (_ring) Monitor.Pulse(_ring);
+        return task;
+    }
+
+    static class Rows<TReader> where TReader : IRowReader
+    {
+        public static long Read(in SavedRow row, object? state) => TReader.Read(in row, state);
+    }
+
+    /// <summary>
+    /// Leader commit (<see cref="SqliteDatabase.LeaderCommit"/>): the writer was idle and nothing was queued, so the caller
+    /// commits its own write on its thread instead of waking the writer's and being woken back. Writes that arrive
+    /// meanwhile queue, and the writer's thread takes them as the next group.
+    /// </summary>
+    void Lead(SqliteJob job)
+    {
+        var previous = t_writer;
+        t_writer = this;
+        _group[0] = job;
+        try
+        {
+            RunGroup(1);
+        }
+        catch (Exception e)
+        {
+            Record(e);
+            FailAll(1, new DataResult(DataStatus.Failed, error: e));
+        }
+        finally
+        {
+            t_writer = previous;
+        }
+        bool wake;
+        lock (_lock)
+        {
+            _busy = false;
+            wake = _count > 0 && _sleeping;
+            if (wake) _sleeping = false;
+        }
+        if (wake)
+            lock (_ring) Monitor.Pulse(_ring);
+    }
+
+    int Take()
+    {
+        while (true)
+        {
+            lock (_lock)
+            {
+                if (_count > 0 && !_busy)
+                {
+                    _busy = true;
+                    int n = Math.Min(_count, _group.Length);
+                    for (int i = 0; i < n; i++)
+                    {
+                        int at = (_head + i) % _ring.Length;
+                        _group[i] = _ring[at];
+                        _ring[at] = null;
+                    }
+                    _head = (_head + n) % _ring.Length;
+                    _count -= n;
+                    return n;
+                }
+                if (_stopped && _count == 0 && !_busy) return 0;
+                _sleeping = true;
+            }
+            lock (_ring)
+            {
+                // a pulse before this wait found the count raised; one after it ends the wait
+                if (Volatile.Read(ref _count) == 0 || Volatile.Read(ref _busy)) Monitor.Wait(_ring, 100);
+            }
+        }
+    }
+
+    void Loop()
+    {
+        t_writer = this;
+        int n;
+        while ((n = Take()) > 0)
+        {
+            try
+            {
+                RunGroup(n);
+            }
+            catch (Exception e)
+            {
+                // a bug: fail what is left of the group rather than leave its callers waiting
+                Record(e);
+                FailAll(n, new DataResult(DataStatus.Failed, error: e));
+            }
+            lock (_lock) _busy = false;
+        }
+        CloseConnection(); // the loop's own connection: closed on its thread, after the last group
+    }
+
+    void RunGroup(int n)
+    {
+        // in exclusive mode the connection is the readers' too: taken for the transaction, and given back before any of
+        // the group's writes completes, whose continuation may read
+        if (!Enter())
+        {
+            // stopped while a loop's batch held the connection past the stop's wait: the group never ran
+            Complete(_group, n, DataResult.Of(DataStatus.Stopped), Inline);
+            return;
+        }
+        DataResult? failed;
+        try
+        {
+            failed = Transaction(_group, n);
+        }
+        finally
+        {
+            Exit();
+        }
+        Complete(_group, n, failed, Inline);
+        AfterGroup();
+    }
+
+    // ---------- one transaction's writes: a group's, or a wake-up's ----------
+    //
+    // Every write runs in a savepoint of its own, so one that fails, or can't be prepared, is undone alone and the rest
+    // commit. When SQLite rolls the whole transaction back by itself (out of memory, an I/O error, a full disk, an
+    // interrupt), the writes it held run again once in a new one; if that is rolled back too, they fail. No write is
+    // answered Ok unless the COMMIT that holds it returned SQLITE_OK.
+
+    /// <summary>
+    /// The group's writes in one transaction: null once committed (the commit clock moved), else the failure of every
+    /// write that has none of its own. Completes nothing.
+    /// </summary>
+    DataResult? Transaction(SqliteJob?[] jobs, int n)
+    {
+        int rc = Begin();
+        if (rc != Sqlite3.Ok) return FailedGroup(SqliteRun.Failed(_conn, rc));
+        try
+        {
+            if (Run(jobs, 0, n, attempts: 2) is { } lost) return FailedGroup(lost);
+            return Commit();
+        }
+        finally
+        {
+            RollbackOpen(); // after an exception: no transaction stays open
+        }
+    }
+
+    /// <summary>Runs the writes in jobs[from..to) that are still standing, in the transaction open now, and again in a new
+    /// one while SQLite rolls it back, up to <paramref name="attempts"/> in all. Null while a transaction is open with them;
+    /// else the failure that lost the last one (none is open).</summary>
+    DataResult? Run(SqliteJob?[] jobs, int from, int to, int attempts)
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            int lostAt = -1;
+            for (int i = from; i < to && lostAt < 0; i++)
+            {
+                var job = jobs[i];
+                if (job is null || job.Failed) continue;
+                if (job.Aborted.IsCancellationRequested)
+                {
+                    job.Failed = true; // completed with the rest, after the transaction
+                    job.Failure = DataResult.Of(DataStatus.Canceled);
+                    continue;
+                }
+                if (!RunOne(job)) lostAt = i;
+            }
+            if (lostAt < 0) return null;
+            // SQLite rolled the transaction back: what ran in it is gone. The write it failed on keeps its error.
+            var lost = jobs[lostAt]!.Failure;
+            if (attempt == attempts) return lost;
+            Interlocked.Increment(ref Counters.Reruns);
+            for (int i = from; i < to; i++)
+                if (jobs[i] is { Failed: false } again) again.Restart();
+            int rc = Begin();
+            if (rc != Sqlite3.Ok) return SqliteRun.Failed(_conn, rc);
+        }
+    }
+
+    /// <summary>One write in its savepoint, inside the open transaction. Its failure, if it fails, is on the job; false
+    /// when the transaction is gone (SQLite rolled it back).</summary>
+    bool RunOne(SqliteJob job)
+    {
+        _conn.Started();
+        try
+        {
+            int rc = _conn.Once(_savepoint);
+            if (rc == Sqlite3.Ok)
+            {
+                rc = SqliteRun.Steps<NoReader>(_conn, job, null, save: true, out _, out _, out _);
+                if (rc == Sqlite3.Ok)
+                {
+                    rc = _conn.Once(_release);
+                    if (rc == Sqlite3.Ok) return true;
+                }
+                else Interlocked.Increment(ref Counters.FailedAlone);
+            }
+            job.Failed = true;
+            job.Failure = SqliteRun.Failed(_conn, rc, job.SavedRows);
+        }
+        catch (Exception e) when (e is SqliteException || e is InvalidOperationException and not JobLifeException)
+        {
+            // a statement that can't be prepared, or bound with the wrong parameters: this write fails, alone (a broken
+            // job life, a Debug check, is a bug and goes on up)
+            Interlocked.Increment(ref Counters.FailedAlone);
+            job.Failed = true;
+            job.Failure = new DataResult(DataStatus.Failed, job.SavedRows, 0, e);
+        }
+        finally
+        {
+            _conn.Ended();
+        }
+        return Undo();
+    }
+
+    /// <summary>After a write failed: its savepoint undone, the transaction kept. False when the transaction is gone.</summary>
+    bool Undo()
+    {
+        if (Sqlite3.GetAutocommit(_conn.Db) != 0) return false;
+        try
+        {
+            if (_conn.Once(_rollbackTo) == Sqlite3.Ok && _conn.Once(_release) == Sqlite3.Ok) return true;
+        }
+        catch (SqliteException)
+        {
+        }
+        RollbackOpen(); // a savepoint that can't be undone: the whole transaction goes
+        return false;
+    }
+
+    /// <summary>BEGIN IMMEDIATE, after the reads' transaction in Exclusive mode, with cf_now() set to now.</summary>
+    int Begin()
+    {
+        EndRead();
+        *_conn.Clock = Sqlite.ClockNow(); // cf_now(): the transaction's start, for every write in it
+        _conn.Started();
+        try
+        {
+            return _conn.Once(_beginGroup);
+        }
+        finally
+        {
+            _conn.Ended();
+        }
+    }
+
+    /// <summary>COMMIT: null once committed (the commit clock moved before any write completes), else the failure of every
+    /// write in it, rolled back.</summary>
+    DataResult? Commit()
+    {
+        if (Sqlite3.GetAutocommit(_conn.Db) != 0) return FailedGroup(DataResult.Of(DataStatus.Failed)); // gone: nothing to commit
+        int rc;
+        _conn.Started();
+        try
+        {
+            rc = _conn.Once(_commit);
+        }
+        finally
+        {
+            _conn.Ended();
+        }
+        if (rc != Sqlite3.Ok)
+        {
+            var failed = SqliteRun.Failed(_conn, rc);
+            RollbackOpen();
+            return FailedGroup(failed);
+        }
+        Interlocked.Increment(ref Counters.Commits);
+        Volatile.Write(ref Clock.Seq, Clock.Seq + 1); // before any write completes: a read that starts after sees it
+        return null;
+    }
+
+    DataResult FailedGroup(in DataResult failure)
+    {
+        RollbackOpen();
+        Interlocked.Increment(ref Counters.FailedGroups);
+        return failure;
+    }
+
+    void RollbackOpen()
+    {
+        if (Sqlite3.GetAutocommit(_conn.Db) == 0) _ = _conn.Once(_rollback);
+    }
+
+    /// <summary>Completes jobs[0..n): each with its own failure, else <paramref name="failed"/> when the transaction
+    /// failed, else its rows. The list is cleared.</summary>
+    void Complete(SqliteJob?[] jobs, int n, DataResult? failed, bool inline)
+    {
+        for (int i = 0; i < n; i++)
+        {
+            if (jobs[i] is not { } job) continue;
+            jobs[i] = null;
+            if (job.Failed) job.Complete(job.Failure, inline);
+            else if (failed is { } f) job.Complete(f, inline);
+            else
+            {
+                if (!job.BatchedRead) Interlocked.Increment(ref Counters.Writes);
+                job.Complete(job.HandRows(), inline);
+            }
+        }
+    }
+
+    /// <summary>Takes the connection from the reads in Exclusive mode; false when the stop gave up on it.</summary>
+    bool Enter() => !_options.Exclusive || Readers!.Enter();
+
+    void Exit()
+    {
+        if (_options.Exclusive) Readers!.Exit();
+    }
+
+    /// <summary>Exclusive mode: ends the read transaction the reads keep open on the connection, before a write
+    /// transaction or a checkpoint. Holding the connection (<see cref="Enter"/>).</summary>
+    void EndRead()
+    {
+        if (!_options.Exclusive || Sqlite3.GetAutocommit(_conn.Db) != 0) return;
+        // the reads' transaction is a read one: ended. A write one left open (a ROLLBACK that failed) is never committed
+        // by the next group: rolled back.
+        _ = _conn.Once(Sqlite3.TxnState(_conn.Db, null) == Sqlite3.TxnWrite ? _rollback : _commit);
+    }
+
+    /// <summary>After a group's writes have completed: idle readers let go of the snapshots this commit made old (so none
+    /// keeps the WAL from being checkpointed and restarted), and the WAL is checkpointed once it is long, outside the
+    /// group's latency.</summary>
+    void AfterGroup()
+    {
+        if (Volatile.Read(ref _closed)) return;
+        Readers?.Sweep();
+        // the WAL hook's count: GC memory the connection holds, so it reads stale, never freed, if a close came between
+        if (*_conn.WalFrames < _options.CheckpointFrames || !Enter()) return;
+        try
+        {
+            if (Volatile.Read(ref _closed)) return;
+            EndRead();
+            _ = Sqlite3.WalCheckpoint(_conn.Db, null, 0, out _, out _); // PASSIVE: never waits on a reader
+            *_conn.WalFrames = 0;
+        }
+        finally
+        {
+            Exit();
+        }
+        Interlocked.Increment(ref Counters.Checkpoints);
+    }
+
+    // ---------- event-loop batches (SqliteDatabase.EventLoopBatches) ----------
+
+    /// <summary>The thread whose wake-up holds the connection; 0 when none does.</summary>
+    int _batchThread;
+    /// <summary>The batch's writes waiting to complete, the connection's: the next batch, any loop's, writes here.</summary>
+    SqliteJob?[] _batch = new SqliteJob?[64];
+    /// <summary>The writes a loop's thread completes after its batch ended, copied out of <see cref="_batch"/> before the
+    /// connection goes: its own list, since another loop may take the connection and fill <see cref="_batch"/> while
+    /// these complete. Null while in use (a completion that ends a batch of its own takes a new one).</summary>
+    [ThreadStatic] static SqliteJob?[]? t_completing;
+    int _batchCount;
+    /// <summary>The batch's writes before this index are committed; those after it are in the open transaction.</summary>
+    int _batchCommitted;
+    /// <summary>The batch's transaction is open (BEGIN ran and nothing ended it).</summary>
+    bool _batchOpen;
+
+    /// <summary>The tables the batch's writes since its last commit wrote (<see cref="SqliteConn.WritesOf"/>, triggers and
+    /// foreign-key actions included).</summary>
+    ulong _batchWrote;
+
+    /// <summary>This thread's event-loop batch holds the connection with writes not committed yet in a table
+    /// <paramref name="read"/> reads: the read must run inside it and wait for its COMMIT (<see cref="ReadInBatch"/>).
+    /// A read of tables the batch hasn't written sees only committed rows, and answers at once.</summary>
+    internal bool ReadJoinsBatch(SqliteJob read)
+    {
+        if (!_options.EventLoopBatches || Volatile.Read(ref _batchThread) != Environment.CurrentManagedThreadId || !_batchOpen) return false;
+        ulong reads = 0;
+        try
+        {
+            for (int i = 0; i < read.Count; i++) reads |= _conn.ReadsOf(read.Statements[i]);
+        }
+        catch (Exception e) when (e is SqliteException || e is InvalidOperationException and not JobLifeException)
+        {
+            return false; // it can't be prepared: it fails as any read does, outside the batch
+        }
+        return (reads & _batchWrote) != 0;
+    }
+
+    ulong WritesOf(SqliteJob write)
+    {
+        ulong writes = 0;
+        try
+        {
+            for (int i = 0; i < write.Count; i++) writes |= _conn.WritesOf(write.Statements[i]);
+        }
+        catch (Exception e) when (e is SqliteException || e is InvalidOperationException and not JobLifeException)
+        {
+            return ulong.MaxValue; // it can't be prepared: it fails when it runs, and counts as writing everything till then
+        }
+        return writes;
+    }
+
+    /// <summary>
+    /// A read on the loop whose batch holds writes not committed yet: it runs now, in the batch's transaction, so it sees
+    /// them, and its rows are kept like a write's. It completes when the batch does: after the COMMIT, or failed with it,
+    /// so no answer goes out with a write the COMMIT then loses. The wake-up still commits once.
+    /// </summary>
+    internal ValueTask<DataResult> ReadInBatch<TReader>(SqliteJob job, object? state, CancellationToken aborted) where TReader : IRowReader
+    {
+        job.Reader = &Rows<TReader>.Read;
+        job.Writer = this;
+        job.State = state;
+        job.Aborted = aborted;
+        job.BatchedRead = true;
+        var task = job.Task;
+        _ = Batch(job); // this thread holds the batch: it takes the read
+        return task;
+    }
+
+    /// <summary>
+    /// A write made on an event loop's thread: runs it now, in the transaction this wake-up opened (opening it if this
+    /// is its first write since the last commit), and keeps it until <see cref="EndBatch"/> completes it. False when
+    /// another loop's batch holds the connection, or the source stops: the write then goes to the writer thread.
+    /// </summary>
+    bool Batch(SqliteJob job)
+    {
+        int me = Environment.CurrentManagedThreadId;
+        if (Volatile.Read(ref _batchThread) != me)
+        {
+            if (Volatile.Read(ref _stopped) || Interlocked.CompareExchange(ref _batchThread, me, 0) != 0) return false;
+            if (!Readers!.Enter()) // after the read or group running, in turn
+            {
+                Volatile.Write(ref _batchThread, 0);
+                return false;
+            }
+            if (Volatile.Read(ref _stopped) || Volatile.Read(ref _closed))
+            {
+                // stopped while it waited: the writer refuses it, and the connection may be closing
+                Volatile.Write(ref _batchThread, 0);
+                Readers.Exit();
+                return false;
+            }
+            Readers.Owner = me;
+            // the loop runs its batch actions once more for it: a batch opened after this source's end ran in this
+            // wake-up (by another source's completions, or a handler resumed as answers go out) ends in it too
+            EventLoopThread.RequestBatchEnd();
+        }
+        job.Queued();
+        // its tables first: learning them may prepare, and run a query, in the open transaction. Then the transaction is
+        // checked, before the job joins: one lost by then fails what it held, and this job runs in a new one.
+        ulong writes = job.BatchedRead ? 0 : WritesOf(job);
+        CheckBatchTransaction();
+        if (_batchCount == _batch.Length) Array.Resize(ref _batch, _batch.Length * 2);
+        _batch[_batchCount++] = job;
+        try
+        {
+            _batchWrote |= writes; // before it runs: a failed write still counts
+            if (!_batchOpen)
+            {
+                int rc = Begin();
+                if (rc != Sqlite3.Ok)
+                {
+                    job.Failed = true;
+                    job.Failure = FailedGroup(SqliteRun.Failed(_conn, rc));
+                    _batchCommitted = _batchCount;
+                    return true;
+                }
+                _batchOpen = true;
+            }
+            // rolled back: the writes the transaction held since the last commit run again, once, in a new one
+            if (Run(_batch, _batchCount - 1, _batchCount, attempts: 1) is not null) Rerun();
+            return true;
+        }
+        catch
+        {
+            Abandon(job);
+            throw;
+        }
+    }
+
+    /// <summary>The batch's transaction is still open, if the batch thinks it is: one that SQLite rolled back outside a
+    /// write (a read on the loop that hit an error) fails every write it held, rather than letting the next write start a
+    /// transaction of its own, which its RELEASE would commit.</summary>
+    internal void CheckBatchTransaction()
+    {
+        if (!_batchOpen || Sqlite3.GetAutocommit(_conn.Db) == 0) return;
+        _batchOpen = false;
+        _batchWrote = 0;
+        var lost = new DataResult(DataStatus.Failed);
+        for (int i = _batchCommitted; i < _batchCount; i++)
+            if (_batch[i] is { Failed: false } job)
+            {
+                job.Failed = true;
+                job.Failure = lost;
+            }
+        _batchCommitted = _batchCount;
+        Interlocked.Increment(ref Counters.FailedGroups);
+    }
+
+    /// <summary>An exception no statement expects (out of memory keeping a row, a bug) while <paramref name="thrower"/>
+    /// ran in the batch: the transaction is rolled back, savepoints and all, every write it held since the last commit
+    /// fails, and the thrower's caller gets the exception instead of a task, so its job goes back.</summary>
+    void Abandon(SqliteJob thrower)
+    {
+        RollbackOpen();
+        _batchOpen = false;
+        _batchWrote = 0;
+        if (_batchCount > 0 && ReferenceEquals(_batch[_batchCount - 1], thrower)) _batch[--_batchCount] = null;
+        var lost = new DataResult(DataStatus.Failed);
+        for (int i = _batchCommitted; i < _batchCount; i++)
+            if (_batch[i] is { Failed: false } job)
+            {
+                job.Failed = true;
+                job.Failure = lost;
+            }
+        _batchCommitted = _batchCount;
+        thrower.Return();
+    }
+
+    /// <summary>The batch's transaction is gone: its writes since the last commit run again once in a new one, or fail
+    /// with the loss.</summary>
+    void Rerun()
+    {
+        _batchOpen = false;
+        int rc = Begin();
+        DataResult? lost = rc != Sqlite3.Ok ? FailedGroup(SqliteRun.Failed(_conn, rc)) : null;
+        if (lost is null)
+        {
+            _batchOpen = true;
+            Interlocked.Increment(ref Counters.Reruns);
+            for (int i = _batchCommitted; i < _batchCount; i++)
+                if (_batch[i] is { Failed: false } again) again.Restart();
+            lost = Run(_batch, _batchCommitted, _batchCount, attempts: 1);
+            if (lost is null) return;
+            lost = FailedGroup(lost.Value);
+        }
+        _batchOpen = false;
+        for (int i = _batchCommitted; i < _batchCount; i++)
+            if (_batch[i] is { Failed: false } job)
+            {
+                job.Failed = true;
+                job.Failure = lost.Value;
+            }
+        _batchCommitted = _batchCount;
+    }
+
+    /// <summary>Commits the batch's open transaction, at the batch's end. Its writes and reads stay waiting to complete.
+    /// A transaction SQLite rolled back outside a write fails what it held (<see cref="CheckBatchTransaction"/>).</summary>
+    void CommitBatch()
+    {
+        CheckBatchTransaction();
+        if (!_batchOpen) return;
+        _batchOpen = false;
+        _batchWrote = 0; // committed or failed, nothing it wrote is waiting any more
+        if (Commit() is { } failed)
+            for (int i = _batchCommitted; i < _batchCount; i++)
+                if (_batch[i] is { Failed: false } job)
+                {
+                    job.Failed = true;
+                    job.Failure = failed;
+                }
+        _batchCommitted = _batchCount;
+    }
+
+    /// <summary>
+    /// The end of this thread's wake-up: commits its batch, gives the connection back, and completes the batch's writes
+    /// here, so their answers join the wake-up's sends. A completion that writes again opens a new batch, which is
+    /// committed the same way before this returns. Nothing to do on a thread with no batch.
+    /// </summary>
+    internal void EndBatch()
+    {
+        int me = Environment.CurrentManagedThreadId;
+        while (Volatile.Read(ref _batchThread) == me)
+        {
+            CommitBatch();
+            // the batch's jobs into this thread's list, before the connection, and with it _batch, is anyone's
+            int n = _batchCount;
+            var jobs = t_completing is { } mine && mine.Length >= n ? mine : new SqliteJob?[Math.Max(n, 64)];
+            t_completing = null;
+            Array.Copy(_batch, jobs, n);
+            Array.Clear(_batch, 0, n);
+            _batchCount = _batchCommitted = 0;
+            ReleaseBatch();
+            try
+            {
+                Complete(jobs, n, null, inline: true);
+            }
+            finally
+            {
+                t_completing = jobs;
+            }
+            if (Volatile.Read(ref _batchThread) == 0) AfterGroup(); // no new batch holds the connection: checkpoint now
+        }
+    }
+
+    void ReleaseBatch()
+    {
+        Readers!.Owner = 0;
+        Volatile.Write(ref _batchThread, 0);
+        Readers.Exit(); // the source stopped while this batch held the connection: closes it, unless a read still holds it
+    }
+
+    void FailAll(int n, in DataResult result)
+    {
+        for (int i = 0; i < n; i++)
+        {
+            if (_group[i] is not { } job) continue;
+            _group[i] = null;
+            job.Complete(job.Failed ? job.Failure : result, Inline);
+        }
+    }
+
+    // ---------- closing ----------
+
+    /// <summary>The connection is closed.</summary>
+    bool _closed;
+    static readonly TimeSpan CloseWait = TimeSpan.FromSeconds(2);
+
+    /// <summary>Closes the connection once nothing uses it. In Exclusive mode a loop's batch may hold it: waits for it at
+    /// most <see cref="CloseWait"/>, then leaves the closing to whoever gives it back last.</summary>
+    void CloseConnection()
+    {
+        if (!_options.Exclusive)
+        {
+            _closed = true;
+            _conn.Dispose();
+            return;
+        }
+        Readers!.CloseWhenFree(CloseWait);
+    }
+
+    /// <summary>Holding the connection (Exclusive mode): closes it, once, and gives it back.</summary>
+    internal void CloseHeld()
+    {
+        try
+        {
+            if (Volatile.Read(ref _closed)) return;
+            RollbackOpen();
+            Volatile.Write(ref _closed, true);
+            _conn.Dispose();
+        }
+        finally
+        {
+            Readers!.CloseDone();
+            Readers.Exit();
+        }
+    }
+
+    /// <summary>No reader: a write's rows are kept, not read, while its transaction is open.</summary>
+    readonly struct NoReader : IRowReader
+    {
+        public static long Read<TRow>(scoped in TRow row, object? state) where TRow : IDataRow, allows ref struct => 0;
+    }
+
+    /// <summary>Runs SQL on the writer's connection between groups (migrations; cold).</summary>
+    internal void Execute(string sql)
+    {
+        if (t_writer == this)
+        {
+            // on the writer's own thread, in a completion: after the group's COMMIT, between transactions
+            if (!Enter()) throw new InvalidOperationException("the source stopped");
+            try
+            {
+                EndRead();
+                _conn.Exec(sql);
+            }
+            finally
+            {
+                Exit();
+            }
+            Volatile.Write(ref Clock.Seq, Clock.Seq + 1);
+            return;
+        }
+        while (true)
+        {
+            lock (_lock)
+                if (!_busy)
+                {
+                    _busy = true;
+                    break;
+                }
+            Thread.Sleep(1);
+        }
+        if (!Enter())
+        {
+            lock (_lock) _busy = false;
+            throw new InvalidOperationException("the source stopped");
+        }
+        try
+        {
+            EndRead();
+            _conn.Exec(sql);
+            Volatile.Write(ref Clock.Seq, Clock.Seq + 1); // readers see it, as after a commit
+        }
+        finally
+        {
+            Exit();
+            lock (_lock) _busy = false;
+        }
+    }
+
+    /// <summary>Takes no more writes; the writer commits what has queued, then closes its connection.</summary>
+    internal void Stop()
+    {
+        lock (_lock) _stopped = true;
+        lock (_ring) Monitor.PulseAll(_ring);
+        if (!_started) _conn.Dispose();
+        // on its own thread (a continuation): it closes when its loop ends. Else bounded: the thread's waits for the
+        // connection give up after the stop (Readers), then its close waits CloseWait at most
+        else if (Thread.CurrentThread != _thread && !_thread.Join(StopJoin)) Record(new TimeoutException("the SQLite writer thread didn't end within " + StopJoin));
+    }
+
+    static readonly TimeSpan StopJoin = TimeSpan.FromSeconds(10);
+
+    /// <summary>Whether the writer's thread has ended.</summary>
+    internal bool Stopped => !_thread.IsAlive;
+}
+
+/// <summary>A writer's counters: read them from any thread (they are updated with Interlocked).</summary>
+public sealed class SqliteWriterCounters
+{
+    /// <summary>Transactions committed.</summary>
+    public long Commits;
+    /// <summary>Writes committed.</summary>
+    public long Writes;
+    /// <summary>Writes that failed alone while their group committed.</summary>
+    public long FailedAlone;
+    /// <summary>Groups run again because SQLite rolled their transaction back (an I/O error, disk full, an interrupt).</summary>
+    public long Reruns;
+    /// <summary>Groups that failed whole: BEGIN or COMMIT failed, or the rerun failed too.</summary>
+    public long FailedGroups;
+    /// <summary>Checkpoints the writer ran after a group.</summary>
+    public long Checkpoints;
+    /// <summary>Exceptions on the writer's thread that no failing database explains (a bug); see <see cref="FirstUnexpected"/>.</summary>
+    public long Unexpected;
+    /// <summary>The first of <see cref="Unexpected"/>.</summary>
+    public Exception? FirstUnexpected;
+}

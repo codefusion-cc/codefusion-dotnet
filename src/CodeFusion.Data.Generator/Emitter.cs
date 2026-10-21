@@ -393,8 +393,14 @@ sealed class Emitter
         switch (q.Shape)
         {
             case Shape.One or Shape.WriteOf:
-                Line("if (rows.Seen++ > 0) return rows.First; // the first row is the result");
-                if (q.Marker == Marker.Written) Line($"if (row.IsNull({q.MarkerColumn})) return rows.First = global::CodeFusion.Data.RowState.Refused;");
+                if (q.Marker == Marker.Written)
+                {
+                    // a conditional write: the first row written is the result, and a refused one only while none was
+                    // written, whichever comes first (Postgres sends the written rows first, SQLite the refused ones)
+                    Line("if (rows.Seen++ > 0 && rows.First != global::CodeFusion.Data.RowState.Refused) return rows.First;");
+                    Line($"if (row.IsNull({q.MarkerColumn})) return rows.Seen == 1 ? rows.First = global::CodeFusion.Data.RowState.Refused : rows.First;");
+                }
+                else Line("if (rows.Seen++ > 0) return rows.First; // the first row is the result");
                 Value(q, 0);
                 Line("return rows.First = 0;");
                 break;
