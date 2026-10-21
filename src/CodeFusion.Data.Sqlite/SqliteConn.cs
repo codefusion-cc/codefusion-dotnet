@@ -67,8 +67,16 @@ internal sealed unsafe class SqliteConn : IDisposable
     static int _initialized;
     static readonly Lock InitLock = new();
 
+    /// <summary>Whether SQLite's memory statistics are off: false when something in the process initialized SQLite first.</summary>
+    internal static bool MemoryStatusOff { get; private set; }
+
+    /// <summary>What the provider needs of the SQLite build it loads, by the compile options that would take it away:
+    /// JSON (lists, arrays as parameters), CTEs (pages), upserts (OrIgnore, OrUpdate), WAL (readers beside the writer),
+    /// subqueries (Any, In, navigations).</summary>
+    internal static readonly string[] Omissions = ["OMIT_JSON", "OMIT_CTE", "OMIT_UPSERT", "OMIT_WAL", "OMIT_SUBQUERY"];
+
     /// <summary>Once per process, before the first connection: where the library comes from, SQLite's memory statistics
-    /// off (a process-wide mutex on every allocation otherwise), initialized, and its version checked.</summary>
+    /// off (a process-wide mutex on every allocation otherwise), initialized, and its build checked.</summary>
     internal static void InitializeOnce()
     {
         if (Volatile.Read(ref _initialized) != 0) return;
@@ -76,14 +84,26 @@ internal sealed unsafe class SqliteConn : IDisposable
         {
             if (_initialized != 0) return;
             Sqlite3.UseAppDirectory();
-            Sqlite3.DisableMemoryStatus();
+            MemoryStatusOff = Sqlite3.DisableMemoryStatus();
             int rc = Sqlite3.Initialize();
             if (rc != Sqlite3.Ok) throw new SqliteException("sqlite3_initialize failed", rc);
-            int version = Sqlite3.LibVersionNumber();
-            if (version < Sqlite3.MinVersion)
-                throw new InvalidOperationException($"SQLite {version} is older than {Sqlite3.MinVersion}, which the generated SQL needs");
+            if (Unfit(Sqlite3.LibVersionNumber(), Sqlite3.ThreadSafe(), static o => Sqlite3.CompileOptionUsed(o) != 0) is { } why)
+                throw new InvalidOperationException(why);
             Volatile.Write(ref _initialized, 1);
         }
+    }
+
+    /// <summary>Why a SQLite of <paramref name="version"/>, <paramref name="threadSafe"/> (sqlite3_threadsafe) and the
+    /// compile options <paramref name="used"/> says it has can't serve the provider, or null when it can.</summary>
+    internal static string? Unfit(int version, int threadSafe, Func<string, bool> used)
+    {
+        if (version < Sqlite3.MinVersion) return $"SQLite {version} is older than {Sqlite3.MinVersion}, which the generated SQL needs";
+        // connections move between threads (readers, the writer, an event loop's batch) and the watchdog interrupts
+        // from its own: THREADSAFE=1 or 2
+        if (threadSafe == 0) return "SQLite was built with SQLITE_THREADSAFE=0; the provider uses connections from several threads";
+        foreach (var o in Omissions)
+            if (used(o)) return $"SQLite was built with SQLITE_{o}; the generated SQL needs what it leaves out";
+        return null;
     }
 
     public static SqliteConn Open(string path, SqliteDatabase options, bool writer)

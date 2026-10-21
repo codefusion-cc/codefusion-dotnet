@@ -73,6 +73,14 @@ internal static unsafe partial class Sqlite3
     [LibraryImport(Lib, EntryPoint = "sqlite3_initialize")]
     public static partial int Initialize();
 
+    /// <summary>0 when SQLite was built single-threaded (THREADSAFE=0): no connection may then be used from two threads.</summary>
+    [LibraryImport(Lib, EntryPoint = "sqlite3_threadsafe")]
+    public static partial int ThreadSafe();
+
+    /// <summary>1 when SQLite was built with <paramref name="name"/> (without its SQLITE_ prefix), else 0.</summary>
+    [LibraryImport(Lib, EntryPoint = "sqlite3_compileoption_used", StringMarshalling = StringMarshalling.Utf8)]
+    public static partial int CompileOptionUsed(string name);
+
     // sqlite3_config is variadic. On Apple's arm64 ABI a variadic argument goes on the stack while a fixed one goes in a
     // register, so the call is declared with eight register arguments and the value as the ninth, the first stack slot,
     // which is where the callee's va_arg reads it. Everywhere else the value goes where a second fixed argument would,

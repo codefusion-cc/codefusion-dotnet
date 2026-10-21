@@ -11,6 +11,10 @@
     <PackageId>CodeFusion.Data.Sqlite</PackageId>
     <Description>A SQLite provider for CodeFusion.Data that allocates nothing per query: direct calls into SQLite, reads on the caller's thread on reader connections that keep their WAL snapshot until a write commits, and group commit on one writer thread.</Description>
     <PackageTags>sqlite;database;zero-allocation;performance</PackageTags>
+    <!-- The native library is pinned by its content hash, not only its version: restore checks the package against
+         packages.lock.json, and in CI refuses one that differs (update the lock with a restore outside CI). -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(CI)' == 'true'">true</RestoreLockedMode>
   </PropertyGroup>
 
   <ItemGroup>
