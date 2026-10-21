@@ -92,20 +92,31 @@ internal sealed unsafe class SqliteConn : IDisposable
             MemoryStatusOff = Sqlite3.DisableMemoryStatus();
             int rc = Sqlite3.Initialize();
             if (rc != Sqlite3.Ok) throw new SqliteException("sqlite3_initialize failed", rc);
-            if (Unfit(Sqlite3.LibVersionNumber(), Sqlite3.ThreadSafe(), static o => Sqlite3.CompileOptionUsed(o) != 0) is { } why)
+            if (Unfit(Sqlite3.LibVersionNumber(), Sqlite3.SourceId(), !Sqlite3.FromAppDirectory, Sqlite3.ThreadSafe(), Sqlite3.CompileOptions()) is { } why)
                 throw new InvalidOperationException(why);
             Volatile.Write(ref _initialized, 1);
         }
     }
 
-    /// <summary>Why a SQLite of <paramref name="version"/>, <paramref name="threadSafe"/> (sqlite3_threadsafe) and the
-    /// compile options <paramref name="used"/> says it has can't serve the provider, or null when it can.</summary>
-    internal static string? Unfit(int version, int threadSafe, Func<string, bool> used)
+    /// <summary>The SQLite build this provider was tested with, which the package's native library must be
+    /// (SourceGear.sqlite3, pinned exactly in Directory.Packages.props, its file's hash checked at build): its
+    /// sqlite3_libversion_number and sqlite3_sourceid.</summary>
+    internal const int TestedVersion = 3_050_004;
+    internal const string TestedSourceId = "2025-07-30 19:33:53 4d8adfb30e03f9cf27f800a2c1ba3c48fb4ca1b08b0f5ed59a4d5ecbf45e20a3";
+
+    /// <summary>Why a SQLite of <paramref name="version"/> and <paramref name="sourceId"/>, from the package's library
+    /// (<paramref name="fromPackage"/>) or an app's own, <paramref name="threadSafe"/> (sqlite3_threadsafe) and the
+    /// compile options <paramref name="used"/> says it has (null: it can't say), can't serve the provider; null when it
+    /// can. The package's must be the build tested; an app's own build need only be new enough and have what's used.</summary>
+    internal static string? Unfit(int version, string sourceId, bool fromPackage, int threadSafe, Func<string, bool>? used)
     {
         if (version < Sqlite3.MinVersion) return $"SQLite {version} is older than {Sqlite3.MinVersion}, which the generated SQL needs";
+        if (fromPackage && (version != TestedVersion || sourceId != TestedSourceId))
+            return $"the package's SQLite is {version} from {sourceId}, not the build CodeFusion.Data.Sqlite was tested with ({TestedVersion} from {TestedSourceId})";
         // connections move between threads (readers, the writer, an event loop's batch) and the watchdog interrupts
         // from its own: THREADSAFE=1 or 2
         if (threadSafe == 0) return "SQLite was built with SQLITE_THREADSAFE=0; the provider uses connections from several threads";
+        if (used is null) return "SQLite was built with SQLITE_OMIT_COMPILEOPTION_DIAGS, so it can't say whether it has what the generated SQL needs";
         foreach (var o in Omissions)
             if (used(o)) return $"SQLite was built with SQLITE_{o}; the generated SQL needs what it leaves out";
         return null;

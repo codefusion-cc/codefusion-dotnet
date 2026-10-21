@@ -910,7 +910,7 @@ finding was refuted by breaking the code that already handled it.
 | 9 | A negative Take or Skip meant no limit | Refuted: the generated binder clamps it at 0 | `ANegativeTakeOrSkipIsNoneOrAll` red without the clamp |
 | 10 | Conditional writes gave a written row back twice when the SET broke the condition | The refused rows are read before the write; the reader takes the first written row | 5 shared `ConditionalWriteTests` on both providers, `AConditionalWritesStatementsGiveEachRowFoundOnce` |
 | 11 | The crash test left the wake-up in flight unchecked | The child waits for the parent's word after READY and stops at its first answer; every wake-up that opened is checked | `AKilledEventLoopLosesNoAnsweredWriteAndLeavesNoWakeUpHalfDone` (10 cases) |
-| 12 | The native library's origin and build weren't checked | `packages.lock.json` pins its hash (CI restores locked); the build is checked at first use | `BuildCheckTests` (13) |
+| 12 | The native library's origin and build weren't checked | Its version is pinned exactly and its package file's SHA-512 checked at build (a lock file first; second review, 5: it broke on an SDK patch); at first use the package's library must be the build tested, and any library must have what's used | `BuildCheckTests` (16) |
 | 13 | Refused writes allocated an exception each | A unique violation, busy or a timeout carries no exception; README and SECURITY.md say what the claim covers | `UniqueViolationsAllocateNothingOnceWarm` |
 | 14 | The job pool and life cycle were copied from Postgres | `JobLife` and `JobPool<T>` in CodeFusion.Data, held by both providers' jobs | `JobLifeTests` (11), the Postgres suite and its allocation tests |
 | 15 | The watchdog could interrupt the statement after the slow one | It interrupts only if the statement it timed still runs | `AFailedStatementLeavesNothingForTheWatchdogToInterrupt` |
@@ -925,7 +925,7 @@ Proven red for this round (broken on purpose, seen failing, restored):
 | a batch's jobs completed before its COMMIT | the crash test's -1 and 10 ms cases, 5 runs of 5, NORMAL and FULL |
 | no `sqlite3_threadsafe` check; `OMIT_JSON` not checked | `ASingleThreadedBuildIsRefused`; `ABuildWithoutWhatTheSqlUsesIsRefused(OMIT_JSON)` |
 | memory statistics turned on, the Apple arm64 value passed in a register, the result ignored | `MemoryStatisticsAreOff` (each) |
-| a changed hash in `packages.lock.json` | restore with `CI=true`: NU1403 |
+| a wrong pinned SHA-512 for the native package | the build: `CheckSqliteNativePackage` names both hashes |
 | a unique violation builds a `SqliteException` | `UniqueViolationsAllocateNothingOnceWarm` (720 KB more for 2,000 more refused writes) |
 | a hold stored without the + 1; a returned job's hold kept; an unheld job queued where a hold is needed | `JobLifeTests` (4, 1 and 1 tests) |
 | no `RequestBatchEnd` | `AWriteMadeAfterItsSourcesEndRanEndsInTheSameWakeUp` |

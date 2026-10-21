@@ -38,13 +38,22 @@ internal static unsafe partial class Sqlite3
     {
         try
         {
-            NativeLibrary.SetDllImportResolver(typeof(Sqlite3).Assembly, static (name, _, _) => name == Lib ? LoadFrom(AppContext.BaseDirectory) : 0);
+            NativeLibrary.SetDllImportResolver(typeof(Sqlite3).Assembly, static (name, _, _) =>
+            {
+                if (name != Lib) return 0;
+                nint own = LoadFrom(AppContext.BaseDirectory);
+                if (own != 0) FromAppDirectory = true;
+                return own;
+            });
         }
         catch (InvalidOperationException)
         {
             // the app set a resolver for this assembly itself: it decides
         }
     }
+
+    /// <summary>The library loaded is one the app ships in its own directory, not the package's (whose build is pinned).</summary>
+    internal static bool FromAppDirectory { get; private set; }
 
     // result codes
     public const int Ok = 0, Error = 1, Busy = 5, Locked = 6, NoMem = 7, ReadOnly = 8, Interrupt = 9, IoErr = 10, Corrupt = 11,
@@ -77,9 +86,34 @@ internal static unsafe partial class Sqlite3
     [LibraryImport(Lib, EntryPoint = "sqlite3_threadsafe")]
     public static partial int ThreadSafe();
 
-    /// <summary>1 when SQLite was built with <paramref name="name"/> (without its SQLITE_ prefix), else 0.</summary>
-    [LibraryImport(Lib, EntryPoint = "sqlite3_compileoption_used", StringMarshalling = StringMarshalling.Utf8)]
-    public static partial int CompileOptionUsed(string name);
+    [LibraryImport(Lib, EntryPoint = "sqlite3_sourceid")]
+    private static partial byte* SourceIdText();
+
+    /// <summary>The source the library was built from: its check-in's date and hash.</summary>
+    public static string SourceId() => Marshal.PtrToStringUTF8((nint)SourceIdText()) ?? "";
+
+    static delegate* unmanaged<byte*, int> s_compileOptionUsed;
+
+    /// <summary>Whether SQLite was built with an option (without its SQLITE_ prefix); null when the library can't say
+    /// (built with SQLITE_OMIT_COMPILEOPTION_DIAGS: no sqlite3_compileoption_used). Looked up, not imported, so such a
+    /// build is refused with a reason rather than a missing entry point.</summary>
+    public static Func<string, bool>? CompileOptions()
+    {
+        if (s_compileOptionUsed is null)
+        {
+            if (!NativeLibrary.TryLoad(Lib, typeof(Sqlite3).Assembly, null, out nint lib) || !NativeLibrary.TryGetExport(lib, "sqlite3_compileoption_used", out nint used))
+                return null;
+            s_compileOptionUsed = (delegate* unmanaged<byte*, int>)used;
+        }
+        return static name =>
+        {
+            int n = System.Text.Encoding.UTF8.GetByteCount(name);
+            Span<byte> z = n < 256 ? stackalloc byte[n + 1] : new byte[n + 1];
+            System.Text.Encoding.UTF8.GetBytes(name, z);
+            z[n] = 0;
+            fixed (byte* p = z) return s_compileOptionUsed(p) != 0;
+        };
+    }
 
     // sqlite3_config is variadic. On Apple's arm64 ABI a variadic argument goes on the stack while a fixed one goes in a
     // register, so the call is declared with eight register arguments and the value as the ninth, the first stack slot,

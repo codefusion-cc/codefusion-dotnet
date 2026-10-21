@@ -11,11 +11,34 @@ namespace CodeFusion.Data.Sqlite.Tests;
 public sealed class BuildCheckTests
 {
     const int Current = 3_050_004;
+    const string Tested = SqliteConn.TestedSourceId;
+
+    [Fact]
+    public void ThePackagesLibraryMustBeTheBuildTested()
+    {
+        string? why = SqliteConn.Unfit(Current, "2025-07-30 19:33:53 00000000", fromPackage: true, 2, _ => false);
+        Assert.NotNull(why);
+        Assert.Contains("2025-07-30 19:33:53 00000000", why, StringComparison.Ordinal);
+        Assert.NotNull(SqliteConn.Unfit(3_050_005, Tested, fromPackage: true, 2, _ => false));
+        Assert.Null(SqliteConn.Unfit(Current, Tested, fromPackage: true, 2, _ => false));
+    }
+
+    [Fact]
+    public void AnAppsOwnBuildMayBeAnotherOne() =>
+        Assert.Null(SqliteConn.Unfit(3_054_001, "2026-01-01 00:00:00 any", fromPackage: false, 2, _ => false));
+
+    [Fact]
+    public void ABuildThatCantSayItsOptionsIsRefused()
+    {
+        string? why = SqliteConn.Unfit(Current, Tested, fromPackage: false, 2, used: null);
+        Assert.NotNull(why);
+        Assert.Contains("SQLITE_OMIT_COMPILEOPTION_DIAGS", why, StringComparison.Ordinal);
+    }
 
     [Fact]
     public void ASingleThreadedBuildIsRefused()
     {
-        string? why = SqliteConn.Unfit(Current, 0, _ => false);
+        string? why = SqliteConn.Unfit(Current, Tested, fromPackage: false, 0, _ => false);
         Assert.NotNull(why);
         Assert.Contains("SQLITE_THREADSAFE=0", why, StringComparison.Ordinal);
     }
@@ -23,7 +46,7 @@ public sealed class BuildCheckTests
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
-    public void AThreadSafeBuildOfEitherModePasses(int mode) => Assert.Null(SqliteConn.Unfit(Current, mode, _ => false));
+    public void AThreadSafeBuildOfEitherModePasses(int mode) => Assert.Null(SqliteConn.Unfit(Current, Tested, fromPackage: false, mode, _ => false));
 
     [Theory]
     [InlineData("OMIT_JSON")]
@@ -33,28 +56,31 @@ public sealed class BuildCheckTests
     [InlineData("OMIT_SUBQUERY")]
     public void ABuildWithoutWhatTheSqlUsesIsRefused(string omitted)
     {
-        string? why = SqliteConn.Unfit(Current, 2, o => o == omitted);
+        string? why = SqliteConn.Unfit(Current, Tested, fromPackage: false, 2, o => o == omitted);
         Assert.NotNull(why);
         Assert.Contains("SQLITE_" + omitted, why, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void OtherOptionsDontMatter() => Assert.Null(SqliteConn.Unfit(Current, 2, o => o is "OMIT_DEPRECATED" or "OMIT_LOAD_EXTENSION"));
+    public void OtherOptionsDontMatter() => Assert.Null(SqliteConn.Unfit(Current, Tested, fromPackage: false, 2, o => o is "OMIT_DEPRECATED" or "OMIT_LOAD_EXTENSION"));
 
     [Theory]
     [InlineData(Sqlite3.MinVersion - 1, false)]
     [InlineData(Sqlite3.MinVersion, true)]
     public void TheOldestVersionIsTheOneThatOrdersInsideAggregates(int version, bool fit) =>
-        Assert.Equal(fit, SqliteConn.Unfit(version, 2, _ => false) is null);
+        Assert.Equal(fit, SqliteConn.Unfit(version, Tested, fromPackage: false, 2, _ => false) is null);
 
     [Fact]
     public void ThePackagesBuildIsFit()
     {
         SqliteConn.InitializeOnce();
         Assert.InRange(Sqlite3.ThreadSafe(), 1, 2);
-        Assert.Equal(0, Sqlite3.CompileOptionUsed("OMIT_JSON"));
-        Assert.Equal(1, Sqlite3.CompileOptionUsed("THREADSAFE=" + Sqlite3.ThreadSafe()));
-        Assert.Null(SqliteConn.Unfit(Sqlite3.LibVersionNumber(), Sqlite3.ThreadSafe(), o => Sqlite3.CompileOptionUsed(o) != 0));
+        var used = Sqlite3.CompileOptions();
+        Assert.NotNull(used);
+        Assert.False(used("OMIT_JSON"));
+        Assert.True(used("THREADSAFE=" + Sqlite3.ThreadSafe()));
+        Assert.Equal(SqliteConn.TestedSourceId, Sqlite3.SourceId());
+        Assert.Null(SqliteConn.Unfit(Sqlite3.LibVersionNumber(), Sqlite3.SourceId(), fromPackage: true, Sqlite3.ThreadSafe(), Sqlite3.CompileOptions()));
     }
 
     [Fact]
