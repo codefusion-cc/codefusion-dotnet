@@ -70,23 +70,28 @@ public sealed class CrashTests : IDisposable
 
     /// <summary>
     /// <see cref="SqliteDatabase.EventLoopBatches"/> under a kill: the child is an event loop whose every wake-up writes
-    /// ten rows, a unit of two and 20,000 more in one transaction, and answers each write the moment it completes. It is
-    /// killed 0 to 3 ms after a wake-up starts: while its writes run, while its batch commits, or as it answers. Reopened, the file has every
-    /// write that was answered (a 201 means committed), and of each wake-up all of it or none of it: nothing unanswered
-    /// is half there.
+    /// ten rows, a unit of two and 20,000 more in one transaction, and answers each write the moment it completes. After
+    /// four wake-ups it waits for the parent's word before each one, and the parent kills it 0 to 10 ms after giving it
+    /// (while the writes run, as the batch commits, or as it answers), or right at the first answer of that wake-up (-1).
+    /// Reopened, the file has every write that was answered (a 201 means committed), and of every wake-up that opened all
+    /// of it or none of it: nothing unanswered is half there.
     /// </summary>
     [Theory]
     [InlineData(SqliteSync.Normal, 0)]
     [InlineData(SqliteSync.Normal, 1)]
     [InlineData(SqliteSync.Normal, 3)]
+    [InlineData(SqliteSync.Normal, 10)]
+    [InlineData(SqliteSync.Normal, -1)]
     [InlineData(SqliteSync.Full, 0)]
     [InlineData(SqliteSync.Full, 1)]
     [InlineData(SqliteSync.Full, 3)]
+    [InlineData(SqliteSync.Full, 10)]
+    [InlineData(SqliteSync.Full, -1)]
     public async Task AKilledEventLoopLosesNoAnsweredWriteAndLeavesNoWakeUpHalfDone(SqliteSync sync, int delayMs)
     {
         string path = _db.File();
         string host = Path.GetFullPath(Path.Combine(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", "..", OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet"));
-        var start = new ProcessStartInfo(host) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        var start = new ProcessStartInfo(host) { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "CodeFusion.Data.Sqlite.CrashChild.dll"));
         start.ArgumentList.Add("batches");
         start.ArgumentList.Add(((int)sync).ToString(System.Globalization.CultureInfo.InvariantCulture));
@@ -94,8 +99,14 @@ public sealed class CrashTests : IDisposable
         using var child = Process.Start(start)!;
         var stderr = child.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
         var answered = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
-        int lastOpen = -1;
+        int lastOpen = -1, killed = -1;
         bool ready = false;
+        void Saw(string line)
+        {
+            if (line.StartsWith("ANSWERED ", StringComparison.Ordinal)) answered.Add(line["ANSWERED ".Length..]);
+            else if (line.StartsWith("OPEN ", StringComparison.Ordinal))
+                lastOpen = Math.Max(lastOpen, int.Parse(line["OPEN ".Length..], System.Globalization.CultureInfo.InvariantCulture));
+        }
         using (var wait = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken))
         {
             wait.CancelAfter(TimeSpan.FromSeconds(30));
@@ -104,18 +115,24 @@ public sealed class CrashTests : IDisposable
                 string? line;
                 while ((line = await child.StandardOutput.ReadLineAsync(wait.Token)) is not null)
                 {
-                    if (line.StartsWith("ANSWERED ", StringComparison.Ordinal)) answered.Add(line["ANSWERED ".Length..]);
-                    else if (line == "READY") ready = true;
-                    else if (line.StartsWith("OPEN ", StringComparison.Ordinal))
+                    Saw(line);
+                    if (line == "READY") ready = true;
+                    else if (ready && killed < 0 && line.StartsWith("OPEN ", StringComparison.Ordinal))
                     {
-                        lastOpen = int.Parse(line["OPEN ".Length..], System.Globalization.CultureInfo.InvariantCulture);
-                        if (ready)
-                        {
-                            // the wake-up is starting: kill it while its writes run, as it commits, or as it answers
-                            if (delayMs > 0) Thread.Sleep(delayMs);
-                            child.Kill(entireProcessTree: true);
-                            break;
-                        }
+                        // the wake-up waits for this word: from here it writes, commits and answers
+                        killed = lastOpen;
+                        await child.StandardInput.WriteLineAsync("GO");
+                        await child.StandardInput.FlushAsync(wait.Token);
+                        if (delayMs < 0) continue;
+                        if (delayMs > 0) Thread.Sleep(delayMs);
+                        child.Kill(entireProcessTree: true);
+                        break;
+                    }
+                    else if (killed >= 0 && OfWakeUp(line, killed))
+                    {
+                        // its first answer is out, and the child stopped right after it
+                        child.Kill(entireProcessTree: true);
+                        break;
                     }
                 }
             }
@@ -126,11 +143,12 @@ public sealed class CrashTests : IDisposable
             }
         }
         await child.WaitForExitAsync(TestContext.Current.CancellationToken);
-        // what it answered before the kill and still had in its output
+        // what it wrote before the kill that wasn't read yet: wake-ups that opened, writes it answered
         foreach (var line in (await child.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken)).Split('\n'))
-            if (line.StartsWith("ANSWERED ", StringComparison.Ordinal)) answered.Add(line["ANSWERED ".Length..].TrimEnd('\r'));
+            Saw(line.TrimEnd('\r'));
         Assert.True(ready, "the child ended before it was ready: " + await stderr);
-        Assert.True(lastOpen >= 4);
+        Assert.True(killed >= 4, $"the kill was meant for a wake-up after READY, not {killed}");
+        if (delayMs < 0) Assert.Contains(answered, a => OfWakeUp("ANSWERED " + a, killed));
 
         var s = _db.Open(new SqliteDatabase(path) { Synchronous = sync, Readers = 1, Migrations = Schema });
         Assert.Equal(100, Kv.Count(s, "committed-%"));
@@ -151,4 +169,9 @@ public sealed class CrashTests : IDisposable
         Assert.True(Kv.Done(Sqlite.Run<Dump>(check.Hold(), rows, default)).IsOk);
         Assert.Equal("ok", rows[0][0]);
     }
+
+    /// <summary>Whether <paramref name="line"/> answers a write of wake-up <paramref name="k"/>.</summary>
+    static bool OfWakeUp(string line, int k) =>
+        line.StartsWith("ANSWERED ", StringComparison.Ordinal) && line["ANSWERED ".Length..] is var name
+        && (name == $"pair-{k}" || name == $"big{k}" || name.StartsWith($"b{k}-", StringComparison.Ordinal));
 }
