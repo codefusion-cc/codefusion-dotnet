@@ -60,6 +60,8 @@ sealed class Compiled
     public Marker Marker;
     public int MarkerColumn = -1, CountColumn = -1;
     public bool HasSource;
+    /// <summary>The method is marked RunsAlone: its statements run apart from any group.</summary>
+    public bool RunsAlone;
     public string? ListName, CountName;
     public List<InterceptAt> Calls = new();
     public readonly List<Argument> Arguments = new();
@@ -97,6 +99,7 @@ sealed partial class Translator
         q.Shape = Known.Is(ret, K.One) ? Shape.One : Known.Is(ret, K.Many) ? Shape.Many : Known.Is(ret, K.Page) ? Shape.Page
             : Known.Is(ret, K.WriteOf) ? Shape.WriteOf : Shape.Write;
         q.Row = q.Shape == Shape.Write ? null : ret.TypeArguments[0];
+        q.RunsAlone = K.RunsAlone is { } alone && Known.Attribute(method, alone) is not null;
         var list = Known.Attribute(method, K.JsonList);
         q.ListName = list?.ConstructorArguments.FirstOrDefault().Value as string;
         q.CountName = list?.NamedArguments.FirstOrDefault(a => a.Key == "CountName").Value.Value as string;

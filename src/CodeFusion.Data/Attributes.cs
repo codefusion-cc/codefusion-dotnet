@@ -51,6 +51,15 @@ public sealed class JsonListAttribute(string name) : Attribute
 }
 
 /// <summary>
+/// On a query method: its commands run alone, on a connection of their own and each in a transaction of its own,
+/// never in a group commit or a read group. For a query slow enough to hold up the others it would be grouped with
+/// (a sign-up whose unique checks wait on locks, a report), at the cost of a round trip and a commit each. A provider
+/// that can't run them apart runs them as any other.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method, Inherited = false)]
+public sealed class RunsAloneAttribute : Attribute;
+
+/// <summary>
 /// A static method that stands for SQL inside query definitions: the generator writes <see cref="Template"/> with
 /// the arguments' SQL for <c>{0}</c>, <c>{1}</c> and so on. A hole of <c>Sql($"...")</c> calling one is its SQL, so a
 /// fragment several statements share is a template without arguments. The method's body never runs; make it throw.

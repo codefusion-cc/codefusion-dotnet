@@ -16,6 +16,8 @@ public sealed class PgCounters
     public long Groups, Grouped, GroupMax, Reruns, Refused;
     /// <summary>Reader: groups sent while an earlier one on the same connection was still being answered.</summary>
     public long Pipelined;
+    /// <summary>Commands whose statements run alone (<see cref="PgStatement.RunsAlone"/>), on the loops' own connection for them.</summary>
+    public long Alone;
     /// <summary>Writer: time from taking a group to its last commit, the most of it, and the longest a write waited in the queue.</summary>
     public long Ticks, TicksMax, WaitTicksMax;
 
@@ -37,6 +39,9 @@ public abstract class PgLoops
 {
     readonly PgSettings _settings;
     readonly PgQueue _queue;
+    /// <summary>Commands whose statements run alone, and the loop that runs them one by one, started on the first.</summary>
+    readonly PgQueue _alone;
+    int _aloneStarted;
     readonly int _maxGroup;
     readonly string _name;
     int _started;
@@ -80,11 +85,12 @@ public abstract class PgLoops
         _settings = settings;
         _maxGroup = maxGroup;
         _queue = new PgQueue(maxQueued);
+        _alone = new PgQueue(maxQueued);
         _name = name;
     }
 
     /// <summary>Commands waiting for a loop.</summary>
-    public int Queued => _queue.Count;
+    public int Queued => _queue.Count + _alone.Count;
 
     /// <summary>Starts building a command of <paramref name="statement"/>; its parameters follow, then Run.</summary>
     public PgCommand Command(PgStatement statement)
@@ -147,7 +153,11 @@ public abstract class PgLoops
 
     /// <summary>Takes no more commands (<see cref="PgStatus.Stopped"/>). Each loop runs what has queued, closes its
     /// connection and ends.</summary>
-    public void Complete() => _queue.Stop();
+    public void Complete()
+    {
+        _queue.Stop();
+        _alone.Stop();
+    }
 
     internal ValueTask<PgResult> Submit(PgJob job, PgRowHandler? handler, object? state, CancellationToken aborted) =>
         Enqueue(job, handler, state, aborted) switch
@@ -193,7 +203,19 @@ public abstract class PgLoops
         job.State = state;
         job.Aborted = aborted;
         job.Enqueued = Stopwatch.GetTimestamp();
-        switch (_queue.TryAdd(job))
+        var queue = _queue;
+        if (RunsAlone(job))
+        {
+            queue = _alone;
+            if (Volatile.Read(ref _aloneStarted) == 0 && Interlocked.CompareExchange(ref _aloneStarted, 1, 0) == 0)
+            {
+                var t = new Thread(() => Loop(_alone, 1)) { IsBackground = true, Name = $"{_name} alone" };
+                lock (_threads) _threads.Add(t);
+                t.Start();
+            }
+            Interlocked.Increment(ref Counters.Alone);
+        }
+        switch (queue.TryAdd(job))
         {
             case PgQueue.Added.Ok:
                 return Queueing.Ok;
@@ -207,14 +229,24 @@ public abstract class PgLoops
         }
     }
 
+    static bool RunsAlone(PgJob job)
+    {
+        for (int i = 0; i < job.Count; i++)
+            if (job.Statements[i].RunsAlone) return true;
+        return false;
+    }
+
     void Loop()
     {
-        if (GroupsInFlight > 1)
-        {
-            PipelinedLoop();
-            return;
-        }
-        var group = new PgJob?[_maxGroup];
+        if (GroupsInFlight > 1) PipelinedLoop();
+        else Loop(_queue, _maxGroup);
+    }
+
+    /// <summary>A loop that runs one group at a time from <paramref name="queue"/>, up to <paramref name="maxGroup"/>
+    /// commands each: the writer's group commits, and the commands that run alone (one each).</summary>
+    void Loop(PgQueue queue, int maxGroup)
+    {
+        var group = new PgJob?[maxGroup];
         var me = new PgQueue.Waiter();
         PgConnection? conn = null;
         var connects = new Reconnect(_settings);
@@ -224,7 +256,7 @@ public abstract class PgLoops
         {
             while (true)
             {
-                int n = _queue.Take(me, group, _maxGroup, out bool slept);
+                int n = queue.Take(me, group, maxGroup, out bool slept);
                 if (n == 0) return;
                 idled |= slept; // kept past a group whose commands all left before it ran
                 long taken = Stopwatch.GetTimestamp();

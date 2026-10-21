@@ -114,7 +114,8 @@ sealed class Emitter
         {
             var s = q.Statements[i];
             var types = s.Params.Select(p => "global::CodeFusion.Data.DataType." + DataType(p.Kind));
-            Line($"static readonly {_statement} {id}S{i} = {_provider}.Statement({sqlOf}{s.Name}{string.Concat(types.Select(t => ", " + t))});");
+            string made = $"{_provider}.Statement({sqlOf}{s.Name}{string.Concat(types.Select(t => ", " + t))})";
+            Line($"static readonly {_statement} {id}S{i} = {(q.RunsAlone ? $"{_provider}.Alone({made})" : made)};");
         }
 
         // the interceptor: each value the statements bind is computed first, so one that throws (a method of the

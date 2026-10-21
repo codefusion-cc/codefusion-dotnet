@@ -171,3 +171,7 @@ virtual CodeFusion.Data.Postgres.PgRowHandler.Invoke(in CodeFusion.Data.Postgres
 virtual CodeFusion.Data.Postgres.PgTransport.Started() -> void
 CodeFusion.Data.Postgres.PgCounters.Pipelined -> long
 const CodeFusion.Data.Postgres.PgReader.MaxInFlight = 2 -> int
+CodeFusion.Data.Postgres.PgCounters.Alone -> long
+CodeFusion.Data.Postgres.PgStatement.RunsAlone.get -> bool
+CodeFusion.Data.Postgres.PgStatement.RunsAlone.init -> void
+static CodeFusion.Data.Postgres.Postgres.Alone(CodeFusion.Data.Postgres.PgStatement! statement) -> CodeFusion.Data.Postgres.PgStatement!
