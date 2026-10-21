@@ -954,7 +954,10 @@ What the fixes decided:
   nondeterministic one compares the snapshot's rows otherwise than the correction compares the row written). Any of them
   casts `'CodeFusion: the Select after Then can't read <table> as the write left it ...'` to an integer, which fails
   the statement (22P02) before its write commits. The check is a few catalog lookups by index per statement, run only
-  for a Then whose Select reads a table or is corrected; PlanTests compare with the contest's statements so checked.
+  for a Then whose Select reads a table or is corrected; PlanTests compare with the contest's statements so checked,
+  catalog reads included, and `TheCheckReadsTheCatalogByItsIndexes` pins that an index serves each catalog read (with
+  sequential scans off: the planner scans a small catalog table whole, as that costs less). The triggers are looked up
+  by a scalar subquery with LIMIT 1, which the planner can't turn into a hash of the whole of pg_trigger.
 - A correction is taken also where every row found makes the same write: the same delete, which reads nothing of
   the row found, or an ignored insert of the same key.
 - The reply of a Then with a Select is the row found of the smallest key.

@@ -87,8 +87,8 @@ public sealed class PlanTests
 
     static Dictionary<string, (string Sql, DataType[] Types, string Reference, string[] ReferenceTypes)> FewerPairs => new()
     {
-        ["Favorite"] = (ConduitDb.QuerySql.Favorite, ConduitDb.QuerySql.FavoriteParameters.ToArray(), Sql.Favorite, ["int8", "text"]),
-        ["Unfavorite"] = (ConduitDb.QuerySql.Unfavorite, ConduitDb.QuerySql.UnfavoriteParameters.ToArray(), Sql.Unfavorite, ["int8", "text"]),
+        ["Favorite"] = (ConduitDb.QuerySql.Favorite, ConduitDb.QuerySql.FavoriteParameters.ToArray(), Sql.Favorite + " AND " + Guard(ConduitDb.QuerySql.Favorite), ["int8", "text"]),
+        ["Unfavorite"] = (ConduitDb.QuerySql.Unfavorite, ConduitDb.QuerySql.UnfavoriteParameters.ToArray(), Sql.Unfavorite + " AND " + Guard(ConduitDb.QuerySql.Unfavorite), ["int8", "text"]),
     };
 
     // The contest's statements with what the compiled ones do more: One reads one row (LIMIT 1); a conditional write
@@ -110,11 +110,14 @@ public sealed class PlanTests
 
     /// <summary>The contest's statement with the compiled one's check of the tables it reads (a catalog lookup by index,
     /// before the rows), and the first row found by key: what the compiled one does more after Then.</summary>
-    static string Checked(string reference, string compiled)
+    static string Checked(string reference, string compiled) => reference + " WHERE " + Guard(compiled) + " ORDER BY id LIMIT 1";
+
+    /// <summary>The check of the tables a compiled statement after Then makes, the condition of its final WHERE.</summary>
+    static string Guard(string compiled)
     {
         int start = compiled.IndexOf(" WHERE (SELECT CASE WHEN ", StringComparison.Ordinal), end = compiled.LastIndexOf(" ORDER BY ", StringComparison.Ordinal);
         Assert.True(start > 0 && end > start, compiled);
-        return reference + compiled[start..end] + " ORDER BY id LIMIT 1";
+        return compiled[(start + 7)..end];
     }
 
     static readonly System.Threading.SemaphoreSlim SeedLock = new(1, 1);
@@ -156,8 +159,8 @@ public sealed class PlanTests
         TestDb.Require();
         await EnsureSeed();
         var (sql, types, reference, referenceTypes) = FewerPairs[name];
-        // the compiled one's check reads the catalog (pg_class, pg_trigger, pg_constraint, pg_attribute) by its indexes
-        var ours = Scans(await PlanJson(sql, types.Select(TypeName).ToArray())).Where(s => !s.StartsWith("pg_", StringComparison.Ordinal)).ToList();
+        // the contest's with the compiled one's check of the catalog, which TheCheckReadsTheCatalogByItsIndexes pins
+        var ours = Scans(await PlanJson(sql, types.Select(TypeName).ToArray()));
         var theirs = Scans(await PlanJson(reference, referenceTypes));
         string both = $"{name}: the contest's reads\n{string.Join("\n", theirs)}\nthe compiled one's\n{string.Join("\n", ours)}";
         // no index or table read that theirs doesn't read (a delete may take another of their indexes, the primary key
@@ -165,6 +168,28 @@ public sealed class PlanTests
         foreach (var scan in ours) Assert.True(theirs.Any(t => Where(t) == Where(scan)), both);
         Assert.True(ours.Count <= theirs.Count, both);
         TestContext.Current.TestOutputHelper?.WriteLine(both);
+    }
+
+    /// <summary>The compiled statements that check the catalog after Then.</summary>
+    public static readonly TheoryData<string> Checking =
+        new(Pairs.Concat(FewerPairs).Where(p => p.Value.Sql.Contains(" WHERE (SELECT CASE WHEN ", StringComparison.Ordinal)).Select(p => p.Key));
+
+    [Theory]
+    [MemberData(nameof(Checking))]
+    public async Task TheCheckReadsTheCatalogByItsIndexes(string name)
+    {
+        TestDb.Require();
+        await EnsureSeed();
+        var (sql, types, _, _) = Pairs.TryGetValue(name, out var pair) ? pair : FewerPairs[name];
+        // the planner may scan a small catalog table whole, as it costs less; with that off, each read has an index that
+        // serves it, a lookup whatever the catalog's size
+        var catalog = Scans(await PlanJson(sql, types.Select(TypeName).ToArray(), "SET enable_seqscan = off")).Where(s => s.StartsWith("pg_", StringComparison.Ordinal)).ToList();
+        string all = string.Join("\n", catalog);
+        Assert.All(catalog, s => Assert.Matches(@"^pg_\w+ pg_\w+_index \| (Index Scan|Index Only Scan|Bitmap Heap Scan)$", s));
+        // the table written, its rules and triggers, the columns an insert sets; after a delete the tables it reaches
+        string[] read = name is "Unfollow" or "Unfavorite"
+            ? ["pg_attribute", "pg_class", "pg_constraint", "pg_depend", "pg_trigger"] : ["pg_attribute", "pg_class", "pg_trigger"];
+        Assert.True(read.SequenceEqual(catalog.Select(s => s[..s.IndexOf(' ', StringComparison.Ordinal)]).Distinct()), all);
     }
 
     /// <summary>A scan's relation and index, without the kind of scan.</summary>
@@ -176,8 +201,9 @@ public sealed class PlanTests
         var all = new List<string>();
         void Walk(JsonElement n)
         {
+            // a bitmap scan names its index in the node below it
             if (n.TryGetProperty("Relation Name", out var rel))
-                all.Add($"{rel.GetString()} {(n.TryGetProperty("Index Name", out var ix) ? ix.GetString() : "-")} | {n.GetProperty("Node Type").GetString()}");
+                all.Add($"{rel.GetString()} {(n.TryGetProperty("Index Name", out var ix) ? ix.GetString() : BitmapIndex(n) ?? "-")} | {n.GetProperty("Node Type").GetString()}");
             if (n.TryGetProperty("Plans", out var plans))
                 foreach (var p in plans.EnumerateArray()) Walk(p);
         }
@@ -185,6 +211,10 @@ public sealed class PlanTests
         all.Sort(StringComparer.Ordinal);
         return all;
     }
+
+    static string? BitmapIndex(JsonElement n) =>
+        n.GetProperty("Node Type").GetString() == "Bitmap Heap Scan" && n.TryGetProperty("Plans", out var below) && below[0].TryGetProperty("Index Name", out var ix)
+            ? ix.GetString() : null;
 
     /// <summary>A plan's shape.</summary>
     [Fact]
@@ -230,11 +260,11 @@ public sealed class PlanTests
     }
 
     /// <summary>The generic plan of <paramref name="sql"/>, as EXPLAIN writes it.</summary>
-    static async Task<JsonElement> PlanJson(string sql, string[] types)
+    static async Task<JsonElement> PlanJson(string sql, string[] types, params string[] settings)
     {
         await using var db = TestDb.Admin(Schema);
         await using var conn = await db.OpenConnectionAsync();
-        foreach (var set in new[] { "SET plan_cache_mode = force_generic_plan", "SET jit = off", "SET max_parallel_workers_per_gather = 0" })
+        foreach (var set in new[] { "SET plan_cache_mode = force_generic_plan", "SET jit = off", "SET max_parallel_workers_per_gather = 0" }.Concat(settings))
             await Run(conn, set);
         string name = "p" + Guid.NewGuid().ToString("N");
         await Run(conn, $"PREPARE {name}{(types.Length == 0 ? "" : "(" + string.Join(", ", types) + ")")} AS {sql}");
