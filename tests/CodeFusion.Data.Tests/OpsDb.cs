@@ -106,6 +106,14 @@ public sealed class Flaky
     public int N { get; init; }
 }
 
+/// <summary>A table whose CHECK sleeps the first time sleep_seq is used after its restart.</summary>
+[Table("sleepy")]
+public sealed class Sleepy
+{
+    public long Id { get; init; }
+    public int N { get; init; }
+}
+
 /// <summary>A table of another schema, whose name the search path's schema has too.</summary>
 [Table("items", Schema = "cfdata_ops_tenant")]
 public sealed class TenantItem
@@ -213,6 +221,7 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Table<Ruled> Ruled => Table<Ruled>();
     public Table<Parted> Parts => Table<Parted>();
     public Table<Flaky> Flakies => Table<Flaky>();
+    public Table<Sleepy> Sleepies => Table<Sleepy>();
 
     // ---------- Where ----------
 
@@ -405,6 +414,8 @@ public sealed partial class OpsDb : DataContext<Postgres>
     public Write SetPartedName(long id, Utf8 name) => Parts.Where(x => x.Id == id).Update(x => new Parted { Name = name });
 
     public Write SetFlaky(long id, int n) => Flakies.Where(f => f.Id == id).Update(f => new Flaky { N = n });
+
+    public Write SetSleepy(long id, int n) => Sleepies.Where(f => f.Id == id).Update(f => new Sleepy { N = n });
 
     /// <summary>A key whose uniqueness is checked at commit (a deferred constraint).</summary>
     public Write InsertDeferred(long id, int k) => Sql($"INSERT INTO deferred_keys (id, k) VALUES ({id}, {k})");

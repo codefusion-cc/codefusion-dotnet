@@ -64,9 +64,10 @@ public sealed class PgWriter : PgLoops
                 bool refused = error is not null && (error.SqlState == "0A000" || error.Message.Contains(Postgres.NotMergedMarker, StringComparison.Ordinal));
                 if (refused) Unmerge(statement);
                 // and a merged run that failed with no write at fault failed for the merging itself (a permission on
-                // the catalog, say): it stops merging too. Not one that another transaction failed (a deadlock, a
-                // serialization failure, a lock or statement timeout): its writes just go again
-                bool others = error is not null && (Transient(error) || error.SqlState is PgErrorCodes.LockNotAvailable or "57014");
+                // the catalog, a statement_timeout the bigger statement alone runs into): it stops merging too. Not
+                // one that another transaction failed (a deadlock, a serialization failure, a lock timeout): its
+                // writes just go again
+                bool others = error is not null && (Transient(error) || error.SqlState is PgErrorCodes.LockNotAvailable);
                 int failures = 0;
                 // rounds of at most RoundMax writes: each write's savepoint takes a subtransaction, and past 64 of them
                 // the backend's cache of them overflows, which every other session's snapshot pays for

@@ -40,6 +40,11 @@ public sealed class OpsFixture : IAsyncLifetime
         CREATE TABLE flaky (id bigint PRIMARY KEY, n int NOT NULL);
         INSERT INTO flaky VALUES (1, 0), (2, 0);
         ALTER TABLE flaky ADD CONSTRAINT flaky_once CHECK (fail_once()) NOT VALID;
+        CREATE SEQUENCE sleep_seq;
+        CREATE FUNCTION sleep_once() RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN IF nextval('sleep_seq') = 1 THEN PERFORM pg_sleep(0.6); END IF; RETURN true; END $$;
+        CREATE TABLE sleepy (id bigint PRIMARY KEY, n int NOT NULL);
+        INSERT INTO sleepy VALUES (1, 0), (2, 0);
+        ALTER TABLE sleepy ADD CONSTRAINT sleepy_once CHECK (sleep_once()) NOT VALID;
         """;
 
     /// <summary>

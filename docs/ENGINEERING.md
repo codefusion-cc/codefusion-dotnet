@@ -924,8 +924,9 @@ outcome is what running the writes one by one gives:
   the writes after it. Then `ROLLBACK TO SAVEPOINT cf` (the last write, if it failed) and `COMMIT`. Each write gets
   its own outcome and they commit together: the writes in one round trip, the commit in a second, where one
   transaction per write cost a commit each. A failed commit (a deferred constraint) committed nothing: each write runs
-  again alone. A merged run that failed with no write at fault stops merging for a while, unless another transaction
-  failed it (a deadlock, a serialization failure, a lock or statement timeout): then it just runs again. A write
+  again alone. A merged run that failed with no write at fault stops merging for a while (a statement timeout
+  included: the bigger statement's own cost), unless another transaction failed it (a deadlock, a serialization
+  failure, a lock timeout): then it just runs again. A write
   binding a statement whose Parse an earlier write of the round carries waits for that write's replies, so a failed
   Parse there goes again with it. A row locked elsewhere costs one more lock timeout, not one per write. A deadlock or serialization
   failure there rolls the transaction back: the writes before it run as a group, it runs alone, then the rest, so the
@@ -950,6 +951,7 @@ Each test was red on the code before its fix:
 | (N5) a partitioned table merged | `APartitionedTableIsNeverMerged` | [Ok, Ok] for a write in-order refuses |
 | (check H1) a failed COMMIT in the fallback read as success: every write Ok, nothing committed | `ACommitThatFailsInTheFallbackCommitsNothingAndEachWriteGetsItsOwnOutcome` (a deferred unique key) | the second insert Ok, no row committed |
 | (check L1) a deadlock or lock wait in a merged run stopped merging | `AMergedRunThatAnotherTransactionFailedRunsAgainAndStaysMerged` (a CHECK failing once with 40001) | `Unmerged` 1 |
+| (second check) a merged statement past its statement_timeout kept merging | `AMergedStatementPastItsTimeoutStopsMerging` (a CHECK that sleeps once) | `Unmerged` 0 |
 | (check L2) a failed Parse skipped a later write's Parse in the round | `AWriteWhoseStatementFailsToParseInTheFallbackLeavesTheNextWriteItsParse` | 26000 |
 | (check L3) one savepoint round for 100 writes | `AFaultyWriteInAMergedRunCostsAFewCommitsNotOnePerWrite` (rounds of 64: 3 commits) | 2 commits |
 | (N7) unmerged until a restart, and invisible | `AStatementThatStoppedMergingIsTriedMergedAgainLater`, the trigger test's `Unmerged` | 0 merged after the trigger went; 0 counted |

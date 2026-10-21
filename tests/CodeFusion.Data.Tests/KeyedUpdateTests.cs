@@ -33,7 +33,7 @@ public sealed class KeyedUpdateTests(OpsFixture fixture) : IAsyncLifetime
             "DELETE FROM audited; INSERT INTO audited SELECT i, 0 FROM generate_series(1, 5) AS g(i); " +
             "DELETE FROM ruled; INSERT INTO ruled SELECT i, 0 FROM generate_series(1, 5) AS g(i); TRUNCATE audit_log; " +
             "DELETE FROM counters WHERE id BETWEEN 800 AND 899; INSERT INTO counters (id, n) SELECT i, 0 FROM generate_series(800, 899) AS g(i); " +
-            "DELETE FROM parted; INSERT INTO parted VALUES (1, 'part-1'), (2, 'part-2'); ALTER SEQUENCE once_seq RESTART; TRUNCATE deferred_keys");
+            "DELETE FROM parted; INSERT INTO parted VALUES (1, 'part-1'), (2, 'part-2'); ALTER SEQUENCE once_seq RESTART; ALTER SEQUENCE sleep_seq RESTART; TRUNCATE deferred_keys");
     }
 
     public ValueTask DisposeAsync() => default;
@@ -383,6 +383,37 @@ public sealed class KeyedUpdateTests(OpsFixture fixture) : IAsyncLifetime
         Assert.Equal(2, Merged - merged);
         Assert.Equal(0, fixture.Writes.Writer.Counters.Unmerged - unmerged);
         Assert.Equal((5, 6), ((int)(await Scalar("SELECT n FROM flaky WHERE id = 1"))!, (int)(await Scalar("SELECT n FROM flaky WHERE id = 2"))!));
+    }
+
+    [Fact]
+    public async Task AMergedStatementPastItsTimeoutStopsMerging()
+    {
+        // the merged update runs into statement_timeout (its first row's CHECK sleeps) where each write alone doesn't:
+        // that is the merge's own cost, so the statement goes unmerged for a while and is counted
+        TestDb.Require();
+        var settings = PgSettings.Parse(TestDb.ConnectionString!).Set("search_path", "cfdata_ops_w").Set("statement_timeout", "300ms");
+        var source = new PostgresDatabase(settings).Open(1, 1);
+        try
+        {
+            var db = source.CreateContext<OpsDb>();
+            db.Bind(_response);
+            var counters = source.Writer.Counters;
+            var pause = Run(db.Pause());
+            await Task.Delay(30);
+            var writes = new[] { Run(db.SetSleepy(1, 5)), Run(db.SetSleepy(2, 6)) };
+            Assert.True((await pause).IsOk);
+            var results = await Task.WhenAll(writes);
+            Assert.All(results, r => Assert.Equal(DataStatus.Ok, r.Status));
+            // the writes complete before their loop has decided about the statement: a write after them waits for it
+            Assert.True((await Run(db.SetCount(719, 1))).IsOk);
+            Assert.Equal(2, counters.Merged);
+            Assert.Equal(1, counters.Unmerged);
+            Assert.Equal((5, 6), ((int)(await Scalar("SELECT n FROM sleepy WHERE id = 1"))!, (int)(await Scalar("SELECT n FROM sleepy WHERE id = 2"))!));
+        }
+        finally
+        {
+            LoopChecks.Stop(source);
+        }
     }
 
     [Fact]

@@ -19,7 +19,7 @@ gets its own outcome, only a write at fault gets an error, and the rest commit t
 unique index on a column the update sets never takes merged updates: a check of the table runs first, as its own
 statement in the same transaction, and the update is skipped. Such a statement goes unmerged for five minutes, then
 is tried again; `PgCounters.Unmerged` counts each time. So does one whose merged run failed with no write at fault,
-unless another transaction failed it (a deadlock, a serialization failure, a lock or statement timeout).
+unless another transaction failed it (a deadlock, a serialization failure, a lock timeout).
 
 A read loop keeps up to two groups in flight on its connection (`PgReader.MaxInFlight`): it sends what has queued
 while Postgres still answers the group before, so the backend never sits a round trip without work. A burst that
