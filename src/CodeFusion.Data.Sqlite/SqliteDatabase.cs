@@ -135,6 +135,7 @@ public sealed class SqliteDatabase
             var writer = new SqliteWriter(writerConn, this, System.IO.Path.GetFileName(Path));
             readers = Exclusive ? new SqliteReaders(writerConn, writer.Clock) : new SqliteReaders(Path, this, writer.Clock);
             writer.Readers = readers;
+            readers.Writer = writer;
             var source = new SqliteDataSource(this, readers, writer) { Errors = Errors, OnFailure = OnFailure };
             writer.Start();
             source.StartWatchdog();

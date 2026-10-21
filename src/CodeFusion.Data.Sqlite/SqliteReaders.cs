@@ -190,6 +190,9 @@ internal sealed class SqliteReaders : IDisposable
 
     internal SqliteConn[] Connections => _conns;
 
+    /// <summary>The writer, whose event-loop batch a read on its loop commits first (Exclusive mode).</summary>
+    internal SqliteWriter? Writer;
+
     /// <summary>Exclusive mode: the writer takes the connection for a group, waiting for a read running on it, stopped or
     /// not (the writer commits what has queued after a stop).</summary>
     internal void Enter()
@@ -247,6 +250,20 @@ internal sealed class SqliteReaders : IDisposable
         }
     }
 
+    /// <summary>Exclusive mode: takes the connection as <see cref="Enter"/> does, if it is free within
+    /// <paramref name="wait"/>; false if not (a loop's batch holds it). For closing, which must not wait forever.</summary>
+    internal bool TryEnter(TimeSpan wait)
+    {
+        long until = System.Diagnostics.Stopwatch.GetTimestamp() + (long)(wait.TotalSeconds * System.Diagnostics.Stopwatch.Frequency);
+        SpinWait spin = default;
+        while (Interlocked.CompareExchange(ref _taken[0], 1, 0) != 0)
+        {
+            if (System.Diagnostics.Stopwatch.GetTimestamp() >= until) return false;
+            spin.SpinOnce();
+        }
+        return true;
+    }
+
     /// <summary>Exclusive mode: the writer gives the connection back, before it completes the group's writes.</summary>
     internal void Exit() => Volatile.Write(ref _taken[0], 0);
 
@@ -288,8 +305,10 @@ internal sealed class SqliteReaders : IDisposable
     public DataResult Run<TReader>(SqliteJob job, object? state, CancellationToken aborted) where TReader : IRowReader
     {
         if (aborted.IsCancellationRequested) return DataResult.Of(DataStatus.Canceled);
-        // the thread whose event-loop batch holds the connection reads in the batch's transaction, which it holds already
+        // the thread whose event-loop batch holds the connection reads on it: after the batch's writes so far are
+        // committed, so a read never sees, and never answers with, a write whose COMMIT could still fail
         bool own = _shared && Volatile.Read(ref _owner) == Environment.CurrentManagedThreadId;
+        if (own) Writer!.CommitBatch();
         int i = own ? 0 : Take();
         if (i < 0) return DataResult.Of(DataStatus.Stopped);
         var conn = _conns[i];
@@ -299,7 +318,7 @@ internal sealed class SqliteReaders : IDisposable
             long now = Volatile.Read(ref _clock.Seq);
             if (_shared)
             {
-                // in its own event-loop batch, a read keeps the batch's transaction and its time
+                // in its own event-loop batch the connection is between transactions: the read runs in its own
                 if (!own)
                 {
                     conn.ClearClock();
@@ -315,7 +334,19 @@ internal sealed class SqliteReaders : IDisposable
                 if (b != Sqlite3.Ok) return SqliteRun.Failed(conn, b);
                 _snapshot[i] = now; // the snapshot itself is taken at the first read: as new as this, or newer
             }
-            int rc = SqliteRun.Steps<TReader>(conn, job, state, save: false, out int rows, out long value, out var failure);
+            int rc, rows;
+            long value;
+            Exception? failure;
+            try
+            {
+                rc = SqliteRun.Steps<TReader>(conn, job, state, save: false, out rows, out value, out failure);
+            }
+            catch (Exception e) when (e is SqliteException or InvalidOperationException)
+            {
+                // a statement that can't be prepared, or bound with the wrong parameters: this read fails
+                if (!_shared && Sqlite3.GetAutocommit(conn.Db) != 0) _snapshot[i] = -1;
+                return new DataResult(DataStatus.Failed, 0, 0, e);
+            }
             if (rc != Sqlite3.Ok)
             {
                 if (!_shared && Sqlite3.GetAutocommit(conn.Db) != 0) _snapshot[i] = -1; // the error ended the transaction
@@ -357,12 +388,18 @@ internal sealed class SqliteReaders : IDisposable
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
+        if (_shared)
+        {
+            // the writer's connection, which it closes after its last group: only the read running is waited for, and a
+            // loop's batch holding it isn't waited for long (its end closes the connection then)
+            if (TryEnter(TimeSpan.FromSeconds(2))) Exit();
+            return;
+        }
         for (int i = 0; i < _conns.Length; i++)
         {
             SpinWait spin = default;
             while (Interlocked.CompareExchange(ref _taken[i * Stride], 1, 0) != 0) spin.SpinOnce();
-            if (_shared) Volatile.Write(ref _taken[0], 0); // the writer's: it closes it after its last group
-            else _conns[i].Dispose();
+            _conns[i].Dispose();
         }
     }
 }

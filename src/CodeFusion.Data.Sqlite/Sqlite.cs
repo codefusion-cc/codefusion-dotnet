@@ -55,9 +55,14 @@ public readonly struct Sqlite : IDataProvider<Sqlite, SqliteStatement, SqliteCom
         var job = Claim(command);
         if (command.Owner is SqliteReaders readers)
         {
-            var result = readers.Run<TReader>(job, state, aborted);
-            job.Return();
-            return new ValueTask<DataResult>(result);
+            try
+            {
+                return new ValueTask<DataResult>(readers.Run<TReader>(job, state, aborted));
+            }
+            finally
+            {
+                job.Return(); // whatever happened, the job goes back
+            }
         }
         return ((SqliteWriter)command.Owner!).Submit<TReader>(job, state, aborted);
     }

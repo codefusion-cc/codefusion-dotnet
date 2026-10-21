@@ -228,11 +228,14 @@ internal sealed unsafe class SqliteConn : IDisposable
     /// <summary>The job ended.</summary>
     public void Ended() => Volatile.Write(ref _started, 0);
 
-    /// <summary>Interrupts the running job if it started more than <paramref name="limit"/> ticks before <paramref name="now"/>.</summary>
+    /// <summary>Interrupts the running job if it started more than <paramref name="limit"/> ticks before <paramref name="now"/>:
+    /// the job it timed, if that is still the one running (its start, a timestamp, is the job's mark). An interrupt that
+    /// finds no statement running does nothing, and every path that ends a job clears its start.</summary>
     public bool InterruptIfOver(long now, long limit)
     {
         long started = Volatile.Read(ref _started);
         if (started == 0 || now - started <= limit || _db == 0) return false;
+        if (Volatile.Read(ref _started) != started) return false; // that job ended; another may have begun
         Sqlite3.InterruptRunning(_db);
         return true;
     }
