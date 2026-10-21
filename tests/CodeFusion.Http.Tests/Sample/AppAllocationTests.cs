@@ -111,7 +111,7 @@ public class AppAllocationTests(ITestOutputHelper output)
         _ => Request("GET", "/api/articles/a").Replace("Token ey", "Token xy", StringComparison.Ordinal),
     };
 
-    [Theory(Timeout = 120_000)]
+    [Theory(Timeout = 300_000)] // a loaded machine stretches each connection's 190,000 requests to minutes
     [MemberData(nameof(Cases))]
     public async Task KeepAliveRequestsAllocateNothing(string name, int connections, HttpTransport transport)
     {
@@ -140,28 +140,13 @@ public class AppAllocationTests(ITestOutputHelper output)
             responseLength[i] = AllocationTests.FirstResponseLength(sockets[i], request);
         }
 
-        const int warm = 20_000, measured = 50_000;
-        AllocationTests.RunClients(sockets, request, responseLength, warm).Go();
-        Thread.Sleep(200); // let tiered compilation's background work settle
-        AllocationTests.RunClients(sockets, request, responseLength, warm).Go();
-        // up to three windows, keeping the least: something the requests allocate shows in every window, while a
-        // one-time growth of the runtime's own buffers (the socket engine's event array, seen once on CI) shows in one
-        double perRequest = double.MaxValue;
-        for (int window = 0; window < 3 && perRequest >= 0.5; window++)
+        try
         {
-            var clients = AllocationTests.RunClients(sockets, request, responseLength, measured);
-            GC.Collect();
-            using var ticks = new AllocationTests.AllocationTicks();
-            long before = GC.GetTotalAllocatedBytes(precise: true);
-            clients.Go();
-            long allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
-            ticks.Dispose();
-            double inWindow = (double)allocated / (measured * connections);
-            output.WriteLine($"{name}, {connections} connection(s), {transport}, window {window + 1}: {allocated} bytes over {measured * connections} requests: {inWindow:F3} B/request");
-            foreach (var g in ticks.Types.GroupBy(t => t).OrderByDescending(g => g.Count())) output.WriteLine($"  {g.Count(),4} samples: {g.Key}");
-            perRequest = Math.Min(perRequest, inWindow);
+            AllocationTests.AssertKeepAliveAllocatesNothing(output, $"{name}, {connections} connection(s), {transport}, ", sockets, request, responseLength);
         }
-        foreach (var s in sockets) s.Dispose();
-        Assert.True(perRequest < 0.5, $"{perRequest:F3} bytes per request");
+        finally
+        {
+            foreach (var s in sockets) s.Dispose();
+        }
     }
 }

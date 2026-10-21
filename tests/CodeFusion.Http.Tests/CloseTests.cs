@@ -24,6 +24,24 @@ public sealed class CloseTests
 
     const string Get = "GET /x HTTP/1.1\r\nHost: x\r\n\r\n";
 
+    // A timeout closes with a FIN, as the event loops always did. On Sockets the heartbeat closed a socket with the
+    // run's zero-byte receive pending, which .NET closes with a reset: a client whose connect completed after the
+    // timeout (a loaded CI runner) failed in the connect itself.
+    [Theory(Timeout = 20_000)]
+    [InlineData(false)] // a new connection that sends nothing
+    [InlineData(true)]  // a kept-alive connection waiting for its next request
+    public async Task ATimeoutClosesWithAFin(bool afterARequest)
+    {
+        await using var t = TestServer.Start(TestServer.Echo, o =>
+        {
+            o.RequestTimeout = TimeSpan.FromMilliseconds(300);
+            o.KeepAliveTimeout = TimeSpan.FromMilliseconds(300);
+        });
+        using Client c = afterARequest ? t.ConnectAndSend(Get) : await t.ConnectAsync();
+        if (afterARequest) Assert.Equal(200, (await c.ReadAsync()).Status);
+        Assert.True(await c.EndsWithFinAsync(), "a reset, not a FIN, at the timeout");
+    }
+
     // A FIN cancels Aborted, as in Kestrel, so work a client (or a proxy whose client) left stops; the answer still goes
     // out if the handler finishes anyway, to a client that may only have half-closed.
     [Fact(Timeout = 20_000)]

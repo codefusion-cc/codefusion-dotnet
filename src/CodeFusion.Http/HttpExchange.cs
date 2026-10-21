@@ -1341,7 +1341,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         long d = Volatile.Read(ref _deadline);
         if (d <= 0 || (d > now && !(stopping && _idleWait))) return;
         if (Interlocked.CompareExchange(ref _deadline, -1, d) != d) return;
-        s?.Dispose();
+        CloseWithFin(s);
         Kick();
     }
 
@@ -1349,8 +1349,19 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     /// wakes the run, which finds it closed.</summary>
     internal void Close()
     {
-        Volatile.Read(ref _socket)?.Dispose();
+        CloseWithFin(Volatile.Read(ref _socket));
         Kick();
+    }
+
+    /// <summary>.NET closes a socket with a receive pending (the run's zero-byte watch, off a loop) with a reset,
+    /// unless its send side was shut down first: a client whose connect completed after that close failed in the
+    /// connect itself.</summary>
+    static void CloseWithFin(Socket? s)
+    {
+        if (s is null) return;
+        try { s.Shutdown(SocketShutdown.Send); }
+        catch (Exception e) when (e is SocketException or ObjectDisposedException) { }
+        s.Dispose();
     }
 
     /// <summary>Shutdown's last step: closes the socket whatever the connection is doing, with a reset, so the kernel
