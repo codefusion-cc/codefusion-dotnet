@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using CodeFusion.Data.Sqlite;
 using Xunit;
@@ -108,6 +109,58 @@ public sealed class ProviderAllocationTests : IDisposable
             twice = Math.Min(twice, await Taken(s, 4_000));
         }
         Assert.True(twice - once < 400, $"{once} B for 2,000 refused writes, {twice} B for 4,000");
+    }
+
+    // ---------- waiting for the connection ----------
+
+    /// <summary>A loop's batch holds the Exclusive connection for its whole wake-up. A write off the loop (the writer
+    /// thread's) and a read on another thread wait for it, parked: measured over the whole process, as the CPU the
+    /// process uses while they wait.</summary>
+    [Fact(Timeout = 30_000)]
+    public async Task NothingSpinsWhileALoopsBatchHoldsTheConnection()
+    {
+        var s = _db.Open(_db.Database(exclusive: true, batches: true));
+        Assert.True((await Kv.Write(s, "k", 1)).IsOk);
+        using var loop = new TestLoop(s);
+        using var holding = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        ValueTask<DataResult> batched = default;
+        var wakeUp = loop.WakeUp(() =>
+        {
+            batched = Kv.Write(s, "batched", 1);
+            holding.Set();
+            release.Wait();
+        });
+        holding.Wait(TestContext.Current.CancellationToken);
+        // what the process uses anyway (other tests' sources, the GC, the JIT), then with the two waiting
+        TimeSpan cpu = Cpu();
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+        double idle = (Cpu() - cpu).TotalMilliseconds;
+        var queued = Kv.Write(s, "queued", 2).AsTask();
+        var read = Task.Run(() => Kv.Read(s, "k"), TestContext.Current.CancellationToken);
+        await Task.Delay(100, TestContext.Current.CancellationToken); // both are waiting now
+        cpu = Cpu();
+        var wall = Stopwatch.StartNew();
+        await Task.Delay(500, TestContext.Current.CancellationToken);
+        double used = (Cpu() - cpu).TotalMilliseconds;
+        long waited = wall.ElapsedMilliseconds;
+        Assert.False(queued.IsCompleted || read.IsCompleted, "nothing waited for the batch");
+        var woken = Stopwatch.StartNew();
+        release.Set();
+        await wakeUp;
+        Assert.True((await batched).IsOk);
+        Assert.True((await queued).IsOk);
+        Assert.Equal(1, (await read).Rows);
+        // two spinning threads would use two cores' worth, about 1,000 ms
+        Assert.True(used - idle < 300, $"{used:F0} ms of CPU in {waited} ms while two threads waited for the connection, {idle:F0} ms without them");
+        // woken by the batch's end, not found by a parked thread's own second look
+        Assert.True(woken.ElapsedMilliseconds < 200, $"the waiters took {woken.ElapsedMilliseconds} ms after the batch ended");
+    }
+
+    static TimeSpan Cpu()
+    {
+        using var me = Process.GetCurrentProcess();
+        return me.TotalProcessorTime;
     }
 
     // ---------- event-loop batches ----------

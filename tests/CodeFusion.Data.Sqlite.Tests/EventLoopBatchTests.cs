@@ -25,6 +25,31 @@ public sealed class EventLoopBatchTests : IDisposable
     SqliteDataSource Open() => _db.Open(_db.Database(exclusive: true, batches: true));
 
     [Fact(Timeout = 30_000)]
+    public async Task AWriteMadeAfterItsSourcesEndRanEndsInTheSameWakeUp()
+    {
+        var a = Open();
+        var b = _db.Open(_db.Database("b.db", exclusive: true, batches: true));
+        using var loop = new TestLoop(a, b); // a's end runs before b's
+        ValueTask<DataResult> late = default;
+        bool wrote = false;
+        await loop.WakeUp(() =>
+        {
+            var first = Kv.Write(b, "first", 1).GetAwaiter();
+            // b's end completes it, after a's end ran: its continuation's write opens a batch on a
+            first.OnCompleted(() =>
+            {
+                Assert.True(first.GetResult().IsOk);
+                late = Kv.Write(a, "late", 2);
+                wrote = true;
+            });
+        });
+        Assert.True(wrote);
+        Assert.True(late.IsCompleted, "the write waits for the loop's next wake-up, which may never come");
+        Assert.True((await late).IsOk);
+        Assert.Equal(1, Kv.Read(a, "late").Rows);
+    }
+
+    [Fact(Timeout = 30_000)]
     public async Task AWakeUpsWritesCommitTogetherAndCompleteOnlyAfterTheCommit()
     {
         var s = Open();
@@ -246,7 +271,8 @@ public sealed class TestLoop : IDisposable
     readonly BlockingCollection<(Action Handlers, TaskCompletionSource Done)> _wakeUps = [];
     readonly Thread _thread;
 
-    public TestLoop(SqliteDataSource source)
+    /// <summary>A loop whose batch actions are <paramref name="sources"/>' ends, in that order.</summary>
+    public TestLoop(params SqliteDataSource[] sources)
     {
         _thread = new Thread(() =>
         {
@@ -256,7 +282,13 @@ public sealed class TestLoop : IDisposable
                 try
                 {
                     handlers();
-                    source.EndEventLoopBatch(0);
+                    // as the transport does: the actions, again while something asked for another end, 8 rounds at most
+                    for (int round = 0; round < 8; round++)
+                    {
+                        _ = EventLoopThread.TakeBatchEndRequest();
+                        foreach (var source in sources) source.EndEventLoopBatch(0);
+                        if (!EventLoopThread.BatchEndRequested) break;
+                    }
                     done.SetResult();
                 }
                 catch (Exception e)
@@ -268,7 +300,7 @@ public sealed class TestLoop : IDisposable
         _thread.Start();
     }
 
-    /// <summary>Runs <paramref name="handlers"/> on the loop, then the batch's end; done when both are.</summary>
+    /// <summary>Runs <paramref name="handlers"/> on the loop, then the batch's ends; done when they are.</summary>
     public Task WakeUp(Action handlers)
     {
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

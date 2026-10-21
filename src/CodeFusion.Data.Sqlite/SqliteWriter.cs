@@ -468,6 +468,9 @@ public sealed unsafe class SqliteWriter
                 return false;
             }
             Readers.Owner = me;
+            // the loop runs its batch actions once more for it: a batch opened after this source's end ran in this
+            // wake-up (by another source's completions, or a handler resumed as answers go out) ends in it too
+            EventLoopThread.RequestBatchEnd();
         }
         job.Queued();
         if (_batchCount == _batch.Length)
