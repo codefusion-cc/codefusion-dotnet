@@ -89,6 +89,20 @@ public abstract class PgLoops
         _queue = new PgQueue(maxQueued);
         _maxQueued = maxQueued;
         _name = name;
+        Reserve(maxQueued); // the jobs its queue can hold; its loops' groups add theirs as they start
+    }
+
+    int _reserved;
+
+    /// <summary>Room in the job pool for what these loops can hold at once, given back when they complete.</summary>
+    void Reserve(int jobs)
+    {
+        lock (_threads)
+        {
+            if (_completed) return;
+            _reserved += jobs;
+        }
+        PgJob.Reserve(jobs);
     }
 
     /// <summary>Commands waiting for a loop.</summary>
@@ -108,6 +122,7 @@ public abstract class PgLoops
         for (int i = 0; i < loops; i++)
         {
             int n = Interlocked.Increment(ref _started);
+            Reserve(GroupsInFlight * _maxGroup);
             var t = new Thread(Loop) { IsBackground = true, Name = $"{_name} {n}" };
             lock (_threads) _threads.Add(t);
             t.Start();
@@ -158,11 +173,15 @@ public abstract class PgLoops
     public void Complete()
     {
         _queue.Stop();
+        int reserved;
         lock (_threads)
         {
             _completed = true;
             _alone?.Stop();
+            reserved = _reserved;
+            _reserved = 0;
         }
+        PgJob.Reserve(-reserved);
     }
 
     internal ValueTask<PgResult> Submit(PgJob job, PgRowHandler? handler, object? state, CancellationToken aborted) =>
@@ -239,6 +258,11 @@ public abstract class PgLoops
             var queue = new PgQueue(_maxQueued);
             if (_completed) queue.Stop();
             else
+            {
+                _reserved += _maxQueued;
+                PgJob.Reserve(_maxQueued);
+            }
+            if (!_completed)
                 for (int i = 0; i < Math.Max(1, _settings.AloneConnections); i++)
                 {
                     var t = new Thread(() => Loop(queue, 1)) { IsBackground = true, Name = $"{_name} alone {i}" };

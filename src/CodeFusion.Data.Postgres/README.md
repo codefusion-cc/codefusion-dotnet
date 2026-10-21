@@ -59,6 +59,12 @@ added. The task completes on the loop's thread, so continue quickly and never bl
 and 4,000 writes from 8 callers after warm-up, against a real Postgres 18: about 4 KB in all, which is the test's own
 8 tasks, or 0.17 B per operation.
 
+What makes that possible is a pool of commands (jobs), and its memory is bounded. It keeps at most as many jobs as
+the started readers and writers can hold at once (their queues and their groups in flight; given back when they
+complete), and never more than were ever out together, about a kilobyte each. Their buffers grown past 4 KB stay
+only while all of them together fit 16 MB; past that, a returned job's buffers shrink back, and a buffer past 64 KB is
+never kept. Each thread keeps up to 32 jobs in front of the shared pool, and gives them back when it ends.
+
 Against Npgsql 10 as the contest server used it before (BenchmarkDotNet short run, Postgres 18 on the same Apple
 M-series Mac, 16 read loops and 2 writers for both, rows read as bytes the way a JSON writer reads them). Client CPU
 is the benchmark process's over its operations; Postgres's own CPU is not in it.

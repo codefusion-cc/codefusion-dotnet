@@ -144,9 +144,13 @@ public sealed class PgAllocationTests
     {
         Require();
         Assert.SkipWhen(Debug(), "Debug builds make every async method's state machine a class: run in Release");
-        // TechEmpower's queries test with each request's reads started together: 512 times 20 in flight at once
+        // TechEmpower's queries test with each request's reads started together: 512 times 20 in flight at once. The
+        // threads' job caches are off: which jobs a burst finds in them depends on which loop thread ran which
+        // continuation, so with them on a burst could make a few jobs the one before it left in another cache
         var reader = new PgReader(Settings());
         reader.Start(4);
+        bool caches = PgJob.UseThreadCaches;
+        PgJob.UseThreadCaches = false;
         try
         {
             var pending = new ValueTask<PgResult>[512 * 20];
@@ -165,7 +169,58 @@ public sealed class PgAllocationTests
         }
         finally
         {
+            PgJob.UseThreadCaches = caches;
             LoopChecks.Stop(reader);
         }
+    }
+
+    static readonly PgStatement Length = new("SELECT length($1::text)::int8", PgType.Text);
+
+    [Fact(Timeout = 120_000)]
+    public async Task APoolFilledByLargeCommandsKeepsAtMostItsByteBudget()
+    {
+        Require();
+        var reader = new PgReader(Settings());
+        reader.Start(4);
+        try
+        {
+            string big = new('x', 20_000);
+            Assert.Equal(20_000, (await reader.Command(Length).Text(big).Run(First, null)).Value);
+            long before = GC.GetTotalMemory(forceFullCollection: true);
+            // 4,096 commands of 20 KB each out at once: their buffers grow to 32 KB, 128 MB, all back in the pool afterwards
+            long sum = await Task.Run(async () =>
+            {
+                var pending = new ValueTask<PgResult>[4096];
+                for (int i = 0; i < pending.Length; i++) pending[i] = reader.Command(Length).Text(big).Run(First, null);
+                long s = 0;
+                for (int i = 0; i < pending.Length; i++) s += (await pending[i].ConfigureAwait(false)).Value;
+                return s;
+            });
+            Assert.Equal(4096L * 20_000, sum);
+            long kept = GC.GetTotalMemory(forceFullCollection: true) - before;
+            // the grown buffers' budget (16 MB), a kilobyte or so per pooled job, what the trimmed ones got, and slack
+            Assert.True(kept < 64 << 20, $"{kept >> 20} MB kept after the burst");
+            Assert.InRange(PgJob.GrownKept, 0, 16 << 20);
+        }
+        finally
+        {
+            LoopChecks.Stop(reader);
+        }
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task ThePoolHasRoomForWhatTheLoopsCanHoldAndGivesItBackWhenTheyStop()
+    {
+        Require();
+        int capacity = PgJob.Capacity;
+        var writer = new PgWriter(WriterSettings(TimeSpan.FromSeconds(2)), 64);
+        Assert.Equal(capacity + 64, PgJob.Capacity); // its queue
+        writer.Start(2);
+        Assert.Equal(capacity + 64 + 2 * PgWriter.MaxGroup, PgJob.Capacity); // and each loop's group
+        var writes = Enumerable.Range(0, 64).Select(i => writer.Command(Times10).Int8(i).Run(First, null).AsTask()).ToArray();
+        Assert.Equal(Enumerable.Range(0, 64).Select(i => i * 10L), (await Task.WhenAll(writes)).Select(r => r.Value));
+        LoopChecks.Stop(writer);
+        Assert.Equal(capacity, PgJob.Capacity);
+        Assert.InRange(PgJob.Pooled, 0, capacity);
     }
 }
