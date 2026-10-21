@@ -386,6 +386,9 @@ internal sealed class SqliteReaders : IDisposable
     }
 
 #if DEBUG
+    /// <summary>Debug, tests: runs on the connection when a read on its batch's loop failed, before it is checked.</summary>
+    internal static Action<SqliteConn>? OwnReadFailed;
+
     /// <summary>Debug, tests: runs right after the connection is given back (<see cref="Exit"/>).</summary>
     internal static Action? AfterExit;
     /// <summary>Debug, tests: runs while a read that took the connection after the stop still holds it.</summary>
@@ -469,12 +472,15 @@ internal sealed class SqliteReaders : IDisposable
             {
                 // a statement that can't be prepared, or bound with the wrong parameters: this read fails
                 if (!_shared && Sqlite3.GetAutocommit(conn.Db) != 0) _snapshot[i] = -1;
+                if (own) CheckAfterOwnRead(conn);
                 return new DataResult(DataStatus.Failed, 0, 0, e);
             }
             if (rc != Sqlite3.Ok)
             {
                 if (!_shared && Sqlite3.GetAutocommit(conn.Db) != 0) _snapshot[i] = -1; // the error ended the transaction
-                return SqliteRun.Failed(conn, rc, rows);
+                var failed = SqliteRun.Failed(conn, rc, rows);
+                if (own) CheckAfterOwnRead(conn);
+                return failed;
             }
             return failure is null ? new DataResult(DataStatus.Ok, rows, value) : new DataResult(DataStatus.ReaderFailed, rows, value, failure);
         }
@@ -491,6 +497,16 @@ internal sealed class SqliteReaders : IDisposable
                 }
             }
         }
+    }
+
+    /// <summary>A read on its batch's loop failed inside the batch's transaction: SQLite may have rolled that back, so the
+    /// batch checks before anything else runs in it.</summary>
+    void CheckAfterOwnRead(SqliteConn conn)
+    {
+#if DEBUG
+        OwnReadFailed?.Invoke(conn);
+#endif
+        Writer!.CheckBatchTransaction();
     }
 
     /// <summary>Ends the read transactions of idle connections whose snapshot is older than the last commit, so they

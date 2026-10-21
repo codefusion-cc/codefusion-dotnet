@@ -70,14 +70,16 @@ public sealed class DurabilityTests : IDisposable
         var s = _db.Open(_db.Database(exclusive: true, batches: true));
         Failing.Register(s.Writer.Connection.Db);
         using var loop = new TestLoop(s);
-        ValueTask<DataResult> a = default, read = default;
+        ValueTask<DataResult> a = default, read = default, b = default;
         await loop.WakeUp(() =>
         {
             a = Kv.Write(s, "a", 1);
-            read = Sqlite.Run<Value>(s.Read(Statement("SELECT cf_nomem()")).Hold(), null, default);
+            // reads no table the batch wrote, so it runs in the batch's transaction outside it, and rolls it back
+            read = Sqlite.Run<Value>(s.Read(Statement("SELECT cf_ioerr()")).Hold(), null, default);
+            b = Kv.Write(s, "b", 2);
         });
         Assert.False((await read).IsOk);
-        await AnsweredAsStored(s, ("a", a));
+        await AnsweredAsStored(s, ("a", a), ("b", b));
     }
 
     // ---------- 2: the transaction is rolled back twice ----------
@@ -356,15 +358,20 @@ static unsafe class Failing
 
     public static void Register(nint db)
     {
-        fixed (byte* nomem = "cf_nomem\0"u8, flaky = "cf_flaky\0"u8)
+        fixed (byte* nomem = "cf_nomem\0"u8, flaky = "cf_flaky\0"u8, ioerr = "cf_ioerr\0"u8)
         {
             Assert.Equal(0, Sqlite3.CreateFunction(db, nomem, 0, Sqlite3.Utf8, 0, &NoMem, 0, 0, 0));
+            Assert.Equal(0, Sqlite3.CreateFunction(db, ioerr, 0, Sqlite3.Utf8, 0, &IoErr, 0, 0, 0));
             Assert.Equal(0, Sqlite3.CreateFunction(db, flaky, 0, Sqlite3.Utf8, 0, &Flaky, 0, 0, 0));
         }
     }
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static void NoMem(nint context, int argc, nint* argv) => Sqlite3.ResultErrorNoMem(context);
+
+    /// <summary>An I/O error: SQLite rolls the whole transaction back for it, even from a read.</summary>
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    static void IoErr(nint context, int argc, nint* argv) => Sqlite3.ResultErrorCode(context, Sqlite3.IoErr);
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     static void Flaky(nint context, int argc, nint* argv)

@@ -546,6 +546,7 @@ public sealed unsafe class SqliteWriter
         _batch[_batchCount++] = job;
         try
         {
+            CheckBatchTransaction();
             if (!job.BatchedRead) _batchWrote |= WritesOf(job); // before it runs: a failed write still counts
             if (!_batchOpen)
             {
@@ -568,6 +569,25 @@ public sealed unsafe class SqliteWriter
             Abandon(job);
             throw;
         }
+    }
+
+    /// <summary>The batch's transaction is still open, if the batch thinks it is: one that SQLite rolled back outside a
+    /// write (a read on the loop that hit an error) fails every write it held, rather than letting the next write start a
+    /// transaction of its own, which its RELEASE would commit.</summary>
+    internal void CheckBatchTransaction()
+    {
+        if (!_batchOpen || Sqlite3.GetAutocommit(_conn.Db) == 0) return;
+        _batchOpen = false;
+        _batchWrote = 0;
+        var lost = new DataResult(DataStatus.Failed);
+        for (int i = _batchCommitted; i < _batchCount; i++)
+            if (_batch[i] is { Failed: false } job)
+            {
+                job.Failed = true;
+                job.Failure = lost;
+            }
+        _batchCommitted = _batchCount;
+        Interlocked.Increment(ref Counters.FailedGroups);
     }
 
     /// <summary>An exception no statement expects (out of memory keeping a row, a bug) while <paramref name="thrower"/>
@@ -618,10 +638,10 @@ public sealed unsafe class SqliteWriter
     }
 
     /// <summary>Commits the batch's open transaction, at the batch's end. Its writes and reads stay waiting to complete.
-    /// Every statement in it ran through <see cref="Run"/>, which sees a rollback; one SQLite did unseen fails the COMMIT
-    /// (<see cref="Commit"/>).</summary>
+    /// A transaction SQLite rolled back outside a write fails what it held (<see cref="CheckBatchTransaction"/>).</summary>
     void CommitBatch()
     {
+        CheckBatchTransaction();
         if (!_batchOpen) return;
         _batchOpen = false;
         _batchWrote = 0; // committed or failed, nothing it wrote is waiting any more

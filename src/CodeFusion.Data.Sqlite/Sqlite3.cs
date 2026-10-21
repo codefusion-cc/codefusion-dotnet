@@ -249,6 +249,10 @@ internal static unsafe partial class Sqlite3
     [LibraryImport(Lib, EntryPoint = "sqlite3_result_int64"), SuppressGCTransition]
     public static partial void ResultInt64(nint context, long value);
 
+    /// <summary>The function fails with <paramref name="code"/> (the tests' I/O error).</summary>
+    [LibraryImport(Lib, EntryPoint = "sqlite3_result_error_code"), SuppressGCTransition]
+    public static partial void ResultErrorCode(nint context, int code);
+
     [LibraryImport(Lib, EntryPoint = "sqlite3_result_error_nomem"), SuppressGCTransition]
     public static partial void ResultErrorNoMem(nint context);
 
