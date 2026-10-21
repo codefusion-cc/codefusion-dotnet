@@ -76,9 +76,12 @@ public sealed class HttpServerOptions
     /// reuse after their socket closes.</summary>
     public int MaxPooledConnections { get; set; } = 4096;
 
-    /// <summary>How connections wait for their requests: <see cref="HttpTransport.Sockets"/> (the default), or the
-    /// server's own event loops on Linux and macOS, which cost less per request.</summary>
-    public HttpTransport Transport { get; set; } = HttpTransport.Sockets;
+    /// <summary>How connections wait for their requests. On Linux the default is the server's own event loops
+    /// (<see cref="HttpTransport.EventLoop"/>, one per core), which measured 9 to 42% faster on 8 cores; elsewhere
+    /// <see cref="HttpTransport.Sockets"/>. Choose Sockets on Linux too when handlers block before their first await
+    /// (a blocking handler holds every connection on its loop), or when the p99 under a mixed load matters more than
+    /// throughput: a slow request holds its loop's neighbours, where Sockets spreads them over the thread pool.</summary>
+    public HttpTransport Transport { get; set; } = OperatingSystem.IsLinux() ? HttpTransport.EventLoop : HttpTransport.Sockets;
 
     /// <summary>How many threads <see cref="HttpTransport.EventLoop"/> runs, each with its share of the connections
     /// and their handlers until they wait: one per core by default.</summary>
