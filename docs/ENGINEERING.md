@@ -946,21 +946,27 @@ What the fixes decided:
   navigation is refused at build time; for the rest the statement checks the catalog first
   (the generator's `Dialect.ThenGuardOfPostgres`, its one copy, which `SqlDialectAttribute.ThenGuard` replaces for
   another dialect: a scalar subquery the final SELECT's WHERE compares with 0, as
-  perf/data-batched-updates' merged updates check their table): a rule or non-internal trigger on the table written,
-  or on any table a delete reaches from it key after key (a recursive CTE over the foreign keys that cascade, set
-  NULL or set a default, found through pg_depend's index), such a foreign key into a table the Select reads (the
-  found table and the table written included), and, for a corrected read, row security on it or a column the insert
-  sets with a type modifier, a type other than the one its value is bound as except a wider one of the same kind
-  (int into bigint and float into double precision hold the value; long into integer narrows, and int into double
-  precision crosses to floats, which past 2^53 don't hold every integer), or a collation other than the default (a
-  nondeterministic one compares the snapshot's rows otherwise than the correction compares the row written). Any of
-  them casts `'CodeFusion: the Select after Then can't read <table> as the write left it ...'` to an integer, which fails
-  the statement (22P02) before its write commits. The check is a few catalog lookups by index per statement, run for
-  every Then with a Select, whatever it reads: the row given back is the one found, which a cascade or a trigger may
-  have changed or deleted, so its table is checked as consistently as the others; PlanTests compare with the contest's statements so checked,
-  catalog reads included, and `TheCheckReadsTheCatalogByItsIndexes` pins that an index serves each catalog read (with
-  sequential scans off: the planner scans a small catalog table whole, as that costs less). The triggers are looked up
-  by a scalar subquery with LIMIT 1, which the planner can't turn into a hash of the whole of pg_trigger.
+  perf/data-batched-updates' merged updates check their table). A recursive CTE walks from the table written and its
+  partitions (pg_inherits); a delete follows each foreign key that cascades, sets NULL or sets a default (found
+  through pg_depend's index, as pg_constraint has none on the referenced table), and from a table whose rows it sets
+  to NULL or a default, the keys acting on their update. A rule or non-internal trigger on any table walked fails the
+  statement (a trigger may write anywhere), and so does a table reached that the Select reads, or a partition of one
+  (the found table always counts as read, the table written only where a read of it is corrected: a key of a comment
+  thread into itself reaches nothing an article's Select reads). For a corrected read, so do row security on it or a
+  column the insert sets with a type modifier, a type other than the one its value is bound as except a wider one of
+  the same kind (int into bigint and float into double precision hold the value; long into integer narrows, and int
+  into double precision crosses to floats, which past 2^53 don't hold every integer), or a collation other than the
+  default (a nondeterministic one compares the snapshot's rows otherwise than the correction compares the row
+  written). Any of them casts `'CodeFusion: the Select after Then can't read <table> as the write left it ...'` to an
+  integer, which fails the statement (22P02) before its write commits. The check runs for every Then with a Select,
+  whatever it reads: the row given back is the one found, which a cascade or a trigger may have changed or deleted,
+  so its table is checked as consistently as the others. It costs a few index lookups for the table written and each
+  of its partitions, and as many again for each table a delete can reach: it grows with how far the delete cascades,
+  not with the catalog's size ([then-guard-cost](benchmarks/2026-10-21-then-guard-cost.md) measures it). PlanTests
+  compare with the contest's statements so checked, catalog reads included, and
+  `TheCheckReadsTheCatalogByItsIndexes` pins that an index condition bounds each catalog read (with sequential scans
+  off: the planner scans a small catalog table whole, as that costs less). The triggers are looked up by a scalar
+  subquery with LIMIT 1, which the planner can't turn into a hash of the whole of pg_trigger.
 - A correction is taken also where every row found makes the same write: the same delete, which reads nothing of
   the row found, or an ignored insert of the same key.
 - The reply of a Then with a Select is the row found of the smallest key.
@@ -993,6 +999,20 @@ purpose), then green on the C and the ICU database.
 | PlanTests dropped every pg_* scan | `PlanTests.TheCheckReadsTheCatalogByItsIndexes`; the favorite comparisons with the check on both sides | pg_trigger read whole (a hashed EXISTS) |
 | with NonBacktracking taken out, the backtracking test failed by 2.2 s against 1 s only, which a faster machine passes | `AsCSharpAPatternRunsInLinearTimeOnALongText` on 48,000 characters | 7 s |
 | the found table was checked only when the guard ran for another reason | `TheRowFoundIsCheckedWhetherOrNotTheSelectReadsAnotherTable` (a cascade into the row found, a trigger on the table an insert writes) | the statement ran |
+
+**Fourth review of the shapes.** Fixes only, each test red on the code before its fix unless it says otherwise, then
+green on the C and the ICU database.
+
+| Finding | Test | Red before |
+|---|---|---|
+| N3's exact type refused a column that holds the value as bound | `AWiderColumnOfTheKindBoundHoldsTheValueAsBound` (int into int4 and int8, float into float4 and float8) | int into int8 failed the statement; float into float4 too, with a float taken as double precision |
+| the walk started at the table written, not its partitions | `TheCheckFollowsEveryKeyTheDeleteActsOn`: a key into a partition, a trigger on one partition | the statement ran |
+| a row set to NULL was walked along delete actions | the same theory: SET NULL then an ON UPDATE CASCADE into chain_c; SET NULL with chain_c's ON DELETE CASCADE only | the first ran; the second failed the statement |
+| a key of the table written into itself failed every Then that deleted from it | the same theory: a self-cascade on chain_a, and a cycle back to it, each reaching nothing read | both failed the statement |
+| the recursion's edges were untested | the same theory: a cycle and a self-reference partway, each reaching chain_c | green before (coverage) |
+| the cost was "a few lookups" | `docs/benchmarks/2026-10-21-then-guard-cost.md`; the paragraph above | unmeasured |
+| the index pin passed a whole index read in order | `TheCatalogPinTellsAWholeIndexReadApart`; `TheCheckReadsTheCatalogByItsIndexes` requires an Index Cond | the old pattern accepts pg_class's oid index read whole |
+| TopLevel and Atomic kept a quote-toggle scanner, and a split could cut inside a comment | `ACommentOrALiteralNeverHidesNorMakesAnOperator` (`a/**/AND/**/b`, a `--` comment with an apostrophe before an OR, `E'a\' b'`) | `a/**` and `**/b` |
 
 All five of the Conduit context's `Sql(...)` queries are LINQ now; the context has none left. The app's own copy
 (`ConduitDb.cs` in the contest submission) needs the same entities: `[Key]` on Follow's and Favorite's two columns,

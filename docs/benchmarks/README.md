@@ -49,6 +49,7 @@ Two things the table leaves out:
 | 2026-10-21 | [loop-pools-c4](2026-10-21-loop-pools-c4.md) | A buffer stack per event loop against the locked pool, C4, TechEmpower plaintext and json, ABBA | plaintext +2.5%, json +1.9%, the lock gone from the profile; one listener level; 6 loops on 8 cores -10 to 16% |
 | 2026-10-21 | [twelve-entry-connection-memory](2026-10-21-twelve-entry-connection-memory.md) | The $12 entry at 10k, 50k and 100k concurrent load.js users, one CPU and 2 GB: memory, latency, CPU | about 5.5 KB a connection (3.0-3.4 KB process, 1.8-2.3 KB kernel); idle connections hold no buffer; latency here was the Mac's noise |
 | 2026-10-21 | [twelve-entry-fd-limit-crash](2026-10-21-twelve-entry-fd-limit-crash.md) | The $12 entry past a 65,535 descriptor limit, the GCP crash at 80k users | out of descriptors the runtime aborts; a connection cap 1,024 below the limit keeps it up (64,511 held, p99 41 ms) |
+| 2026-10-21 | [then-guard-cost](2026-10-21-then-guard-cost.md) | The catalog check after Query.Then, in Follow and Unfollow and alone, M1 Pro under load | about +30 µs alone (pgbench, fastest of 6); +56 to +115 µs end to end, within the short job's noise |
 
 ## Template
 
