@@ -106,3 +106,4 @@ static CodeFusion.Utf8List.Write(System.ReadOnlySpan<byte> text, System.Span<byt
 CodeFusion.EventLoopThread
 CodeFusion.IServiceRegistry.OnEventLoopBatch(System.Action<int>! onBatch) -> void
 static CodeFusion.EventLoopThread.Current.get -> int
+static CodeFusion.EventLoopThread.RequestBatchEnd() -> void
