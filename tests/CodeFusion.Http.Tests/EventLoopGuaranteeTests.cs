@@ -139,20 +139,25 @@ public sealed class EventLoopGuaranteeTests
         busy.Reset();
     }
 
-    // The bound is on requests, not reads: one read of small pipelined requests holds a hundred. With each costing a
-    // millisecond, a neighbour on the same loop still gets its answer within the share of one wake-up.
+    // The bound is on requests, not reads: one read of small pipelined requests holds a hundred. On a loop, a neighbour's
+    // request waits for at most the flood's share of one wake-up and the rest of the one under way: 32 slow requests,
+    // counted, so the machine's load can't fail it. Sockets serves the two on threads of their own; there a neighbour
+    // stuck behind the flood would wait seconds.
     [Theory(Timeout = 30_000)]
     [InlineData(HttpTransport.EventLoop)]
     [InlineData(HttpTransport.Sockets)]
     public async Task ANeighbourOfAFloodOfSlowRequestsWaitsAtMostOneShare(HttpTransport transport)
     {
-        await using var t = TestServer.Start(static x =>
+        int slowRuns = 0, slowAtNeighbour = 0;
+        await using var t = TestServer.Start(x =>
         {
             if (x.Path.SequenceEqual("/slow"u8))
             {
                 long until = Stopwatch.GetTimestamp() + Stopwatch.Frequency / 1000;
                 while (Stopwatch.GetTimestamp() < until) { }
+                Interlocked.Increment(ref slowRuns);
             }
+            else Volatile.Write(ref slowAtNeighbour, Volatile.Read(ref slowRuns));
             TestServer.Write(x, Encoding.UTF8.GetString(x.Path));
             return default;
         }, o =>
@@ -181,16 +186,20 @@ public sealed class EventLoopGuaranteeTests
             }
             catch (OperationCanceledException) { }
         });
-        await Task.Delay(500); // the flood is on
-        long worst = 0;
+        await TestServer.Until(() => Volatile.Read(ref slowRuns) > 100, 5000, () => "the flood never started");
+        long worstMs = 0, worstSlow = 0;
         for (int i = 0; i < 5; i++)
         {
             var clock = Stopwatch.StartNew();
+            int before = Volatile.Read(ref slowRuns);
             Assert.Equal($"/b{i}", await Ask(other, $"/b{i}", timeoutMs: 3000));
-            worst = Math.Max(worst, clock.ElapsedMilliseconds);
+            worstMs = Math.Max(worstMs, clock.ElapsedMilliseconds);
+            worstSlow = Math.Max(worstSlow, Volatile.Read(ref slowAtNeighbour) - before);
         }
-        // 16 requests of 1 ms, plus the neighbour's own turn and the machine's noise
-        Assert.True(worst < 200, $"the neighbour waited {worst} ms");
+        if (transport == HttpTransport.EventLoop)
+            Assert.True(worstSlow <= 32, $"the neighbour waited for {worstSlow} slow requests");
+        else
+            Assert.True(worstMs < 1000, $"the neighbour waited {worstMs} ms");
         await stop.CancelAsync();
         await Task.WhenAll(writer, reader);
         busy.Reset();
@@ -274,6 +283,160 @@ public sealed class EventLoopGuaranteeTests
         Assert.Equal("/a", await Ask(c, "/a", timeoutMs: 2000));
         Assert.Equal(1, failed);
         Assert.Empty(reports);
+    }
+
+    // Past a resource limit an accept can throw what no one expects: macOS's runtime said "Out of memory." at about
+    // 10k sockets, and accepting stopped for good without a word. On every path the failure is reported once, the
+    // accept backs off and tries again, and the server goes on taking connections.
+    [Theory(Timeout = 20_000)]
+    [InlineData(HttpTransport.EventLoop)]
+    [InlineData(HttpTransport.Sockets)]
+    public async Task AnAcceptThatThrowsIsReportedAndAcceptingGoesOn(HttpTransport transport)
+    {
+        Assert.SkipUnless(AllocationTests.Debugger(), "Debug builds can make an accept throw");
+        var reports = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var t = TestServer.Start(Path, o =>
+        {
+            TestTransport.Use(o, transport);
+            o.EventLoops = 1;
+            o.HeartbeatInterval = TimeSpan.FromMilliseconds(20); // resumes a paused loop's listener
+            o.OnError = (what, _) => reports.Enqueue(what);
+        });
+        int throws = 2;
+        // a loop's own accept4 (Linux), or the runtime's accept (macOS's loops, Sockets)
+        t.Server.AcceptHook = _ => Interlocked.Decrement(ref throws) >= 0 ? throw new InsufficientMemoryException() : 0;
+        t.Server.RuntimeAcceptHook = () =>
+        {
+            if (Interlocked.Decrement(ref throws) >= 0) throw new InsufficientMemoryException();
+        };
+        // the runtime's accept may be waiting already: it throws from the next one on
+        using Client first = await t.ConnectAsync(), second = await t.ConnectAsync();
+        Assert.Equal("/a", await Ask(first, "/a", timeoutMs: 5000));
+        Assert.Equal("/b", await Ask(second, "/b", timeoutMs: 5000));
+        Assert.True(Volatile.Read(ref throws) < 0, "the accept never threw");
+        Assert.Equal(["http accept failing", "http accept works again"], reports.ToArray());
+    }
+
+    // Admitting an accepted connection can throw too (a new connection object, out of memory): that socket is closed,
+    // not leaked, and the next connection is admitted.
+    [Theory(Timeout = 20_000)]
+    [InlineData(HttpTransport.EventLoop)]
+    [InlineData(HttpTransport.Sockets)]
+    public async Task AConnectionWhoseAdmissionThrowsIsClosedAndAcceptingGoesOn(HttpTransport transport)
+    {
+        Assert.SkipUnless(AllocationTests.Debugger(), "Debug builds can make an admission throw");
+        var reports = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var t = TestServer.Start(Path, o =>
+        {
+            TestTransport.Use(o, transport);
+            o.EventLoops = 1;
+            o.HeartbeatInterval = TimeSpan.FromMilliseconds(20);
+            o.OnError = (what, _) => reports.Enqueue(what);
+        });
+        int throws = 1;
+        t.Server.AdmitHook = _ =>
+        {
+            if (Interlocked.Decrement(ref throws) >= 0) throw new InsufficientMemoryException();
+        };
+        using (Client first = await t.ConnectAsync())
+            Assert.Equal(0, await first.Socket.ReceiveAsync(new byte[1], System.Net.Sockets.SocketFlags.None)); // closed
+        using Client second = await t.ConnectAsync();
+        Assert.Equal("/b", await Ask(second, "/b", timeoutMs: 5000));
+        Assert.Equal(["http accept failing", "http accept works again"], reports.ToArray());
+    }
+
+    // Starting an admitted connection can throw as well (out of memory for the loop's queue or the pool's): that
+    // connection is closed and given back, not leaked, and accepting goes on.
+    [Theory(Timeout = 20_000)]
+    [InlineData(HttpTransport.EventLoop)]
+    [InlineData(HttpTransport.Sockets)]
+    public async Task AConnectionWhoseStartThrowsIsClosedAndAcceptingGoesOn(HttpTransport transport)
+    {
+        Assert.SkipUnless(AllocationTests.Debugger(), "Debug builds can make a start throw");
+        var reports = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var t = TestServer.Start(Path, o =>
+        {
+            TestTransport.Use(o, transport);
+            o.EventLoops = 1;
+            o.HeartbeatInterval = TimeSpan.FromMilliseconds(20);
+            o.OnError = (what, _) => reports.Enqueue(what);
+        });
+        int throws = 1;
+        t.Server.StartHook = _ =>
+        {
+            if (Interlocked.Decrement(ref throws) >= 0) throw new InsufficientMemoryException();
+        };
+        using (Client first = await t.ConnectAsync())
+            Assert.Equal(0, await first.Socket.ReceiveAsync(new byte[1], System.Net.Sockets.SocketFlags.None)); // closed
+        using Client second = await t.ConnectAsync();
+        Assert.Equal("/b", await Ask(second, "/b", timeoutMs: 5000));
+        Assert.Equal(1, t.Server.Connections); // the first went back
+        Assert.Equal(["http accept failing", "http accept works again"], reports.ToArray());
+    }
+
+    // After a failure the runtime's accept waits before the next one, and that wait can throw too (out of memory for
+    // its timer): it waits anyway, and accepting goes on.
+    [Theory(Timeout = 20_000)]
+    [InlineData(HttpTransport.EventLoop)]
+    [InlineData(HttpTransport.Sockets)]
+    public async Task ABackoffThatThrowsDoesNotEndAccepting(HttpTransport transport)
+    {
+        Assert.SkipUnless(AllocationTests.Debugger(), "Debug builds can make a backoff throw");
+        Assert.SkipWhen(OperatingSystem.IsLinux() && transport == HttpTransport.EventLoop, "Linux loops accept for themselves");
+        var reports = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var t = TestServer.Start(Path, o =>
+        {
+            TestTransport.Use(o, transport);
+            o.EventLoops = 1;
+            o.OnError = (what, _) => reports.Enqueue(what);
+        });
+        int throws = 2, backoffs = 1;
+        t.Server.RuntimeAcceptHook = () =>
+        {
+            if (Interlocked.Decrement(ref throws) >= 0) throw new InsufficientMemoryException();
+        };
+        t.Server.BackoffHook = () =>
+        {
+            if (Interlocked.Decrement(ref backoffs) >= 0) throw new InsufficientMemoryException();
+        };
+        // the runtime's accept may be waiting already: it throws from the next one on
+        using Client first = await t.ConnectAsync(), second = await t.ConnectAsync();
+        Assert.Equal("/a", await Ask(first, "/a", timeoutMs: 5000));
+        Assert.Equal("/b", await Ask(second, "/b", timeoutMs: 5000));
+        Assert.True(Volatile.Read(ref backoffs) < 0, "the backoff never threw");
+        Assert.Equal(["http accept failing", "http accept works again"], reports.ToArray());
+    }
+
+    // Out of descriptors a loop turns its listener off; if even that fails (epoll_ctl out of memory), the listener
+    // is taken out of the loop's set instead, so the level-triggered listener doesn't wake the loop again and again
+    // until the heartbeat adds it back.
+    [Fact(Timeout = 20_000)]
+    public async Task OnLinuxAListenerThatCantBeTurnedOffIsTakenOutUntilTheHeartbeat()
+    {
+        Assert.SkipUnless(OperatingSystem.IsLinux() && AllocationTests.Debugger(), "Linux loops accept for themselves; Debug builds can fail an accept");
+        var reports = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        await using var t = Start(Path, o =>
+        {
+            o.EventLoops = 1;
+            o.HeartbeatInterval = TimeSpan.FromMilliseconds(200);
+            o.OnError = (what, _) => reports.Enqueue(what);
+        });
+        int accepts = 0, offFails = 1;
+        bool failing = true;
+        t.Server.AcceptHook = _ =>
+        {
+            Interlocked.Increment(ref accepts);
+            return Volatile.Read(ref failing) ? 24 : 0; // EMFILE
+        };
+        t.Server.ListenerOffHook = _ => Interlocked.Decrement(ref offFails) >= 0;
+        using Client c = await t.ConnectAsync();
+        await Task.Delay(500);
+        int whileFailing = Volatile.Read(ref accepts);
+        Volatile.Write(ref failing, false);
+        Assert.Equal("/a", await Ask(c, "/a", timeoutMs: 5000));
+        Assert.True(Volatile.Read(ref offFails) < 0, "turning the listener off never failed");
+        Assert.InRange(whileFailing, 1, 10); // one at first, then one a heartbeat: not one a wake-up
+        Assert.Equal(["http accept failing", "http accept works again"], reports.ToArray());
     }
 
     [Fact(Timeout = 20_000)]

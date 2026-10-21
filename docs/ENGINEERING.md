@@ -37,7 +37,8 @@ The hits there were:
   write through `HttpServerOptions.Stderr`, the same lines as before and the one Console use, with a `#pragma`.
   `ErrorHookTests` cover a handler's exception reaching `OnError`, a hook that throws (counted, and the connection
   answers the next request), a null hook, and the default's exact stderr lines; each went red with its code broken.
-  Not covered: accept failing (it needs the process out of descriptors) and `Report`'s own catch on the accept and
+  Accept failing is covered by Debug hooks that make an accept, an admission, a start or a backoff throw, and by the
+  sample app under `ulimit -n 256` (see "Past the descriptor limit"). Not covered: `Report`'s own catch on the
   connection paths (no test can make a connection loop throw on demand).
 - `PoolingAsyncValueTaskMethodBuilder` on `HttpExchange.RunAsync` and `FlushAsync`. They keep it, with a `#pragma`
   and the reason. Switched to `PooledValueTaskMethodBuilder`, `KeepAliveRequestsAllocateNothing(async: true,
@@ -1155,8 +1156,11 @@ default elsewhere, and the choice for handlers that block or apps that put the p
   - `CodeFusion.EventLoopThread.Current` (Core) is the loop's index on its thread and -1 elsewhere.
 - **Listeners:** on Linux each loop has its own listening socket (SO_REUSEPORT), level-triggered in its epoll set.
   - It accepts up to 64 connections per wake-up with `accept4` and starts each on its own thread.
-  - Out of descriptors or memory, it stops watching the listener (one report per run of failures), and the heartbeat
-    watches it again. The pause is one state changed by compare-and-swap, set after the listener is off.
+  - Out of descriptors or memory, or on any exception from an accept, an admission or a start, it stops watching the
+    listener (one report per run of failures), and the heartbeat watches it again. The pause is one state changed by
+    compare-and-swap, set after the listener is off. If turning it off fails, the listener is taken out of the epoll
+    set (which frees memory rather than needing it) and the heartbeat adds it back: left on, the level-triggered
+    listener would wake the loop at once, again and again.
   - The kernel spreads connections by a hash of their addresses, not in turn: a few long-lived connections may share a
     loop. `ListenerPerLoop = false` keeps one listener and gives connections to the loops in turn.
   - A loop that fails hands its listener to the runtime's accepts, so its queued connections aren't reset; with every
@@ -1166,6 +1170,38 @@ default elsewhere, and the choice for handlers that block or apps that put the p
   - The runtime's `ReuseAddress` sets SO_REUSEPORT on Unix anyway (checked on macOS), so port sharing by a process of
     the same user is no different from Sockets'.
   - macOS keeps one listener and the runtime's accepts.
+
+### Past the descriptor limit (fix/accept-past-resource-limits)
+
+The $12 entry died past 65,535 descriptors: out of them, the runtime spun, said "Out of memory." and aborted
+(docs/benchmarks/2026-10-21-default-connection-limit-past-fd-limit.md). On macOS the runtime's accept threw something
+other than a `SocketException` at about 10k sockets, and accepting ended without a word.
+
+- `MaxConnections` defaults to the soft RLIMIT_NOFILE less 1024, or less half of a limit under 2048 (the runtime
+  alone holds about 50 descriptors on macOS). The server raises the soft limit to the hard one first, on macOS to at
+  most OPEN_MAX (10,240), as CoreCLR's PAL does at start: NativeAOT doesn't, and under systemd's soft 1024 an AOT app
+  would get 512 connections. 64-bit Linux and macOS only.
+- The runtime's accept (Sockets, macOS's loops, a failed loop's listener) never ends while the server runs. Any
+  exception is reported once per run of failures (`http accept failing`, then `http accept works again`) and the
+  next accept waits 10 ms, doubling up to 1 s; if that wait's timer can't be made, the thread sleeps instead.
+- Admitting or starting a connection that throws closes it and gives its object back. A loop's `Wrap` closes the
+  descriptor if even its handle can't be made, and a run whose builder throws before it begins ends as a failed
+  connection.
+
+Each with its test first, seen failing before the fix (`EventLoopGuaranteeTests` unless named):
+
+| Failure | Test |
+|---|---|
+| An accept that throws ended accepting | `AnAcceptThatThrowsIsReportedAndAcceptingGoesOn`, both transports |
+| An admission that throws left the socket open | `AConnectionWhoseAdmissionThrowsIsClosedAndAcceptingGoesOn` |
+| A start that throws (posting to a loop, queuing on the pool) ended accepting and kept the connection | `AConnectionWhoseStartThrowsIsClosedAndAcceptingGoesOn` |
+| A backoff that throws ended accepting | `ABackoffThatThrowsDoesNotEndAccepting` |
+| A listener that couldn't be turned off woke its loop at every wait | `OnLinuxAListenerThatCantBeTurnedOffIsTakenOutUntilTheHeartbeat` (Linux, CI only) |
+| Past the descriptor limit the server hung at EMFILE | `DescriptorLimitTests.PastTheDescriptorLimitNewConnectionsAreClosedAndTheServerGoesOn`, the sample app under `ulimit -n 256` with 2 loops |
+| NativeAOT kept a low soft limit | `DescriptorLimitTests.TheSoftLimitIsRaisedToTheHardOne`, `DescriptorLimitRaiseTests` (lowers the test process's own soft limit, alone) |
+
+Not tested: out of memory inside `Wrap`'s handle and a run's builder, which no hook reaches; the Linux loop's tests
+run only in CI.
 
 ### Review fixes (review of f00a731)
 

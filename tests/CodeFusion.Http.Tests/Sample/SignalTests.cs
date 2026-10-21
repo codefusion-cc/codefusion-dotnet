@@ -11,7 +11,7 @@ namespace CodeFusion.Http.Tests;
 /// <summary>Run() in a process of its own: SIGTERM lets the request in flight finish, then the app stops.</summary>
 public class SignalTests
 {
-    static string SampleApp()
+    internal static string SampleApp()
     {
         // tests/CodeFusion.Http.Tests/bin/<Configuration>/net10.0 -> tests/CodeFusion.Http.SampleApp/bin/<Configuration>/net10.0
         string here = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar);
