@@ -148,7 +148,10 @@ on epoll (Linux) or kqueue (macOS) for its share of the connections (`EventLoops
 request then costs one receive call instead of two, and its handler runs on the loop's thread until it first awaits,
 with no hop through the runtime's socket thread or the thread pool. Every answer finished on a loop's thread waits
 for the batch's actions (`OnEventLoopBatch`, and the app's `IServiceRegistry.OnEventLoopBatch` registrations), where a
-database commits the batch's writes; an answer finished on another thread goes out at once. On Linux every loop listens
+database commits the batch's writes; an answer finished on another thread goes out at once. So a handler that resumes
+off its loop (it awaited work another thread completed) and then writes doesn't wait for a batch: it gets its answer
+once the database commits that write by itself, as with sockets (CodeFusion.Data.Sqlite's writer thread commits such
+writes in groups), which is correct but later than the loop's batch. On Linux every loop listens
 on the port itself (SO_REUSEPORT) and accepts its own connections, unless `ListenerPerLoop` is off. Idle connections
 still hold no buffer.
 
