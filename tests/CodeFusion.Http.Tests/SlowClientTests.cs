@@ -88,30 +88,58 @@ public sealed class SlowClientTests
                 string[] f = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 if (f.Length < 10 || !f[1].EndsWith(ours, StringComparison.Ordinal) || !f[2].EndsWith(theirs, StringComparison.Ordinal))
                     continue;
-                string held = "no descriptor", self = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
-                foreach (string proc in System.IO.Directory.EnumerateDirectories("/proc"))
-                {
-                    string pid = System.IO.Path.GetFileName(proc);
-                    if (!char.IsAsciiDigit(pid[0])) continue;
-                    try
-                    {
-                        foreach (string fd in System.IO.Directory.EnumerateFileSystemEntries(proc + "/fd"))
-                        {
-                            if (new System.IO.FileInfo(fd).LinkTarget != $"socket:[{f[9]}]") continue;
-                            string flags = System.IO.File.ReadLines($"{proc}/fdinfo/{System.IO.Path.GetFileName(fd)}")
-                                .FirstOrDefault(l => l.StartsWith("flags:", StringComparison.Ordinal)) ?? "";
-                            string who = pid == self ? "this process" :
-                                $"process {pid} ({System.IO.File.ReadAllText(proc + "/cmdline").Replace('\0', ' ').Trim()})";
-                            held = $"descriptor {System.IO.Path.GetFileName(fd)} of {who}, {flags}";
-                        }
-                    }
-                    catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { }
-                }
+                string held = Holder(f[9]);
                 return $"server end: state {f[3]} (hex, 01 established, 04 FIN_WAIT1, 05 FIN_WAIT2, 07 closed, 08 CLOSE_WAIT), " +
                     $"tx:rx queue {f[4]}, inode {f[9]}, {(f[9] == "0" ? "orphaned" : held)}";
             }
         }
         return "server end: not in /proc/net/tcp";
+    }
+
+    /// <summary>Which descriptor of which process holds the socket with <paramref name="inode"/>, with the processes that
+    /// couldn't be read and the kinds of anonymous descriptors this process has (an io_uring holds files without one).</summary>
+    static string Holder(string inode)
+    {
+        string self = Environment.ProcessId.ToString(CultureInfo.InvariantCulture), want = $"socket:[{inode}]";
+        var found = new List<string>();
+        var anon = new SortedSet<string>(StringComparer.Ordinal);
+        int processes = 0, unreadable = 0;
+        foreach (string proc in System.IO.Directory.EnumerateDirectories("/proc"))
+        {
+            string pid = System.IO.Path.GetFileName(proc);
+            if (!char.IsAsciiDigit(pid[0])) continue;
+            string[] fds;
+            try
+            {
+                fds = System.IO.Directory.GetFileSystemEntries(proc + "/fd");
+                processes++;
+            }
+            catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException)
+            {
+                unreadable++;
+                continue;
+            }
+            foreach (string fd in fds)
+            {
+                string? target;
+                try { target = new System.IO.FileInfo(fd).LinkTarget; }
+                catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { continue; }
+                if (pid == self && target is not null && target.StartsWith("anon_inode:", StringComparison.Ordinal)) anon.Add(target);
+                if (target != want) continue;
+                string who = pid == self ? "this process" : $"process {pid} ({ReadOr(proc + "/cmdline").Replace('\0', ' ').Trim()})";
+                string flags = ReadOr($"{proc}/fdinfo/{System.IO.Path.GetFileName(fd)}").Split('\n')
+                    .FirstOrDefault(l => l.StartsWith("flags:", StringComparison.Ordinal)) ?? "";
+                found.Add($"descriptor {System.IO.Path.GetFileName(fd)} of {who}, {flags}");
+            }
+        }
+        return $"{(found.Count == 0 ? "no descriptor" : string.Join("; ", found))} ({processes} processes read, {unreadable} not; " +
+            $"this one's anonymous descriptors: {string.Join(' ', anon)})";
+
+        static string ReadOr(string path)
+        {
+            try { return System.IO.File.ReadAllText(path); }
+            catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { return ""; }
+        }
     }
 
     [Fact(Timeout = 20_000)]
