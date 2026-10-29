@@ -61,8 +61,9 @@ public sealed class SlowClientTests
         return Environment.TickCount64 - since;
     }
 
-    /// <summary>Once the server let the connection go, the client's next sends fail: its kernel resets a closed socket
-    /// that gets data. A drip still sending 5 s later (two of its sends at most: the first draws the reset) means the server's process still holds the socket.</summary>
+    /// <summary>Once the server let the connection go, the client's next sends fail: the server's kernel resets a
+    /// closed socket that gets data. A drip still sending 5 s later (two of its sends at most: the first draws the
+    /// reset) means the server's process still holds the socket.</summary>
     static async Task SendsFailSoon(Task drip, Client c)
     {
         if (await Task.WhenAny(drip, Task.Delay(5000)) == drip)
@@ -70,125 +71,28 @@ public sealed class SlowClientTests
             await drip;
             return;
         }
-        Assert.Fail($"the client's sends still went through 5 s after the server let the connection go; {await ServerSide(c.Socket)}");
+        Assert.Fail($"the client's sends still went through 5 s after the server let the connection go; {ServerEnd(c.Socket)}");
     }
 
-    /// <summary>Linux: both ends of <paramref name="client"/>'s connection as /proc/net/tcp shows them, with which
-    /// descriptor holds each (the client's, held by this process, checks the scan), and the server's again 2 s later.</summary>
-    static async Task<string> ServerSide(Socket client)
+    /// <summary>Linux: the server's end of <paramref name="client"/>'s connection as /proc/net/tcp shows it, and the
+    /// epoll sets of this process that still watch it (a socket in one stays open while a wait holds it).</summary>
+    static string ServerEnd(Socket client)
     {
         if (!OperatingSystem.IsLinux()) return "no /proc here";
-        int server = ((System.Net.IPEndPoint)client.RemoteEndPoint!).Port, port = ((System.Net.IPEndPoint)client.LocalEndPoint!).Port;
-        string first = End(server, port), clientEnd = End(port, server);
-        await Task.Delay(2000);
-        return $"server end: {first}; client end: {clientEnd}; server end 2 s later: {End(server, port)}";
-    }
-
-    /// <summary>The socket whose local port is <paramref name="local"/> and remote port <paramref name="remote"/>.</summary>
-    static string End(int local, int remote)
-    {
-        string ours = $":{local:X4}", theirs = $":{remote:X4}";
+        string ours = $":{((System.Net.IPEndPoint)client.RemoteEndPoint!).Port:X4}", theirs = $":{((System.Net.IPEndPoint)client.LocalEndPoint!).Port:X4}";
         foreach (string table in new[] { "/proc/net/tcp", "/proc/net/tcp6" })
-        {
             foreach (string line in System.IO.File.ReadLines(table))
             {
                 string[] f = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 if (f.Length < 10 || !f[1].EndsWith(ours, StringComparison.Ordinal) || !f[2].EndsWith(theirs, StringComparison.Ordinal))
                     continue;
-                return $"state {f[3]} (hex, 01 established, 04 FIN_WAIT1, 05 FIN_WAIT2, 07 closed, 08 CLOSE_WAIT), " +
-                    $"tx:rx queue {f[4]}, inode {f[9]}, {(f[9] == "0" ? "orphaned" : Holder(f[9]))}";
+                string ino = $" ino:{long.Parse(f[9], CultureInfo.InvariantCulture):x} ";
+                var watched = System.IO.Directory.GetFiles("/proc/self/fdinfo")
+                    .Where(info => f[9] != "0" && ReadOr(info).Contains(ino, StringComparison.Ordinal)).Select(System.IO.Path.GetFileName);
+                return $"the server's end: state {f[3]} (hex, 05 FIN_WAIT2), tx:rx queue {f[4]}, inode {f[9]} (0: released), " +
+                    $"watched by epoll descriptors: {string.Join(' ', watched)}";
             }
-        }
-        return "not in /proc/net/tcp";
-    }
-
-    /// <summary>Which descriptor of which process holds the socket with <paramref name="inode"/>, with the processes that
-    /// couldn't be read and the kinds of anonymous descriptors this process has (an io_uring holds files without one).</summary>
-    static string Holder(string inode)
-    {
-        string self = Environment.ProcessId.ToString(CultureInfo.InvariantCulture), want = $"socket:[{inode}]";
-        var found = new List<string>();
-        var anon = new SortedSet<string>(StringComparer.Ordinal);
-        int processes = 0, unreadable = 0;
-        foreach (string proc in System.IO.Directory.EnumerateDirectories("/proc"))
-        {
-            string pid = System.IO.Path.GetFileName(proc);
-            if (!char.IsAsciiDigit(pid[0])) continue;
-            string[] fds;
-            try
-            {
-                fds = System.IO.Directory.GetFileSystemEntries(proc + "/fd");
-                processes++;
-            }
-            catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException)
-            {
-                unreadable++;
-                continue;
-            }
-            foreach (string fd in fds)
-            {
-                string? target;
-                try { target = new System.IO.FileInfo(fd).LinkTarget; }
-                catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { continue; }
-                if (pid == self && target is not null && target.StartsWith("anon_inode:", StringComparison.Ordinal)) anon.Add(target);
-                if (target != want) continue;
-                string who = pid == self ? "this process" : $"process {pid} ({ReadOr(proc + "/cmdline").Replace('\0', ' ').Trim()})";
-                string flags = ReadOr($"{proc}/fdinfo/{System.IO.Path.GetFileName(fd)}").Split('\n')
-                    .FirstOrDefault(l => l.StartsWith("flags:", StringComparison.Ordinal)) ?? "";
-                found.Add($"descriptor {System.IO.Path.GetFileName(fd)} of {who}, {flags}");
-            }
-        }
-        // an epoll set lists the files it watches by inode, under the descriptor each was added with
-        string hex = long.Parse(inode, CultureInfo.InvariantCulture).ToString("x", CultureInfo.InvariantCulture);
-        var watched = new List<string>();
-        foreach (string info in System.IO.Directory.GetFiles($"/proc/{self}/fdinfo"))
-            foreach (string l in ReadOr(info).Split('\n'))
-                if (l.StartsWith("tfd:", StringComparison.Ordinal) && l.Contains($" ino:{hex} ", StringComparison.Ordinal))
-                    watched.Add($"epoll {System.IO.Path.GetFileName(info)} {l.Trim()}");
-        // what each thread is inside: a thread in a call on the socket holds its file without a descriptor
-        var calls = new SortedDictionary<string, int>(StringComparer.Ordinal);
-        foreach (string task in System.IO.Directory.GetDirectories($"/proc/{self}/task"))
-        {
-            string[] call = ReadOr(task + "/syscall").Split(' ');
-            string key = $"{ReadOr(task + "/comm").Trim()} {call[0].Trim()}{(call.Length > 1 ? " " + call[1] : "")}";
-            // a poll holds every file it waits on until it returns: which descriptors (arm64 ppoll 73, x64 poll 7, ppoll 271)
-            if (call.Length > 2 && call[0] is "73" or "7" or "271") key += $" polls [{PollFds(call[1], call[2])}]";
-            // a thread with a descriptor table of its own holds what it had when it split off
-            try
-            {
-                foreach (string fd in System.IO.Directory.GetFileSystemEntries(task + "/fd"))
-                    if (new System.IO.FileInfo(fd).LinkTarget == want) key += $" holds it as {System.IO.Path.GetFileName(fd)}";
-            }
-            catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { }
-            calls[key] = calls.GetValueOrDefault(key) + 1;
-        }
-        return $"{(found.Count == 0 ? "no descriptor" : string.Join("; ", found))} ({processes} processes read, {unreadable} not; " +
-            $"this one's anonymous descriptors: {string.Join(' ', anon)}; watched by: {(watched.Count == 0 ? "none" : string.Join("; ", watched))}; " +
-            $"threads (name, call, first argument): {string.Join(", ", calls.Select(c => c.Value == 1 ? c.Key : $"{c.Key} x{c.Value}"))})";
-
-        static string PollFds(string address, string count)
-        {
-            try
-            {
-                long at = Convert.ToInt64(address, 16), n = Math.Min(Convert.ToInt64(count, 16), 16);
-                using var mem = new System.IO.FileStream("/proc/self/mem", System.IO.FileMode.Open, System.IO.FileAccess.Read);
-                mem.Seek(at, System.IO.SeekOrigin.Begin);
-                var bytes = new byte[n * 8];
-                mem.ReadExactly(bytes);
-                return string.Join(' ', Enumerable.Range(0, (int)n).Select(i =>
-                {
-                    int fd = BitConverter.ToInt32(bytes, i * 8);
-                    string? target = null;
-                    try { target = new System.IO.FileInfo($"/proc/self/fd/{fd}").LinkTarget; }
-                    catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { }
-                    return $"{fd}={target ?? "closed"}";
-                }));
-            }
-            catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException or FormatException or ArgumentException)
-            {
-                return e.GetType().Name;
-            }
-        }
+        return "the server's end is gone from /proc/net/tcp";
 
         static string ReadOr(string path)
         {
