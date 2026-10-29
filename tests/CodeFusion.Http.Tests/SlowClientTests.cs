@@ -62,25 +62,32 @@ public sealed class SlowClientTests
     }
 
     /// <summary>Once the server let the connection go, the client's next sends fail: its kernel resets a closed socket
-    /// that gets data. A drip still sending 3 s later means the server's process still holds the socket.</summary>
+    /// that gets data. A drip still sending 5 s later (two of its sends at most: the first draws the reset) means the server's process still holds the socket.</summary>
     static async Task SendsFailSoon(Task drip, Client c)
     {
-        if (await Task.WhenAny(drip, Task.Delay(3000)) == drip)
+        if (await Task.WhenAny(drip, Task.Delay(5000)) == drip)
         {
             await drip;
             return;
         }
-        Assert.Fail($"the client's sends still went through 3 s after the server let the connection go; {ServerSide(c.Socket)}");
+        Assert.Fail($"the client's sends still went through 5 s after the server let the connection go; {await ServerSide(c.Socket)}");
     }
 
-    /// <summary>Linux: the server's end of <paramref name="client"/>'s connection as /proc/net/tcp shows it, and which
-    /// of this process's descriptors holds it (none once closed, when its inode is 0).</summary>
-    static string ServerSide(Socket client)
+    /// <summary>Linux: both ends of <paramref name="client"/>'s connection as /proc/net/tcp shows them, with which
+    /// descriptor holds each (the client's, held by this process, checks the scan), and the server's again 2 s later.</summary>
+    static async Task<string> ServerSide(Socket client)
     {
         if (!OperatingSystem.IsLinux()) return "no /proc here";
-        var local = (System.Net.IPEndPoint)client.LocalEndPoint!;
-        var remote = (System.Net.IPEndPoint)client.RemoteEndPoint!;
-        string ours = $":{remote.Port:X4}", theirs = $":{local.Port:X4}";
+        int server = ((System.Net.IPEndPoint)client.RemoteEndPoint!).Port, port = ((System.Net.IPEndPoint)client.LocalEndPoint!).Port;
+        string first = End(server, port), clientEnd = End(port, server);
+        await Task.Delay(2000);
+        return $"server end: {first}; client end: {clientEnd}; server end 2 s later: {End(server, port)}";
+    }
+
+    /// <summary>The socket whose local port is <paramref name="local"/> and remote port <paramref name="remote"/>.</summary>
+    static string End(int local, int remote)
+    {
+        string ours = $":{local:X4}", theirs = $":{remote:X4}";
         foreach (string table in new[] { "/proc/net/tcp", "/proc/net/tcp6" })
         {
             foreach (string line in System.IO.File.ReadLines(table))
@@ -88,12 +95,11 @@ public sealed class SlowClientTests
                 string[] f = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 if (f.Length < 10 || !f[1].EndsWith(ours, StringComparison.Ordinal) || !f[2].EndsWith(theirs, StringComparison.Ordinal))
                     continue;
-                string held = Holder(f[9]);
-                return $"server end: state {f[3]} (hex, 01 established, 04 FIN_WAIT1, 05 FIN_WAIT2, 07 closed, 08 CLOSE_WAIT), " +
-                    $"tx:rx queue {f[4]}, inode {f[9]}, {(f[9] == "0" ? "orphaned" : held)}";
+                return $"state {f[3]} (hex, 01 established, 04 FIN_WAIT1, 05 FIN_WAIT2, 07 closed, 08 CLOSE_WAIT), " +
+                    $"tx:rx queue {f[4]}, inode {f[9]}, {(f[9] == "0" ? "orphaned" : Holder(f[9]))}";
             }
         }
-        return "server end: not in /proc/net/tcp";
+        return "not in /proc/net/tcp";
     }
 
     /// <summary>Which descriptor of which process holds the socket with <paramref name="inode"/>, with the processes that
