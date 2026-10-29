@@ -151,11 +151,44 @@ public sealed class SlowClientTests
         {
             string[] call = ReadOr(task + "/syscall").Split(' ');
             string key = $"{ReadOr(task + "/comm").Trim()} {call[0].Trim()}{(call.Length > 1 ? " " + call[1] : "")}";
+            // a poll holds every file it waits on until it returns: which descriptors (arm64 ppoll 73, x64 poll 7, ppoll 271)
+            if (call.Length > 2 && call[0] is "73" or "7" or "271") key += $" polls [{PollFds(call[1], call[2])}]";
+            // a thread with a descriptor table of its own holds what it had when it split off
+            try
+            {
+                foreach (string fd in System.IO.Directory.GetFileSystemEntries(task + "/fd"))
+                    if (new System.IO.FileInfo(fd).LinkTarget == want) key += $" holds it as {System.IO.Path.GetFileName(fd)}";
+            }
+            catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { }
             calls[key] = calls.GetValueOrDefault(key) + 1;
         }
         return $"{(found.Count == 0 ? "no descriptor" : string.Join("; ", found))} ({processes} processes read, {unreadable} not; " +
             $"this one's anonymous descriptors: {string.Join(' ', anon)}; watched by: {(watched.Count == 0 ? "none" : string.Join("; ", watched))}; " +
             $"threads (name, call, first argument): {string.Join(", ", calls.Select(c => c.Value == 1 ? c.Key : $"{c.Key} x{c.Value}"))})";
+
+        static string PollFds(string address, string count)
+        {
+            try
+            {
+                long at = Convert.ToInt64(address, 16), n = Math.Min(Convert.ToInt64(count, 16), 16);
+                using var mem = new System.IO.FileStream("/proc/self/mem", System.IO.FileMode.Open, System.IO.FileAccess.Read);
+                mem.Seek(at, System.IO.SeekOrigin.Begin);
+                var bytes = new byte[n * 8];
+                mem.ReadExactly(bytes);
+                return string.Join(' ', Enumerable.Range(0, (int)n).Select(i =>
+                {
+                    int fd = BitConverter.ToInt32(bytes, i * 8);
+                    string? target = null;
+                    try { target = new System.IO.FileInfo($"/proc/self/fd/{fd}").LinkTarget; }
+                    catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { }
+                    return $"{fd}={target ?? "closed"}";
+                }));
+            }
+            catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException or FormatException or ArgumentException)
+            {
+                return e.GetType().Name;
+            }
+        }
 
         static string ReadOr(string path)
         {
