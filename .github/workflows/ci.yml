@@ -111,10 +111,10 @@ jobs:
         name: Repeat the event loops (temporary)
         run: |
           fails=0
-          for i in $(seq 20); do
+          for i in $(seq 30); do
             CODEFUSION_HTTP_TRANSPORT=EventLoop dotnet test --project tests/CodeFusion.Http.Tests -c Release --no-build -- --max-threads 2 --timeout 10m --filter-not-class CodeFusion.Http.Tests.AllocationTests CodeFusion.Http.Tests.AppAllocationTests || fails=$((fails+1))
           done
-          echo "failed runs: $fails of 20"
+          echo "failed runs: $fails of 30"
           test $fails -eq 0
       - name: Pack
         if: needs.changes.outputs.code == 'true' && (matrix.configuration == 'Release')

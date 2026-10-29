@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -87,13 +88,24 @@ public sealed class SlowClientTests
                 string[] f = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 if (f.Length < 10 || !f[1].EndsWith(ours, StringComparison.Ordinal) || !f[2].EndsWith(theirs, StringComparison.Ordinal))
                     continue;
-                string held = "no descriptor";
-                foreach (string fd in System.IO.Directory.EnumerateFileSystemEntries("/proc/self/fd"))
+                string held = "no descriptor", self = Environment.ProcessId.ToString(CultureInfo.InvariantCulture);
+                foreach (string proc in System.IO.Directory.EnumerateDirectories("/proc"))
                 {
-                    string? target = null;
-                    try { target = new System.IO.FileInfo(fd).LinkTarget; }
-                    catch (System.IO.IOException) { }
-                    if (target == $"socket:[{f[9]}]") held = $"descriptor {System.IO.Path.GetFileName(fd)}";
+                    string pid = System.IO.Path.GetFileName(proc);
+                    if (!char.IsAsciiDigit(pid[0])) continue;
+                    try
+                    {
+                        foreach (string fd in System.IO.Directory.EnumerateFileSystemEntries(proc + "/fd"))
+                        {
+                            if (new System.IO.FileInfo(fd).LinkTarget != $"socket:[{f[9]}]") continue;
+                            string flags = System.IO.File.ReadLines($"{proc}/fdinfo/{System.IO.Path.GetFileName(fd)}")
+                                .FirstOrDefault(l => l.StartsWith("flags:", StringComparison.Ordinal)) ?? "";
+                            string who = pid == self ? "this process" :
+                                $"process {pid} ({System.IO.File.ReadAllText(proc + "/cmdline").Replace('\0', ' ').Trim()})";
+                            held = $"descriptor {System.IO.Path.GetFileName(fd)} of {who}, {flags}";
+                        }
+                    }
+                    catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { }
                 }
                 return $"server end: state {f[3]} (hex, 01 established, 04 FIN_WAIT1, 05 FIN_WAIT2, 07 closed, 08 CLOSE_WAIT), " +
                     $"tx:rx queue {f[4]}, inode {f[9]}, {(f[9] == "0" ? "orphaned" : held)}";
