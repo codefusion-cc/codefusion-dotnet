@@ -138,8 +138,24 @@ public sealed class SlowClientTests
                 found.Add($"descriptor {System.IO.Path.GetFileName(fd)} of {who}, {flags}");
             }
         }
+        // an epoll set lists the files it watches by inode, under the descriptor each was added with
+        string hex = long.Parse(inode, CultureInfo.InvariantCulture).ToString("x", CultureInfo.InvariantCulture);
+        var watched = new List<string>();
+        foreach (string info in System.IO.Directory.GetFiles($"/proc/{self}/fdinfo"))
+            foreach (string l in ReadOr(info).Split('\n'))
+                if (l.StartsWith("tfd:", StringComparison.Ordinal) && l.Contains($" ino:{hex} ", StringComparison.Ordinal))
+                    watched.Add($"epoll {System.IO.Path.GetFileName(info)} {l.Trim()}");
+        // what each thread is inside: a thread in a call on the socket holds its file without a descriptor
+        var calls = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        foreach (string task in System.IO.Directory.GetDirectories($"/proc/{self}/task"))
+        {
+            string[] call = ReadOr(task + "/syscall").Split(' ');
+            string key = $"{ReadOr(task + "/comm").Trim()} {call[0].Trim()}{(call.Length > 1 ? " " + call[1] : "")}";
+            calls[key] = calls.GetValueOrDefault(key) + 1;
+        }
         return $"{(found.Count == 0 ? "no descriptor" : string.Join("; ", found))} ({processes} processes read, {unreadable} not; " +
-            $"this one's anonymous descriptors: {string.Join(' ', anon)})";
+            $"this one's anonymous descriptors: {string.Join(' ', anon)}; watched by: {(watched.Count == 0 ? "none" : string.Join("; ", watched))}; " +
+            $"threads (name, call, first argument): {string.Join(", ", calls.Select(c => c.Value == 1 ? c.Key : $"{c.Key} x{c.Value}"))})";
 
         static string ReadOr(string path)
         {
