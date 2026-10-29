@@ -108,13 +108,13 @@ internal sealed unsafe class SqliteConn : IDisposable
     /// <summary>The SQLite build this provider was tested with (SourceGear.sqlite3, pinned exactly in
     /// Directory.Packages.props, its file's hash checked at build): its sqlite3_libversion_number and sqlite3_sourceid,
     /// as the library loaded says, wherever it was loaded from.</summary>
-    internal const int TestedVersion = 3_050_004;
+    internal const int TestedVersion = 3_053_004;
 
     /// <summary>The AppContext switch an app sets (true) when it ships a SQLite build of its own: one that isn't the build
     /// tested is then accepted if it has what the provider uses.</summary>
     internal const string OtherBuildSwitch = "CodeFusion.Data.Sqlite.OwnSqliteBuild";
 
-    internal const string TestedSourceId = "2025-07-30 19:33:53 4d8adfb30e03f9cf27f800a2c1ba3c48fb4ca1b08b0f5ed59a4d5ecbf45e20a3";
+    internal const string TestedSourceId = "2026-07-24 19:02:57 bf7c7f30031888f4e796e429ab3978879485813aaca6f641c7b33e4e09459bcc";
 
     /// <summary>Why the library loaded, saying it was built from <paramref name="sourceId"/>, can't serve the provider, by
     /// the app's <see cref="OtherBuildSwitch"/> and what the library reports; null when it can.</summary>

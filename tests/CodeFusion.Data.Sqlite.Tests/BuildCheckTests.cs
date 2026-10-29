@@ -10,7 +10,7 @@ namespace CodeFusion.Data.Sqlite.Tests;
 /// </summary>
 public sealed class BuildCheckTests
 {
-    const int Current = 3_050_004;
+    const int Current = SqliteConn.TestedVersion;
     const string Tested = SqliteConn.TestedSourceId;
 
     /// <summary>The library is judged by what it says it is, wherever it was loaded from (a portable app's runtimes/
@@ -23,7 +23,7 @@ public sealed class BuildCheckTests
         Assert.NotNull(why);
         Assert.Contains("2025-07-30 19:33:53 00000000", why, StringComparison.Ordinal);
         Assert.Contains(SqliteConn.OtherBuildSwitch, why, StringComparison.Ordinal);
-        Assert.NotNull(SqliteConn.Unfit(3_050_005, Tested, otherBuildAllowed: false, 2, _ => false));
+        Assert.NotNull(SqliteConn.Unfit(Current + 1, Tested, otherBuildAllowed: false, 2, _ => false));
         Assert.Null(SqliteConn.Unfit(Current, Tested, otherBuildAllowed: false, 2, _ => false));
     }
 
