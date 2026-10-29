@@ -106,6 +106,16 @@ jobs:
       - if: needs.changes.outputs.code == 'true'
         name: Test the event loops
         run: CODEFUSION_HTTP_TRANSPORT=EventLoop dotnet test --project tests/CodeFusion.Http.Tests -c ${{ matrix.configuration }} --no-build -- --max-threads 2 --timeout 10m --filter-not-class CodeFusion.Http.Tests.AllocationTests CodeFusion.Http.Tests.AppAllocationTests
+      # TEMPORARY, fix/eventloop-timeout-close: repeat the event loops' leg to catch the slow-client hang
+      - if: needs.changes.outputs.code == 'true' && matrix.arch == 'arm64' && matrix.configuration == 'Release'
+        name: Repeat the event loops (temporary)
+        run: |
+          fails=0
+          for i in 1 2 3 4 5 6; do
+            CODEFUSION_HTTP_TRANSPORT=EventLoop dotnet test --project tests/CodeFusion.Http.Tests -c Release --no-build -- --max-threads 2 --timeout 10m --filter-not-class CodeFusion.Http.Tests.AllocationTests CodeFusion.Http.Tests.AppAllocationTests || fails=$((fails+1))
+          done
+          echo "failed runs: $fails of 6"
+          test $fails -eq 0
       - name: Pack
         if: needs.changes.outputs.code == 'true' && (matrix.configuration == 'Release')
         run: |
