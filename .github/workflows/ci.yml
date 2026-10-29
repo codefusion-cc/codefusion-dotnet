@@ -107,7 +107,7 @@ jobs:
         name: Test the event loops
         run: CODEFUSION_HTTP_TRANSPORT=EventLoop dotnet test --project tests/CodeFusion.Http.Tests -c ${{ matrix.configuration }} --no-build -- --max-threads 2 --timeout 10m --filter-not-class CodeFusion.Http.Tests.AllocationTests CodeFusion.Http.Tests.AppAllocationTests
       # TEMPORARY, fix/eventloop-timeout-close: repeat the event loops' leg to catch the slow-client hang
-      - if: needs.changes.outputs.code == 'true' && matrix.arch == 'arm64' && matrix.configuration == 'Release'
+      - if: ${{ !cancelled() && needs.changes.outputs.code == 'true' && matrix.arch == 'arm64' && matrix.configuration == 'Release' }}
         name: Repeat the event loops (temporary)
         run: |
           fails=0
