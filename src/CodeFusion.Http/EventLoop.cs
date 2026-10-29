@@ -634,7 +634,11 @@ internal abstract unsafe class EventLoop
             s.DangerousAddRef(ref socketHeld);
             Queue.DangerousAddRef(ref queueHeld);
             if (WatchWrite((int)Queue.DangerousGetHandle(), (int)s.DangerousGetHandle(), (uint)slot | (ulong)id << 32) < 0)
+            {
+                // ENOENT: Forget took it out of the set, and another thread is closing it
+                ObjectDisposedException.ThrowIf(OperatingSystem.IsLinux() && Marshal.GetLastPInvokeError() == 2, socket);
                 throw Errno(OperatingSystem.IsLinux() ? "epoll_ctl" : "kevent");
+            }
         }
         finally
         {
