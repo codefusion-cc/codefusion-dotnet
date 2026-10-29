@@ -28,8 +28,8 @@
        records it beside the package). At open, the library loaded from it must also say it is that build
        (SqliteConn.TestedSourceId). -->
   <PropertyGroup>
-    <SqliteNativeVersion>3.50.4.5</SqliteNativeVersion>
-    <SqliteNativeSha512>ZgaSQmin20yJQfLlo8xdFPsoSyql7oVFXWMrEzALgR3Q6vk7vSTIYAFjqIBXvaiOauSpFiR0KwKBA7EBlQHFdA==</SqliteNativeSha512>
+    <SqliteNativeVersion>3.53.4</SqliteNativeVersion>
+    <SqliteNativeSha512>W2mME6FU2IfIF3Agdr9loSiLTWRndIgFsLTim6pRxSV9WsrzkxV+ikjm32a2jiHGWW920qXT4R+cVHpgb2BTdA==</SqliteNativeSha512>
   </PropertyGroup>
   <Target Name="CheckSqliteNativePackage" BeforeTargets="CoreCompile">
     <PropertyGroup>

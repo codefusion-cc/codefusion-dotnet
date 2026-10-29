@@ -137,7 +137,7 @@ Fixes go into the latest release only.
 ## CodeFusion.Data.Sqlite
 
 - **The native library** is SourceGear.sqlite3's `e_sqlite3`. What is pinned and checked, exactly:
-  - Its version, 3.50.4.5, exactly: in this repository's build (`Directory.Packages.props`, `[3.50.4.5]`) and in the
+  - Its version, 3.53.4, exactly: in this repository's build (`Directory.Packages.props`, `[3.53.4]`) and in the
     package's dependency. NuGet holds an app to that version unless the app references SourceGear.sqlite3 itself: a
     direct reference to another version wins, with only an NU1608 warning. The check at open below then refuses it.
   - The package file this repository builds with: its SHA-512, as NuGet records it beside the package, is checked at
@@ -145,7 +145,7 @@ Fixes go into the latest release only.
     check from it; an app that wants one keeps its own lock file (`RestorePackagesWithLockFile`).
   - At first use, the library loaded, wherever it was loaded from (a portable app's `runtimes/` folder, or the app's
     own directory, where a RID-specific, self-contained or AOT publish puts it): it must report the tested build,
-    `sqlite3_libversion_number` 3050004 and `sqlite3_sourceid` "2025-07-30 19:33:53 4d8adfb3…", or the provider refuses
+    `sqlite3_libversion_number` 3053004 and `sqlite3_sourceid` "2026-07-24 19:02:57 bf7c7f30…", or the provider refuses
     it and says so. An app that ships its own SQLite build on purpose sets the AppContext switch
     `CodeFusion.Data.Sqlite.OwnSqliteBuild` to true. The switch turns off only the tested-build check (version and
     source id); what the provider needs is still checked: 3.44 or newer, not single-threaded (`SQLITE_THREADSAFE=0`),

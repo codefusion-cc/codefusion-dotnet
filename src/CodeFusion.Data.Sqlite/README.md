@@ -126,8 +126,8 @@ per request. A thread waiting for the connection spins for 50 µs, then parks un
 
 ## The SQLite build
 
-By default the provider runs the package's `e_sqlite3` (SourceGear.sqlite3 3.50.4.5, a dependency pinned to that version
-exactly). At first use it checks that the library loaded reports that build, `sqlite3_libversion_number` 3050004 and
+By default the provider runs the package's `e_sqlite3` (SourceGear.sqlite3 3.53.4, a dependency pinned to that version
+exactly). At first use it checks that the library loaded reports that build, `sqlite3_libversion_number` 3053004 and
 its `sqlite3_sourceid`, wherever it was loaded from, and refuses any other, saying why.
 
 An app that builds SQLite itself puts its `libe_sqlite3` in its own directory, where it is loaded instead, and sets
@@ -140,7 +140,7 @@ its project.
   options, and not built without JSON, CTEs, upserts, WAL or subqueries. A build that fails one is refused with the
   reason.
 - **When to set it:** only for a SQLite the app builds or picks on purpose and runs its own tests on; the provider is
-  tested on 3.50.4 alone. Not to get past a refusal of a library the app didn't mean to ship, such as a newer
+  tested on 3.53.4 alone. Not to get past a refusal of a library the app didn't mean to ship, such as a newer
   SourceGear.sqlite3 a direct package reference pulled in (NuGet only warns, NU1608): pin that reference instead.
 
 ## Failures
