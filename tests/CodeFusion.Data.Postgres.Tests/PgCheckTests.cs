@@ -52,12 +52,26 @@ public sealed class PgCheckTests
     public void AJobsBufferWrittenToAfterItsReturnThrowsWhenRentedAgain()
     {
         DebugOnly();
-        var job = PgJob.Rent(Echo);
-        job.Discard();
-        job.Buf[3] = 1; // a writer that kept it
-        // the pool is a stack: the next rent takes this job, and the test runs alone, so no other test gets it
-        Assert.Equal("a pooled Postgres job's buffer was written to after its return",
-            Assert.ThrowsAny<InvalidOperationException>(() => PgJob.Rent(Echo)).Message);
+        // the shared stack alone, with room for one job and nothing on it: the next rent takes the job just returned
+        // (a thread's cache could hold a job grown past its limit, which goes back to the shared stack instead)
+        bool caches = PgJob.UseThreadCaches;
+        PgJob.UseThreadCaches = false;
+        PgJob.Reserve(1);
+        PgJob.ClearPool();
+        try
+        {
+            var job = PgJob.Rent(Echo);
+            job.Discard();
+            job.Buf[3] = 1; // a writer that kept it
+            Assert.Equal("a pooled Postgres job's buffer was written to after its return",
+                Assert.ThrowsAny<InvalidOperationException>(() => PgJob.Rent(Echo)).Message);
+        }
+        finally
+        {
+            PgJob.ClearPool(); // the written job, had the rent missed it, reaches no other test
+            PgJob.Reserve(-1);
+            PgJob.UseThreadCaches = caches;
+        }
     }
 
     [Theory(Timeout = 20_000)]

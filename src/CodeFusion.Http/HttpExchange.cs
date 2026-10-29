@@ -301,7 +301,11 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     /// object given back.</summary>
     internal void Abandon()
     {
-        Volatile.Read(ref _socket)?.Dispose();
+        if (Volatile.Read(ref _socket) is { } s)
+        {
+            Loop?.Forget(s);
+            s.Dispose();
+        }
         Volatile.Write(ref _socket, null);
         Loop = null; // all it took from Rent that the pool doesn't keep
         _server.Release(this);
@@ -814,6 +818,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
             try { s.Shutdown(SocketShutdown.Send); }
             catch (Exception e) when (e is SocketException or ObjectDisposedException) { }
         }
+        Loop?.Forget(s);
         s.Dispose();
         // Closing aborts a pending watch receive; the event args are only reusable once it has come back. A loop
         // drops a closed socket without an event: the wait is taken back here, unless the loop's edge has it.
@@ -1222,6 +1227,7 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
         // a reset: a plain close would leave the kernel sending what it holds to a client that isn't reading
         if (late && Interlocked.CompareExchange(ref _deadline, -1, d) == d)
         {
+            Loop?.Forget(s);
             s.Close(0);
             Kick(); // a loop's wait for room hears nothing of a closed socket
         }
@@ -1356,11 +1362,12 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     /// <summary>.NET closes a socket with a receive pending (the run's zero-byte watch, off a loop) with a reset,
     /// unless its send side was shut down first: a client whose connect completed after that close failed in the
     /// connect itself.</summary>
-    static void CloseWithFin(Socket? s)
+    void CloseWithFin(Socket? s)
     {
         if (s is null) return;
         try { s.Shutdown(SocketShutdown.Send); }
         catch (Exception e) when (e is SocketException or ObjectDisposedException) { }
+        Loop?.Forget(s);
         s.Dispose();
     }
 
@@ -1369,7 +1376,11 @@ public sealed class HttpExchange : IBufferWriter<byte>, IValueTaskSource, IThrea
     /// abortively when it cancels one), not under a handler that blocks its thread.</summary>
     internal void Abort()
     {
-        Volatile.Read(ref _socket)?.Close(0);
+        if (Volatile.Read(ref _socket) is { } s)
+        {
+            Loop?.Forget(s);
+            s.Close(0);
+        }
         Kick();
     }
 

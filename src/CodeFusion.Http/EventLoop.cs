@@ -179,6 +179,33 @@ internal abstract unsafe class EventLoop
         }
     }
 
+    /// <summary>Takes <paramref name="socket"/> out of the set before another thread closes it. Linux (6.10 on) has a
+    /// wait hold the files it looks at while it does: a close in that moment leaves the file's release to the loop's
+    /// thread, at its return from the wait, and a wait that the client's bytes wake with nothing to report doesn't
+    /// return. The socket would stay half open, taking all the client sends, until another connection's event. Out of
+    /// the set, the close releases it. The loop's own thread closes outside its wait, and kqueue holds nothing.</summary>
+    public void Forget(Socket socket)
+    {
+        if (!OperatingSystem.IsLinux() || Current == this) return;
+        SafeSocketHandle s = socket.SafeHandle;
+        bool socketHeld = false, queueHeld = false;
+        try
+        {
+            s.DangerousAddRef(ref socketHeld);
+            Queue.DangerousAddRef(ref queueHeld);
+            Unwatch((int)Queue.DangerousGetHandle(), (int)s.DangerousGetHandle()); // not in the set: nothing to take out
+        }
+        catch (ObjectDisposedException)
+        {
+            // closed already, or the loop has ended
+        }
+        finally
+        {
+            if (queueHeld) Queue.DangerousRelease();
+            if (socketHeld) s.DangerousRelease();
+        }
+    }
+
     void Run()
     {
         byte* events = (byte*)NativeMemory.Alloc(MaxEvents, (nuint)EventSize);
@@ -607,7 +634,11 @@ internal abstract unsafe class EventLoop
             s.DangerousAddRef(ref socketHeld);
             Queue.DangerousAddRef(ref queueHeld);
             if (WatchWrite((int)Queue.DangerousGetHandle(), (int)s.DangerousGetHandle(), (uint)slot | (ulong)id << 32) < 0)
+            {
+                // ENOENT: Forget took it out of the set, and another thread is closing it
+                ObjectDisposedException.ThrowIf(OperatingSystem.IsLinux() && Marshal.GetLastPInvokeError() == 2, socket);
                 throw Errno(OperatingSystem.IsLinux() ? "epoll_ctl" : "kevent");
+            }
         }
         finally
         {
@@ -620,7 +651,7 @@ internal abstract unsafe class EventLoop
     /// (<paramref name="on"/>), or none. -1 and errno on failure.</summary>
     protected virtual int Watch(int queue, int fd, ulong token, bool add, bool on) => throw new PlatformNotSupportedException();
 
-    /// <summary>Takes the listener out of the set. -1 and errno on failure.</summary>
+    /// <summary>Takes a socket out of the set. -1 and errno on failure.</summary>
     protected virtual int Unwatch(int queue, int fd) => throw new PlatformNotSupportedException();
 
     /// <summary>accept4, non-blocking and close-on-exec; -1 and errno on failure.</summary>

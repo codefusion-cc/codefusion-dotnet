@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
@@ -60,6 +61,46 @@ public sealed class SlowClientTests
         return Environment.TickCount64 - since;
     }
 
+    /// <summary>Once the server let the connection go, the client's next sends fail: the server's kernel resets a
+    /// closed socket that gets data. A drip still sending 5 s later (two of its sends at most: the first draws the
+    /// reset) means the server's process still holds the socket.</summary>
+    static async Task SendsFailSoon(Task drip, Client c)
+    {
+        if (await Task.WhenAny(drip, Task.Delay(5000)) == drip)
+        {
+            await drip;
+            return;
+        }
+        Assert.Fail($"the client's sends still went through 5 s after the server let the connection go; {ServerEnd(c.Socket)}");
+    }
+
+    /// <summary>Linux: the server's end of <paramref name="client"/>'s connection as /proc/net/tcp shows it, and the
+    /// epoll sets of this process that still watch it (a socket in one stays open while a wait holds it).</summary>
+    static string ServerEnd(Socket client)
+    {
+        if (!OperatingSystem.IsLinux()) return "no /proc here";
+        string ours = $":{((System.Net.IPEndPoint)client.RemoteEndPoint!).Port:X4}", theirs = $":{((System.Net.IPEndPoint)client.LocalEndPoint!).Port:X4}";
+        foreach (string table in new[] { "/proc/net/tcp", "/proc/net/tcp6" })
+            foreach (string line in System.IO.File.ReadLines(table))
+            {
+                string[] f = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (f.Length < 10 || !f[1].EndsWith(ours, StringComparison.Ordinal) || !f[2].EndsWith(theirs, StringComparison.Ordinal))
+                    continue;
+                string ino = $" ino:{long.Parse(f[9], CultureInfo.InvariantCulture):x} ";
+                var watched = System.IO.Directory.GetFiles("/proc/self/fdinfo")
+                    .Where(info => f[9] != "0" && ReadOr(info).Contains(ino, StringComparison.Ordinal)).Select(System.IO.Path.GetFileName);
+                return $"the server's end: state {f[3]} (hex, 05 FIN_WAIT2), tx:rx queue {f[4]}, inode {f[9]} (0: released), " +
+                    $"watched by epoll descriptors: {string.Join(' ', watched)}";
+            }
+        return "the server's end is gone from /proc/net/tcp";
+
+        static string ReadOr(string path)
+        {
+            try { return System.IO.File.ReadAllText(path); }
+            catch (Exception e) when (e is System.IO.IOException or UnauthorizedAccessException) { return ""; }
+        }
+    }
+
     [Fact(Timeout = 20_000)]
     public async Task ABodyDrippedBelowTheMinimumRateIsCutOff()
     {
@@ -74,7 +115,7 @@ public sealed class SlowClientTests
         long took = await MillisecondsUntilClosed(t, 5000, start);
         Assert.InRange(took, 900, 3000);
         Assert.True(await c.ClosedAsync(), "the cut-off request got an answer");
-        await drip;
+        await SendsFailSoon(drip, c);
     }
 
     [Fact(Timeout = 20_000)]
@@ -111,7 +152,7 @@ public sealed class SlowClientTests
         long took = await MillisecondsUntilClosed(t, 5000, start);
         Assert.InRange(took, 900, 3000);
         Assert.True(await c.ClosedAsync(), "the cut-off request got an answer");
-        await drip;
+        await SendsFailSoon(drip, c);
     }
 
     // Each receive's bytes add to what the body has paid for. Before, the sum was cut to whole milliseconds on every
@@ -225,7 +266,7 @@ public sealed class SlowClientTests
         Task drip = Drip(c.Socket, 1, 1500, 6);
         long took = await MillisecondsUntilClosed(t, 5000, start);
         Assert.InRange(took, 1500, 3200);
-        await drip;
+        await SendsFailSoon(drip, c);
     }
 
     [Fact(Timeout = 30_000)]
@@ -550,7 +591,7 @@ public sealed class SlowClientTests
         long took = await MillisecondsUntilClosed(t, 5000, start);
         Assert.InRange(took, 250, 2500);
         Assert.True(await c.ClosedAsync(), "the cut-off request got an answer");
-        await drip;
+        await SendsFailSoon(drip, c);
     }
 
     [Fact(Timeout = 20_000)]
